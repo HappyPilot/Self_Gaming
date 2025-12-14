@@ -148,9 +148,9 @@ Refer to `docker-compose.yml` for full service definitions and environment varia
 ## Camera troubleshooting (V4L2 EBUSY / stuck device)
 
 - Symptom: any `v4l2src`/`v4l2-ctl` call fails with `Device or resource busy` even when `lsof/fuser` are empty.
-- Likely causes: hidden consumer (pipewire/wireplumber/portal) or UVC capture card stuck in streaming state.
+- Likely causes: hidden consumer (pipewire/wireplumber/portal) or a compose service auto-restarting and holding /dev/video0.
 - Steps:
-  1) `tools/camera_debug.sh` – dump formats, open handles, and likely consumers.
-  2) `tools/camera_reset.sh` – stop pipewire/wireplumber, try USB unbind/bind, reload uvcvideo, run a quick stream test.
-  3) Verify: `v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=30 --stream-to=/dev/null`.
-  4) Restart `perception_ds`. If still EBUSY, physically replug the capture device or reboot.
+  1) `tools/camera_debug.sh` – dump formats, open handles, and likely consumers (including compose PIDs).
+  2) `tools/camera_reset.sh` – stops perception_ds/vision/ui_region/etc, stops pipewire/wireplumber, tries USB unbind/bind, reloads uvcvideo, runs a stream test (60 frames).
+  3) Verify: `v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=60 --stream-to=/dev/null`.
+  4) Restart `docker compose up -d perception_ds`. If still EBUSY, physically replug the capture device or reboot.
