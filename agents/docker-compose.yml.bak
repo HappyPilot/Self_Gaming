@@ -1,0 +1,139 @@
+services:
+  mq:
+    container_name: mq
+    image: eclipse-mosquitto:2
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  vision:
+    container_name: vision_agent
+    build:
+      context: .
+      dockerfile: docker/vision/Dockerfile
+    image: local/vision-agent:latest
+    runtime: nvidia
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - /home/dima/multiagent/agents:/app
+    environment:
+      - MQTT_HOST=127.0.0.1
+      - MQTT_PORT=1883
+      - MQTT_TOPIC_CMD=vision/cmd
+      - MQTT_TOPIC_METRIC=vision/mean
+      - MQTT_TOPIC_SNAPSHOT=vision/snapshot
+      - VIDEO_DEVICE=/dev/video0
+      - VIDEO_WIDTH=1920
+      - VIDEO_HEIGHT=1080
+      - VIDEO_FPS=30
+      - VIDEO_PIXFMT=YUYV
+    devices:
+      - /dev/video0:/dev/video0:rwm
+      - /dev/video2:/dev/video2:rwm
+      - /dev/media0:/dev/media0:rwm
+      - /dev/media1:/dev/media1:rwm
+    device_cgroup_rules:
+      - "c 81:* rmw"
+      - "c 199:* rmw"
+    depends_on:
+      - mq
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/bin/vision-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  policy:
+    container_name: policy_agent
+    build:
+      context: .
+      dockerfile: docker/policy/Dockerfile
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - /home/dima/multiagent/agents:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MQTT_HOST=127.0.0.1
+      - MQTT_PORT=1883
+      - OBS_TOPIC=vision/mean
+      - ACT_TOPIC=control/keys
+      - THRESH=120.0
+      - DEBOUNCE=0.25
+    depends_on:
+      - mq
+      - vision
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/bin/policy-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  ocr:
+    container_name: ocr_agent
+    build:
+      context: .
+      dockerfile: docker/ocr/Dockerfile
+    image: local/ocr-agent:latest
+    runtime: nvidia
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - /home/dima/multiagent/agents:/app
+    environment:
+      - MQTT_HOST=127.0.0.1
+      - MQTT_PORT=1883
+      - VISION_CMD=vision/cmd
+      - VISION_SNAPSHOT=vision/snapshot
+      - OCR_TEXT=ocr/text
+      - OCR_CMD=ocr/cmd
+      - OCR_LANGS=eng+rus
+    depends_on:
+      - mq
+      - vision
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/bin/ocr-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  ocr_easy:
+    container_name: ocr_easy_agent
+    build:
+      context: .
+      dockerfile: docker/ocr_easy/Dockerfile
+    image: local/ocr-easy-agent:latest
+    # GPU не обязателен; если есть torch+CUDA в образе, агент сам использует GPU
+    runtime: nvidia
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - /home/dima/multiagent/agents:/app
+    environment:
+      - MQTT_HOST=127.0.0.1
+      - MQTT_PORT=1883
+      - VISION_CMD=vision/cmd
+      - VISION_SNAPSHOT=vision/snapshot
+      - OCR_CMD=ocr_easy/cmd
+      - OCR_TEXT=ocr_easy/text
+      - OCR_LANGS=en,ru
+    depends_on:
+      - mq
+      - vision
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/bin/ocr-easy-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

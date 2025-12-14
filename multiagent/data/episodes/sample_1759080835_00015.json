@@ -1,0 +1,1 @@
+{"timestamp": 1759080835.339871, "scene_time": 1759080835.288275, "scene": {"ok": true, "event": "scene_update", "mean": 0.25, "trend": [0.2, 0.25], "text": ["menu"], "timestamp": 1759080835.2863932, "source": "smoke_test", "step": 0}, "action": {"ok": true, "action": "press_enter", "source": "smoke_test", "step": 0}}

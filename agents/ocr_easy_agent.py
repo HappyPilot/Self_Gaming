@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+import base64
+import io
+import json
+import logging
+import os
+import signal
+import threading
+import time
+from pathlib import Path
+from typing import List, Optional
+
+import numpy as np
+import paho.mqtt.client as mqtt
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+# --- Setup ---
+logging.basicConfig(level=os.getenv("OCR_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
+logger = logging.getLogger("ocr_easy_agent")
+stop_event = threading.Event()
+
+# --- Constants ---
+MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+VISION_CMD = os.getenv("VISION_CMD", "vision/cmd")
+VISION_SNAPSHOT = os.getenv("VISION_SNAPSHOT", "vision/snapshot")
+VISION_FRAME = os.getenv("VISION_FRAME", "vision/frame")
+OCR_CMD = os.getenv("OCR_CMD", "ocr_easy/cmd")
+OCR_TEXT = os.getenv("OCR_TEXT", "ocr_easy/text")
+OCR_LANGS = [lang.strip() for lang in os.getenv("OCR_LANGS", "en,ru").split(",") if lang.strip()]
+OCR_BACKEND = os.getenv("OCR_BACKEND", "paddle").strip().lower()
+AUTO_INTERVAL = float(os.getenv("OCR_AUTO_INTERVAL", "3.0"))
+AUTO_TIMEOUT = float(os.getenv("OCR_AUTO_TIMEOUT", "2.0"))
+DEBUG_SAVE = os.getenv("OCR_DEBUG_SAVE", "0") == "1"
+DEBUG_DIR = Path(os.getenv("OCR_DEBUG_DIR", "/tmp/ocr_debug"))
+FORCE_CPU = os.getenv("OCR_FORCE_CPU", "0") == "1"
+SCALE_FACTOR = float(os.getenv("OCR_SCALE_FACTOR", "1.0"))  # keep <=1.0 to downscale
+TARGET_WIDTH = float(os.getenv("OCR_MAX_BASE_WIDTH", "640"))  # max side for radar mode
+GAMMA = float(os.getenv("OCR_GAMMA", "1.3"))
+MIN_ALPHA_RATIO = float(os.getenv("OCR_MIN_ALPHA_RATIO", "0.35"))
+MAX_LINE_LENGTH = int(os.getenv("OCR_MAX_LINE_CHARS", "160"))
+VARIANT_THRESHOLD = os.getenv("OCR_VARIANT_THRESHOLD", "adaptive")
+MAX_RESULTS = int(os.getenv("OCR_MAX_RESULTS", "12"))
+
+if FORCE_CPU:
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+
+def _as_int(code) -> int:
+    try:
+        if hasattr(code, "value"): return int(code.value)
+        return int(code)
+    except (TypeError, ValueError): return 0
+
+class OcrEasyAgent:
+    def __init__(self):
+        self.client = mqtt.Client(client_id="ocr_easy", protocol=mqtt.MQTTv311)
+        self.client.on_connect = self._on_connect
+        self.client.message_callback_add(VISION_SNAPSHOT, self._on_snapshot)
+        self.client.message_callback_add(VISION_FRAME, self._on_frame)
+        self.client.message_callback_add(OCR_CMD, self._on_cmd)
+        
+        self.snap_lock = threading.Lock()
+        self.snap_data = None
+        self.frame_lock = threading.Lock()
+        self.frame_data = None
+        
+        self.gpu = False
+        self.reader = None
+        self.rapidocr_reader = None
+        self.backend = None
+        self.init_error = None
+        self._init_backend()
+
+    def _init_backend(self):
+        try:
+            import torch
+            self.gpu = torch.cuda.is_available() and not FORCE_CPU
+        except Exception:
+            self.gpu = False
+
+        if OCR_BACKEND in {"paddle", "auto"}:
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                self.rapidocr_reader = RapidOCR(
+                    det_use_cuda=not FORCE_CPU and self.gpu,
+                    cls_use_cuda=not FORCE_CPU and self.gpu,
+                    rec_use_cuda=not FORCE_CPU and self.gpu,
+                    rec_score_thresh=0.1,
+                )
+                self.backend = "paddle"
+            except Exception as exc:
+                self.init_error = f"paddle_init_failed: {exc}"
+                logger.warning("Paddle init failed: %s", exc)
+
+        if self.backend is None and OCR_BACKEND in {"easyocr", "auto", "paddle"}:
+            try:
+                import easyocr
+                self.reader = easyocr.Reader(OCR_LANGS or ["en"], gpu=self.gpu)
+                self.backend = "easyocr"
+            except Exception as exc:
+                self.init_error = self.init_error or f"easyocr_init_failed: {exc}"
+                logger.warning("EasyOCR init failed: %s", exc)
+
+        self.ready = (self.backend == "paddle" and self.rapidocr_reader is not None) or \
+                     (self.backend == "easyocr" and self.reader is not None)
+        logger.info("OCR backend ready: %s (backend=%s, gpu=%s)", self.ready, self.backend, self.gpu)
+
+    def _on_connect(self, client, userdata, flags, rc):
+        if _as_int(rc) == 0:
+            client.subscribe([(VISION_SNAPSHOT, 0), (VISION_FRAME, 0), (OCR_CMD, 0)])
+            client.publish(OCR_TEXT, json.dumps({"ok": True, "event": "connected", "gpu": self.gpu, "listen": [VISION_SNAPSHOT, OCR_CMD]}))
+            logger.info("Connected to MQTT")
+        else:
+            logger.error("Connect failed rc=%s", _as_int(rc))
+            client.publish(OCR_TEXT, json.dumps({"ok": False, "event": "connect_failed", "code": _as_int(rc)}))
+
+    def _on_snapshot(self, client, userdata, msg):
+        try:
+            d = json.loads(msg.payload)
+            b64 = d.get("image_b64")
+            if not b64: return
+            with self.snap_lock:
+                self.snap_data = base64.b64decode(b64)
+            logger.debug("Snapshot received, bytes: %s", len(self.snap_data))
+        except Exception as e:
+            logger.error("Snapshot error: %s", e)
+
+    def _on_frame(self, client, userdata, msg):
+        try:
+            data = json.loads(msg.payload)
+            b64 = data.get("image_b64")
+            if not b64: return
+            raw = base64.b64decode(b64)
+            with self.frame_lock:
+                self.frame_data = raw
+        except Exception:
+            pass
+
+    def _on_cmd(self, client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload)
+        except Exception:
+            payload = {}
+        threading.Thread(target=self._handle_cmd, args=(payload,), daemon=True).start()
+
+    def _handle_cmd(self, payload):
+        if not self.ready:
+            self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": "easyocr_init_failed", "detail": self.init_error}))
+            return
+        cmd = (payload.get("cmd") or "").lower()
+        if cmd == "once":
+            self._process_once(payload)
+
+    def _request_snapshot(self, timeout=2.0):
+        with self.snap_lock:
+            self.snap_data = None
+        self.client.publish(VISION_CMD, json.dumps({"cmd": "snapshot"}))
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            with self.snap_lock:
+                if self.snap_data is not None:
+                    return self.snap_data
+            time.sleep(0.02)
+        return None
+
+    def _scale_image(self, gray: np.ndarray) -> np.ndarray:
+        h, w = gray.shape[:2]
+        scale = SCALE_FACTOR
+        if TARGET_WIDTH > 0:
+            scale = min(scale, TARGET_WIDTH / max(1.0, w))
+        if scale <= 0 or abs(scale - 1.0) < 1e-3:
+            return gray
+        target = (max(1, int(w * scale)), max(1, int(h * scale)))
+        if cv2 is None:
+            return np.array(Image.fromarray(gray).resize(target, resample=Image.BICUBIC))
+        return cv2.resize(gray, target, interpolation=cv2.INTER_CUBIC)
+
+    def _preprocess_variants(self, img: Image.Image) -> List[np.ndarray]:
+        base = ImageOps.autocontrast(img.convert("L"), cutoff=1)
+        gray = np.array(base)
+        if GAMMA != 1.0:
+            inv_gamma = 1.0 / max(0.01, GAMMA)
+            table = ((np.linspace(0, 1, 256) ** inv_gamma) * 255.0).astype("uint8")
+            if cv2 is not None:
+                gray = cv2.LUT(gray, table)
+            else:
+                lut = [int(((i / 255.0) ** inv_gamma) * 255) for i in range(256)]
+                gray = np.array(Image.fromarray(gray).point(lut))
+        scaled = self._scale_image(gray)
+
+        if cv2 is None:
+            blurred = np.array(Image.fromarray(scaled).filter(ImageFilter.GaussianBlur(radius=1.5)))
+            return [blurred, np.array(ImageOps.invert(Image.fromarray(blurred)))]
+
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(scaled)
+        blurred = cv2.bilateralFilter(enhanced, d=7, sigmaColor=30, sigmaSpace=30)
+        variants = [blurred]
+        if VARIANT_THRESHOLD.lower() != "off":
+            thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 35, 11)
+            variants.append(thresh)
+            variants.append(cv2.bitwise_not(thresh))
+        variants.append(cv2.bitwise_not(blurred))
+        return variants
+
+    def _convert_to_color(self, arr: np.ndarray) -> np.ndarray:
+        if arr.ndim == 3 and arr.shape[2] == 3: return arr
+        if cv2 is not None: return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+        return np.dstack([arr] * 3)
+
+    def _recognize_variant(self, arr: np.ndarray) -> List[dict]:
+        if not self.ready: return []
+        h, w = arr.shape[:2]
+        results = []
+        
+        if self.backend == "paddle":
+            if self.rapidocr_reader is None: return []
+            raw_res, _ = self.rapidocr_reader(self._convert_to_color(arr))
+            if raw_res:
+                for entry in raw_res:
+                    # RapidOCR: [ [[x1,y1], [x2,y2], ...], text, conf ]
+                    if not entry or not entry[1]: continue
+                    poly, text, conf = entry
+                    # Convert polygon to bbox [x, y, w, h] normalized
+                    xs = [p[0] for p in poly]
+                    ys = [p[1] for p in poly]
+                    x_min, x_max = min(xs), max(xs)
+                    y_min, y_max = min(ys), max(ys)
+                    results.append({
+                        "text": text,
+                        "box": [x_min/w, y_min/h, (x_max-x_min)/w, (y_max-y_min)/h],
+                        "conf": float(conf)
+                    })
+
+        elif self.backend == "easyocr":
+            if self.reader is None: return []
+            # EasyOCR: [ ([[x1,y1], ...], text, conf), ... ]
+            raw_res = self.reader.readtext(arr)
+            for poly, text, conf in raw_res:
+                xs = [p[0] for p in poly]
+                ys = [p[1] for p in poly]
+                x_min, x_max = min(xs), max(xs)
+                y_min, y_max = min(ys), max(ys)
+                results.append({
+                    "text": text,
+                    "box": [x_min/w, y_min/h, (x_max-x_min)/w, (y_max-y_min)/h],
+                    "conf": float(conf)
+                })
+        return results
+
+    def _is_noise(self, fragment: str) -> bool:
+        fragment = fragment.strip()
+        if not fragment or len(fragment) > MAX_LINE_LENGTH: return True
+        letters = sum(ch.isalpha() for ch in fragment)
+        if (letters / max(1, len(fragment))) < MIN_ALPHA_RATIO and not any(ch.isdigit() for ch in fragment): return True
+        return False
+
+    def _process_once(self, payload):
+        if not self.ready:
+            self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": self.init_error or "ocr_not_ready"}))
+            return
+        timeout = float(payload.get("timeout", AUTO_TIMEOUT))
+        source, jpeg = "snapshot", self._request_snapshot(timeout)
+        if jpeg is None:
+            source, jpeg = "frame", None
+            with self.frame_lock: jpeg = self.frame_data
+            if jpeg is None:
+                self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": "no_frame", "timeout": timeout}))
+                return
+
+        try:
+            img = Image.open(io.BytesIO(jpeg))
+            
+            all_results = []
+            seen_texts = set()
+            
+            for variant in self._preprocess_variants(img):
+                for res in self._recognize_variant(variant):
+                    cleaned = res["text"].strip()
+                    if not cleaned or self._is_noise(cleaned): continue
+                    # Deduplicate roughly
+                    key = f"{cleaned}_{res['box'][0]:.2f}_{res['box'][1]:.2f}"
+                    if key in seen_texts: continue
+                    seen_texts.add(key)
+                    
+                    all_results.append(res)
+
+            # Keep top-N by confidence to limit payload size
+            all_results.sort(key=lambda r: r.get("conf", 0.0), reverse=True)
+            if MAX_RESULTS > 0:
+                all_results = all_results[:MAX_RESULTS]
+            
+            # Construct text block for compatibility
+            full_text = "\n".join([r["text"] for r in all_results])
+            
+            payload = {
+                "ok": True, 
+                "text": full_text, 
+                "results": all_results, # New field with coordinates
+                "backend": self.backend
+            }
+            self.client.publish(OCR_TEXT, json.dumps(payload))
+            logger.debug("OCR published %s items", len(all_results))
+        except Exception as e:
+            self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": str(e)}))
+            logger.error("OCR error: %s", e)
+
+    def _auto_loop(self):
+        if not self.ready or AUTO_INTERVAL <= 0: return
+        while not stop_event.is_set():
+            try: self._process_once({"timeout": AUTO_TIMEOUT})
+            except Exception as e:
+                self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": f"auto_loop_failed:{e}"}))
+            stop_event.wait(AUTO_INTERVAL)
+
+    def run(self):
+        self.client.connect(MQTT_HOST, MQTT_PORT, 30)
+        threading.Thread(target=self._auto_loop, daemon=True).start()
+        self.client.loop_start()
+        stop_event.wait()
+        self.client.loop_stop()
+        self.client.disconnect()
+        logger.info("OCR agent shut down")
+
+def _handle_signal(signum, frame):
+    logger.info("Signal %s received", signum)
+    stop_event.set()
+
+def main():
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+    OcrEasyAgent().run()
+
+if __name__ == "__main__":
+    main()

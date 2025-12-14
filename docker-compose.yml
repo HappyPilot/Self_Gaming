@@ -1,0 +1,1122 @@
+x-python-env-file: &id001
+- ./python.env
+services:
+  mq:
+    container_name: mq
+    image: eclipse-mosquitto:2
+    network_mode: host
+    restart: on-failure
+    volumes:
+    - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    env_file: *id001
+  vision:
+    container_name: vision_agent
+    build:
+      context: .
+      dockerfile: docker/vision/Dockerfile
+    image: local/vision-agent:latest
+    runtime: nvidia
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - MQTT_TOPIC_CMD=vision/cmd
+    - MQTT_TOPIC_METRIC=vision/mean
+    - MQTT_TOPIC_SNAPSHOT=vision/snapshot
+    - VISION_FRAME_TOPIC=vision/frame
+    - VISION_FRAME_INTERVAL=0.5
+    - VISION_FRAME_JPEG_QUALITY=98
+    - VISION_FRAME_ENABLED=1
+    - VIDEO_DEVICE=/dev/video0
+    - VIDEO_WIDTH=1280
+    - VIDEO_HEIGHT=720
+    - VIDEO_FPS=30
+    - VIDEO_PIXFMT=YUYV
+    devices:
+    - /dev/video0:/dev/video0:rwm
+    - /dev/video2:/dev/video2:rwm
+    - /dev/media0:/dev/media0:rwm
+    - /dev/media1:/dev/media1:rwm
+    device_cgroup_rules:
+    - c 81:* rmw
+    - c 199:* rmw
+    ipc: host
+    depends_on:
+    - mq
+  debug_stream:
+    container_name: debug_stream_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/debug_stream_agent.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - DEBUG_PORT=5008
+    - VISION_OBJECT_TOPIC=vision/observation
+    ipc: host
+    depends_on:
+    - mq
+    - vision
+  cursor_tracker:
+    container_name: cursor_tracker_agent
+    image: local/vision-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/cursor_tracker_agent.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - PYTHONPATH=/app
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_FRAME_TOPIC=vision/frame
+    - CURSOR_TOPIC=cursor/state
+    - CURSOR_MIN_AREA=5
+    - CURSOR_MAX_AREA=12000
+    - CURSOR_HSV_V_MIN=0
+    - CURSOR_HSV_S_MAX=0
+    - CURSOR_BINARY_THRESHOLD=140
+    - CURSOR_FRAME_STRIDE=1
+    - CURSOR_LOSS_ANNOUNCE_SEC=1.0
+    - CURSOR_MOTION_MIN=12
+    depends_on:
+    - mq
+    - vision
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - /usr/local/bin/vision-healthcheck
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  policy:
+    container_name: policy_agent
+    build:
+      context: .
+      dockerfile: docker/policy/Dockerfile
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - PYTHONUNBUFFERED=1
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - OBS_TOPIC=vision/mean
+    - SIM_TOPIC=scene/state
+    - ACT_TOPIC=control/keys
+    - ACT_CMD_TOPIC=act/cmd
+    - TEACHER_ACTION_TOPIC=teacher/action
+    - TEACHER_ALPHA_START=0.9
+    - TEACHER_ALPHA_DECAY_STEPS=10000
+    - POLICY_GAME_KEYWORDS=health,hp,mana,energy,score,points,level,xp,map,inventory,items,menu,play,start,options,settings,exit,quit,back,cancel,mission,objective,target,enemy,boss,player
+    - POLICY_FORBIDDEN_TEXTS=shop,store,buy,purchase,microtransaction
+    - POLICY_FORBIDDEN_TAGS=shop_button,shop
+    - SHOP_SUPPRESS=1
+    - SHOP_SUPPRESS_DEATH_ONLY=1
+    - POLICY_HOVER_VERIFY=1
+    - POLICY_HOVER_DEBUG=1
+    - RESPAWN_TRIGGER_TEXTS=respawn,revive,restart,try again,game over,you died,continue,loading
+    - RESPAWN_FUZZY_THRESHOLD=0.6
+    - RESPAWN_DEBUG=0
+    - THRESH=120.0
+    - DEBOUNCE=0.25
+    - EXPLORE_SIGMA=60.0
+    - CURSOR_TIMEOUT_SEC=1.5
+    - CURSOR_TOLERANCE=0.08
+    - POLICY_SCREEN_WIDTH=1728
+    - POLICY_SCREEN_HEIGHT=1084
+    - POLICY_DESKTOP_KEYWORDS=finder,trash,dock,apple menu,desktop,wallpaper
+    depends_on:
+    - mq
+    - vision
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - /usr/local/bin/policy-healthcheck
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  onboarding:
+    container_name: onboarding_agent
+    image: local/vision-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/game_onboarding_agent.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_FRAME_TOPIC=vision/frame
+    - SCENE_TOPIC=scene/state
+    - CURSOR_TOPIC=cursor/state
+    - ACT_CMD_TOPIC=act/cmd
+    - GAME_SCHEMA_TOPIC=game/schema
+    - LLM_ENDPOINT=http://10.0.0.230:11434/v1/chat/completions
+    - LLM_MODEL=models/qwen2.5-7b-instruct-q4_k_m.gguf
+    - LLM_API_KEY=dummy
+    - LLM_TIMEOUT=8.0
+    - LLM_DETECT_GAME=1
+    - ONBOARD_REQUEST_LLM_GAME_ID=1
+    - ONBOARD_REQUEST_LLM_PROFILE=1
+    - ONBOARD_PHASE_A_SEC=6.0
+    - ONBOARD_CONTROL_DIFF=8.0
+    depends_on:
+    - mq
+    - vision
+  policy_brain:
+    container_name: policy_brain
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/policy_brain.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_OBS_TOPIC=vision/observation
+    - OCR_TEXT_TOPIC=ocr_easy/text
+    - SCENE_TOPIC=scene/state
+    - CURSOR_TOPIC=cursor/state
+    - ACT_CMD_TOPIC=act/cmd
+    - GAME_SCHEMA_TOPIC=game/schema
+    - CONTROL_PROFILE_PATH=/app/data/control_profiles.json
+    - POLICY_BRAIN_ACTION_INTERVAL=1.0
+    - POLICY_BRAIN_STATE_TTL=3.0
+    - POLICY_BRAIN_LOG_LEVEL=INFO
+    - POLICY_BRAIN_LOG_PATH=/app/logs/policy_brain.log
+    depends_on:
+    - mq
+    - vision
+    - perception
+    - ocr_easy
+  ocr:
+    container_name: ocr_agent
+    build:
+      context: .
+      dockerfile: docker/ocr/Dockerfile
+    image: local/ocr-agent:latest
+    runtime: nvidia
+    network_mode: host
+    devices:
+    - /dev/video0:/dev/video0
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_CMD=vision/cmd
+    - VISION_SNAPSHOT=vision/snapshot
+    - OCR_TEXT=ocr/text
+    - OCR_CMD=ocr/cmd
+    - OCR_LANGS=eng+rus
+    depends_on:
+    - mq
+    - vision
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - /usr/local/bin/ocr-healthcheck
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  ocr_easy:
+    container_name: ocr_easy_agent
+    build:
+      context: .
+      dockerfile: docker/ocr_easy/Dockerfile
+    image: local/ocr-easy-agent:latest
+    runtime: nvidia
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_CMD=vision/cmd
+    - VISION_SNAPSHOT=vision/snapshot
+    - OCR_CMD=ocr_easy/cmd
+    - OCR_TEXT=ocr_easy/text
+    - OCR_LANGS=en,ru
+    - OCR_BACKEND=paddle
+    - OCR_DEBUG_SAVE=1
+    - OCR_DEBUG_DIR=/tmp/ocr_debug
+    - OCR_SCALE_FACTOR=1.0
+    - OCR_MAX_BASE_WIDTH=640
+    - OCR_GAMMA=1.2
+    - OCR_MIN_ALPHA_RATIO=0.1
+    - OCR_MAX_LINE_CHARS=400
+    - OCR_MAX_RESULTS=10
+    - OCR_VARIANT_THRESHOLD=off
+    - OCR_AUTO_INTERVAL=4.0
+    - OCR_AUTO_TIMEOUT=5.0
+    - OCR_FORCE_CPU=1
+    depends_on:
+    - mq
+    - vision
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - /usr/local/bin/ocr-easy-healthcheck
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  ui_region:
+    container_name: ui_region_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/ui_region_agent.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - OCR_EASY_TOPIC=ocr_easy/text
+    - OCR_REGIONS_TOPIC=ocr/regions
+    - REGION_WINDOW=20
+    - REGION_MIN_CONF=0.6
+    - REGION_STABILITY_MIN=0.5
+    - REGION_TOPK=6
+    - REGION_IOU_JOIN=0.2
+    - REGION_DIST_JOIN=0.05
+    - REGION_PUBLISH_INTERVAL=1.0
+    depends_on:
+    - mq
+  simple_ocr:
+    container_name: simple_ocr_agent
+    build:
+      context: .
+      dockerfile: docker/simple_ocr/Dockerfile
+    image: local/simple-ocr-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/simple_ocr_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SIMPLE_OCR_INTERVAL=1.5
+    - FRAME_TOPIC=vision/frame
+    - OCR_REGIONS_TOPIC=ocr/regions
+    - OCR_UNIFIED_TOPIC=ocr/unified
+    - REGION_TTL_SEC=5.0
+    - PUBLISH_EMPTY=1
+    - MAX_REGIONS=3
+    - SIMPLE_OCR_UPSCALE=1.5
+    - SIMPLE_OCR_CONTRAST=2.0
+    - SIMPLE_OCR_SHARPEN=2.3
+    - SIMPLE_OCR_TESS_CONFIG=-l eng --psm 6 --oem 1
+    - SIMPLE_OCR_DEBUG=0
+    - ROI_DEBUG_DIR=/tmp/ocr_roi_debug
+    depends_on:
+    - mq
+    - vision
+
+  zeroshot_detector:
+    container_name: zeroshot_detector
+    image: local/policy-agent:zeroshot
+    runtime: nvidia
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/zeroshot_detector.py
+    volumes:
+    - ./agents:/app
+    - ./docker/deepstream:/app/docker/deepstream
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_FRAME_TOPIC=vision/frame
+    - OBJECT_TOPIC=vision/objects
+    - ZSD_MODEL_ID=google/owlvit-base-patch32
+    - HF_HOME=/mnt/ssd/models/zeroshot/hf
+    - ZSD_PROMPTS=enemy,boss,player,npc,loot,portal,waypoint,minimap,inventory,quest_marker,dialog_button,health_orb,mana_orb,menu_button
+    - ZSD_CONF_THRESHOLD=0.08
+    - ZSD_MAX_PER_PROMPT=2
+    - ZSD_INTERVAL=2.0
+    - ZSD_FRAME_TIMEOUT=5.0
+    - ZSD_MAX_SIZE=640
+    - ZSD_THREADS=2
+    depends_on:
+    - mq
+    - vision
+  scene:
+    container_name: scene_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/scene_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SCENE_TOPIC=scene/state
+    - VISION_MEAN_TOPIC=vision/mean
+    - VISION_SNAPSHOT_TOPIC=vision/snapshot
+    - VISION_OBJECT_TOPIC=vision/objects
+    - VISION_OBSERVATION_TOPIC=vision/observation
+    - OCR_TEXT_TOPIC=ocr/text
+    - OCR_EASY_TOPIC=ocr_easy/text
+    - SIMPLE_OCR_TOPIC=simple_ocr/text
+    depends_on:
+    - mq
+    - vision
+    - ocr
+    - ocr_easy
+    - simple_ocr
+  teach:
+    container_name: teach_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/teach_agent.py
+    environment:
+    - PYTHONUNBUFFERED=1
+    - TEACH_LOG_LEVEL=DEBUG
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SCENE_TOPIC=scene/state
+    - TEACH_CMD_TOPIC=teach/cmd
+    - TRAIN_JOB_TOPIC=train/jobs
+    - MEM_TOPIC=mem/store
+    depends_on:
+    - mq
+    - scene
+  train_manager:
+    container_name: train_manager_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/datasets:/mnt/ssd/datasets
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/train_manager_agent.py
+    environment:
+    - PYTHONUNBUFFERED=1
+    - TRAIN_LOG_LEVEL=DEBUG
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - TRAIN_JOB_TOPIC=train/jobs
+    - TRAIN_STATUS_TOPIC=train/status
+    - CHECKPOINT_TOPIC=train/checkpoints
+    - RECORDER_DIR=/mnt/ssd/datasets/episodes
+    - MODEL_DIR=/mnt/ssd/models
+    - TRAIN_EPOCHS=3
+    depends_on:
+    - mq
+    - teach
+  eval:
+    container_name: eval_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/eval_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SCENE_TOPIC=scene/state
+    - EVAL_CMD_TOPIC=eval/cmd
+    - EVAL_RESULT_TOPIC=eval/result
+    depends_on:
+    - mq
+    - scene
+  act:
+    container_name: act_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/act_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - ACT_CMD_TOPIC=act/cmd
+    - POLICY_ACTION_TOPIC=control/keys
+    - ACT_RESULT_TOPIC=act/result
+    - ACT_MAX_ACTIONS=20
+    - ACT_WINDOW_SEC=10.0
+    depends_on:
+    - mq
+    - policy
+  codex_proxy:
+    container_name: codex_proxy_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/codex_proxy_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - CODEX_CMD_TOPIC=codex/cmd
+    - CODEX_REPLY_TOPIC=codex/reply
+    - MEM_TOPIC=mem/store
+    - BUDGET_TOPIC=budget/update
+    depends_on:
+    - mq
+  recorder:
+    container_name: recorder_agent
+    build:
+      context: .
+      dockerfile: docker/recorder/Dockerfile
+    image: local/recorder-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/datasets:/mnt/ssd/datasets
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SCENE_TOPIC=scene/state
+    - ACT_CMD_TOPIC=act/cmd
+    - ACT_CMD_ALIAS=act/request
+    - TEACHER_ACTION_TOPIC=teacher/action
+    - REWARD_TOPIC=train/reward
+    - RECORDER_DIR=/mnt/ssd/datasets/episodes
+    - RECORDER_MAX=2000
+    depends_on:
+    - mq
+    - scene
+    - act
+  mem:
+    container_name: mem_agent
+    build:
+      context: .
+      dockerfile: docker/mem/Dockerfile
+    image: local/mem-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd:/mnt/ssd
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - MEM_STORE_TOPIC=mem/store
+    - MEM_QUERY_TOPIC=mem/query
+    - MEM_REPLY_TOPIC=mem/reply
+    depends_on:
+    - mq
+  budget:
+    container_name: budget_agent
+    build:
+      context: .
+      dockerfile: docker/budget/Dockerfile
+    image: local/budget-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - BUDGET_TOPIC=budget/update
+    - BUDGET_SUMMARY_TOPIC=budget/summary
+    - BUDGET_TOKEN_LIMIT=20000
+    depends_on:
+    - mq
+  demonstrator:
+    container_name: demonstrator_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/demonstrator_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SCENE_TOPIC=scene/state
+    - ACT_CMD_TOPIC=act/cmd
+    - ACT_CMD_ALIAS=act/request
+    - CONTROL_TOPIC=control/keys
+    - ACTION_INTERVAL=0.75
+    depends_on:
+    - mq
+    - scene
+  auto_train:
+    container_name: auto_train_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/datasets:/mnt/ssd/datasets
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/auto_train_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - RECORDER_DIR=/mnt/ssd/datasets/episodes
+    - TEACH_TOPIC=teach/request
+    - TEACH_ALIAS=teach/cmd
+    - TRAIN_STATUS_TOPIC=train/status
+    - AUTO_TRAIN_MIN_SAMPLES=40
+    - AUTO_TRAIN_MIN_INCREMENT=10
+    - AUTO_TRAIN_CHECK_INTERVAL=15
+    - AUTO_TRAIN_COOLDOWN=300
+    depends_on:
+    - mq
+    - recorder
+    - teach
+    - train_manager
+  teacher:
+    container_name: teacher_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/teacher_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SCENE_TOPIC=scene/state
+    - SNAPSHOT_TOPIC=vision/snapshot
+    - ACT_RESULT_TOPIC=act/result
+    - TEACHER_ACTION_TOPIC=teacher/action
+    - TEACHER_PROVIDER=local
+    - TEACHER_LOCAL_ENDPOINT=http://10.0.0.230:11434/v1/chat/completions
+    - TEACHER_LOCAL_TIMEOUT=60
+    - TEACHER_INTERVAL_SEC=10.0
+    depends_on:
+    - mq
+    - scene
+    - act
+  reward_manager:
+    container_name: reward_manager
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/reward_manager.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SCENE_TOPIC=scene/state
+    - ACT_RESULT_TOPIC=act/result
+    - REWARD_TOPIC=train/reward
+    depends_on:
+    - mq
+    - act
+  progress:
+    container_name: progress_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/datasets:/mnt/ssd/datasets
+    - /mnt/ssd/memory:/mnt/ssd/memory
+    - /mnt/ssd/logs:/mnt/ssd/logs
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/progress_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - REWARD_TOPIC=train/reward
+    - TRAIN_STATUS_TOPIC=train/status
+    - THERMAL_TOPIC=system/thermal
+    - RECORDER_DIR=/mnt/ssd/datasets/episodes
+    - PINNED_PATH=/mnt/ssd/memory/pinned.json
+    - PROGRESS_TOPIC=progress/status
+    - PROGRESS_LOG_PATH=/mnt/ssd/logs/progress.log
+    depends_on:
+    - mq
+    - recorder
+    - train_manager
+  log_monitor:
+    container_name: log_monitor_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/log_monitor_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - LOG_MONITOR_DIRS=/app/logs
+    - LOG_SUMMARY_TOPIC=logs/summary
+    - LOG_ALERT_TOPIC=logs/alerts
+    - LOG_MONITOR_INTERVAL=5
+    depends_on:
+    - mq
+    - object_detection
+  http_bridge:
+    container_name: http_bridge
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/http_act_bridge.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - KEY_TOPIC=control/keys
+    - ACT_TOPIC=act/cmd
+    - HTTP_BRIDGE_URL=http://10.0.0.230:5001/cmd
+    depends_on:
+    - mq
+  hid_bridge:
+    container_name: hid_bridge
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    profiles:
+    - hid
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    devices:
+    - /dev/hidg0:/dev/hidg0
+    - /dev/hidg1:/dev/hidg1
+    entrypoint:
+    - python3
+    - /app/hid_bridge.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - KEY_TOPIC=control/keys
+    - ACT_TOPIC=act/cmd
+    - KEYBOARD_DEV=/dev/hidg0
+    - MOUSE_DEV=/dev/hidg1
+    depends_on:
+    - mq
+  object_detection:
+    container_name: object_detection_agent
+    build:
+      context: .
+      dockerfile: docker/object_detection/Dockerfile
+    image: local/object-detection-agent:latest
+    runtime: nvidia
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/object_detection_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_FRAME_TOPIC=vision/frame
+    - OBJECT_TOPIC=vision/objects
+    - OBJECT_DETECTOR_BACKEND=onnx
+    - OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx
+    - OBJECT_DEVICE=cpu
+    - OBJECT_IMAGE_SIZE=320
+    - OBJECT_CLASS_PATH=/mnt/ssd/models/yolo/classes_generic.txt
+    - OBJECT_CONF_THRESHOLD=0.25
+    - OBJECT_IOU_THRESHOLD=0.45
+    - OBJECT_QUEUE=2
+    ipc: host
+    depends_on:
+    - mq
+    - vision
+  perception:
+    container_name: perception_agent
+    image: local/policy-agent:perception-gpu
+    runtime: nvidia
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/perception_agent.py
+    volumes:
+    - ./agents:/app
+    - /home/dima/multiagent:/workspace
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    environment:
+    - PYTHONPATH=/app:/workspace:/opt/ultralytics_repo
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_FRAME_TOPIC=vision/frame
+    - PERCEPTION_TOPIC=vision/observation
+    - YOLO11_WEIGHTS=/mnt/ssd/models/yolo/yolo11n.pt
+    - YOLO11_DEVICE=cuda:0
+    - YOLO11_CONF=0.20
+    - YOLO11_IMGSZ=416
+    - YOLO_MAX_SIZE=416
+    - YOLO_FALLBACK_CPU=1
+    - YOLO_WORLD_CLASSES=enemy,boss,player,npc,loot,portal,waypoint,quest_marker,dialog_button
+    - DETECTOR_BACKEND=yolo11_torch
+    - PERCEPTION_DEBUG=1
+    - OCR_BACKEND=null
+    - OCR_LANGS=en
+    - OCR_USE_GPU=0
+    - OCR_PADDLE_LANG=en
+    - OCR_USE_ANGLE_CLS=1
+    - OCR_MIN_CONF=0.05
+    - PLAYER_LOCATOR_ENABLED=1
+    - PLAYER_LOCATOR_CENTER_X=0.5
+    - PLAYER_LOCATOR_CENTER_Y=0.55
+    - PLAYER_LOCATOR_MAX_OFFSET=0.45
+    - PLAYER_LOCATOR_MIN_AREA=0.01
+    - PLAYER_LOCATOR_ROI=0.25,0.25,0.75,0.9
+    - PLAYER_LOCATOR_MIN_ROI_AREA=0.02
+    depends_on:
+    - mq
+    - vision
+  hint_client:
+    container_name: hint_client
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/vision_hint_client.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - FRAME_TOPIC=vision/frame
+    - HINT_TOPIC=vision/hints
+    - HINT_SERVER_URL=http://10.0.0.230:5010/infer
+    - HINT_INTERVAL=2.0
+    - HINT_TIMEOUT=4.0
+    - HINT_MAX_QUEUE=1
+    - HINT_ENABLED=1
+    depends_on:
+    - mq
+    - vision
+  sim_core:
+    container_name: sim_core
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/sim_core_agent.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SIM_STATE_TOPIC=sim_core/state
+    - SIM_ACTION_TOPIC=sim_core/action
+    - SIM_CMD_TOPIC=sim_core/cmd
+    - SIM_REWARD_TOPIC=train/reward
+    - SIM_DR_LEVEL=medium
+    depends_on:
+    - mq
+  goap:
+    container_name: goap_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/goap_agent.py
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/memory:/mnt/ssd/memory
+    - /mnt/ssd/datasets:/mnt/ssd/datasets
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - GOALS_TOPIC=goals/high_level
+    - GOAP_TASK_TOPIC=goap/tasks
+    - SCENE_TOPIC=scene/state
+    - MEM_QUERY_TOPIC=mem/query
+    - GOAP_CALIBRATION_MAX_AGE=86400
+    - MEM_REPLY_TOPIC=mem/reply
+    depends_on:
+    - mq
+  research:
+    container_name: research_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/research_agent.py
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/research:/mnt/ssd/research
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - RESEARCH_TOPIC=research/events
+    - GOALS_TOPIC=goals/high_level
+    - TRAIN_JOB_TOPIC=train/jobs
+    - RESEARCH_DOC_DIR=/mnt/ssd/research/cache
+    - SIM_CMD_TOPIC=sim_core/cmd
+    depends_on:
+    - mq
+  thermal_monitor:
+    container_name: thermal_monitor
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/thermal_monitor.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - THERMAL_TOPIC=system/thermal
+    depends_on:
+    - mq
+  world_model:
+    container_name: world_model_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/world_model_agent.py
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/datasets:/mnt/ssd/datasets
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - TRAIN_JOB_TOPIC=train/jobs
+    - TRAIN_STATUS_TOPIC=train/status
+    - CHECKPOINT_TOPIC=train/checkpoints
+    - RECORDER_DIR=/mnt/ssd/datasets/episodes
+    - WORLD_MODEL_PATH=/mnt/ssd/models/heads/world_model/world_model.pt
+    depends_on:
+    - mq
+  vision_controller:
+    container_name: vision_controller_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/vision_controller_agent.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - AGENT_NAME=vision_controller
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - THERMAL_TOPIC=system/thermal
+    - PRED_ERROR_TOPIC=world_model/pred_error
+    - VISION_CONFIG_TOPIC=vision/config
+    - VISION_CTRL_ERROR_HIGH=0.7
+    - VISION_CTRL_ERROR_LOW=0.3
+    - VISION_CTRL_SWITCH_COOLDOWN_SEC=15
+    - VISION_CTRL_LOG_LEVEL=INFO
+    depends_on:
+    - mq
+  perception_ds:
+    container_name: perception_ds
+    build:
+      context: .
+      dockerfile: docker/deepstream/Dockerfile
+    image: local/deepstream-perception:latest
+    runtime: nvidia
+    network_mode: host
+    privileged: true
+    devices:
+    - /dev/video0:/dev/video0
+    - /dev/video1:/dev/video1
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - ./docker/deepstream:/app/docker/deepstream
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - PERCEPTION_TOPIC=vision/observation
+    - HEARTBEAT_INTERVAL=5.0
+    - CONF_THRESHOLD=0.05
+    - VIDEO_SOURCE=http://10.0.0.68:5008/video_feed
+    depends_on:
+    - mq
+  yolo_logger:
+    container_name: yolo_logger
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/tools/snapshot_logger.py
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/logs:/mnt/ssd/logs
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - YOLO_LOG_TOPIC=vision/objects
+    - YOLO_LOG_DIR=/mnt/ssd/logs/yolo
+    depends_on:
+    - mq
+    - object_detection
+  system_health:
+    container_name: system_health_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/system_health_agent.py
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - HEALTH_TOPIC=system/health
+    - ALERT_TOPIC=system/alert
+    - TIMEOUT_VISION=5.0
+    - TIMEOUT_SCENE=10.0
+    - TIMEOUT_POLICY=60.0
+    depends_on:
+    - mq
+    - vision
+    - scene
+    - policy

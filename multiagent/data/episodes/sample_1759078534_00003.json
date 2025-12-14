@@ -1,0 +1,1 @@
+{"timestamp": 1759078534.3141062, "scene_time": 1759078534.261045, "scene": {"ok": true, "event": "scene_update", "mean": 0.45, "trend": [0.4, 0.45], "text": ["button"], "timestamp": 1759078534.259607, "source": "smoke_test", "step": 2}, "action": {"ok": true, "action": "move_cursor", "source": "smoke_test", "step": 2}}

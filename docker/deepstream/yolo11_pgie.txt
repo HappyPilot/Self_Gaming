@@ -1,0 +1,21 @@
+[property]
+# Engine: YOLO-World v2 (s) exported 320x320, TensorRT 10.3 FP16
+model-engine-file=/mnt/ssd/models/yolo/yolov8s_worldv2_320_fp16.engine
+labelfile-path=/mnt/ssd/models/yolo/coco.names
+batch-size=1
+gie-unique-id=1
+network-mode=2
+network-type=100
+infer-dims=3;320;320
+uff-input-order=0
+uff-input-blob-name=images
+output-blob-names=output0
+process-mode=1
+workspace-size=256
+maintain-aspect-ratio=0
+num-detected-classes=80
+output-tensor-meta=1
+
+[class-attrs-all]
+nms-iou-threshold=0.6
+pre-cluster-threshold=0.05
