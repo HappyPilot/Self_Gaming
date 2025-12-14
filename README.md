@@ -144,3 +144,13 @@ Add `log_monitor` to the `docker-compose.yml` stack (already wired) and check `l
 | `train/status` | Train manager | Progress, including `teacher_alpha` telemetry |
 
 Refer to `docker-compose.yml` for full service definitions and environment variables.
+
+## Camera troubleshooting (V4L2 EBUSY / stuck device)
+
+- Symptom: any `v4l2src`/`v4l2-ctl` call fails with `Device or resource busy` even when `lsof/fuser` are empty.
+- Likely causes: hidden consumer (pipewire/wireplumber/portal) or UVC capture card stuck in streaming state.
+- Steps:
+  1) `tools/camera_debug.sh` – dump formats, open handles, and likely consumers.
+  2) `tools/camera_reset.sh` – stop pipewire/wireplumber, try USB unbind/bind, reload uvcvideo, run a quick stream test.
+  3) Verify: `v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=30 --stream-to=/dev/null`.
+  4) Restart `perception_ds`. If still EBUSY, physically replug the capture device or reboot.

@@ -16,6 +16,7 @@ import math
 import os
 import sys
 import time
+import subprocess
 from typing import List
 
 import gi
@@ -40,10 +41,10 @@ OBS_TOPIC = os.getenv("PERCEPTION_TOPIC", "vision/observation")
 DS_SOURCE = os.getenv("DS_SOURCE", os.getenv("VIDEO_SOURCE", "v4l2")).lower()
 VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "")  # used when DS_SOURCE=http
 V4L2_DEVICE = os.getenv("DS_V4L2_DEVICE", os.getenv("VIDEO_DEVICE", "/dev/video0"))
-V4L2_WIDTH = int(os.getenv("DS_V4L2_WIDTH", os.getenv("VIDEO_WIDTH", "1280")))
-V4L2_HEIGHT = int(os.getenv("DS_V4L2_HEIGHT", os.getenv("VIDEO_HEIGHT", "720")))
-V4L2_FPS = int(os.getenv("DS_V4L2_FPS", os.getenv("VIDEO_FPS", "30")))
-V4L2_FORMAT = os.getenv("DS_V4L2_FORMAT", "MJPG").upper()  # MJPG or YUYV
+V4L2_WIDTH = int(os.getenv("DS_V4L2_WIDTH", os.getenv("VIDEO_WIDTH", "0")))
+V4L2_HEIGHT = int(os.getenv("DS_V4L2_HEIGHT", os.getenv("VIDEO_HEIGHT", "0")))
+V4L2_FPS = int(os.getenv("DS_V4L2_FPS", os.getenv("VIDEO_FPS", "0")))
+V4L2_FORMAT = os.getenv("DS_V4L2_FORMAT", "AUTO").upper()  # AUTO to probe, else MJPG/YUYV
 
 CONF_THRESHOLD = float(os.getenv("CONF_THRESHOLD", "0.25"))
 NMS_IOU = float(os.getenv("NMS_IOU", "0.6"))
@@ -51,7 +52,79 @@ ENGINE_CONFIG = os.getenv("ENGINE_CONFIG", "/app/docker/deepstream/yolo11_pgie.t
 # Match streammux/nvinfer resolution to the engine. Default 320 aligns with yolov8s_worldv2_320_fp16.engine.
 ENGINE_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "320"))
 DEBUG_YOLO = os.getenv("DEBUG_YOLO", "0") == "1"
+DS_V4L2_RETRY = os.getenv("DS_V4L2_RETRY", "0") == "1"
+DS_V4L2_RETRY_COUNT = int(os.getenv("DS_V4L2_RETRY_COUNT", "3"))
+DS_V4L2_RETRY_SLEEP = float(os.getenv("DS_V4L2_RETRY_SLEEP", "2.0"))
 _seen_layers: set[str] = set()
+
+
+def probe_v4l2_formats(device: str) -> list[str]:
+    """Return lines of v4l2-ctl --list-formats-ext output or [] on failure."""
+    try:
+        out = subprocess.check_output(
+            ["v4l2-ctl", "-d", device, "--list-formats-ext"], stderr=subprocess.STDOUT, timeout=5
+        )
+        return out.decode("utf-8", errors="ignore").splitlines()
+    except Exception as exc:  # pragma: no cover - probe best-effort
+        print(f"[deepstream] v4l2-ctl probe failed: {exc}")
+        return []
+
+
+def select_v4l2_caps(device: str) -> tuple[str, int, int, int]:
+    """
+    Auto-select a safe raw format and mode. Preference:
+    - YUYV/YUY2 with a reasonable size (prefer <=1280x720), fallback first seen.
+    If env overrides are set, they take precedence.
+    """
+    # If user explicitly set non-auto values, honor them; otherwise probe
+    if V4L2_FORMAT != "AUTO" or V4L2_WIDTH > 0 or V4L2_HEIGHT > 0 or V4L2_FPS > 0:
+        fmt = V4L2_FORMAT if V4L2_FORMAT != "AUTO" else "YUY2"
+        w = V4L2_WIDTH if V4L2_WIDTH > 0 else 1280
+        h = V4L2_HEIGHT if V4L2_HEIGHT > 0 else 720
+        fps = V4L2_FPS if V4L2_FPS > 0 else 30
+        print(f"[deepstream] using env-specified v4l2 caps format={fmt} {w}x{h}@{fps}")
+        return fmt, w, h, fps
+
+    lines = probe_v4l2_formats(device)
+    best = None
+    preferred = None
+    cur_fmt = None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Pixel Format"):
+            if "'" in line:
+                cur_fmt = line.split("'")[1]
+            else:
+                cur_fmt = None
+        if "Size" in line and "Discrete" in line and cur_fmt:
+            parts = line.split()
+            wh = parts[-1]
+            if "x" in wh:
+                try:
+                    w, h = [int(x) for x in wh.split("x")]
+                except Exception:
+                    continue
+                fps = 30
+                if "(" in line and "fps" in line:
+                    try:
+                        fps = int(line.split("(")[1].split()[0].split("/")[0])
+                    except Exception:
+                        fps = 30
+                cand = (cur_fmt, w, h, fps)
+                if cur_fmt in ("YUYV", "YUY2"):
+                    if not best:
+                        best = cand
+                    if w <= 1280 and h <= 720 and fps >= 30 and preferred is None:
+                        preferred = cand
+                elif not best:
+                    best = cand
+    pick = preferred or best
+    if pick:
+        fmt, w, h, fps = pick
+        print(f"[deepstream] auto-selected v4l2 caps format={fmt} {w}x{h}@{fps}")
+        return fmt, w, h, fps
+    print("[deepstream] auto-select fallback format=YUY2 1280x720@30")
+    return "YUY2", 1280, 720, 30
 
 
 def xywh_to_xyxy(xywh: np.ndarray) -> np.ndarray:
@@ -166,7 +239,10 @@ def build_pipeline():
     pipeline = Gst.Pipeline()
 
     source_mode = DS_SOURCE or "v4l2"
-    print(f"[deepstream] source mode={source_mode}, device={V4L2_DEVICE}, format={V4L2_FORMAT}, size={V4L2_WIDTH}x{V4L2_HEIGHT}@{V4L2_FPS}")
+    fmt, width, height, fps = (
+        select_v4l2_caps(V4L2_DEVICE) if source_mode == "v4l2" else (V4L2_FORMAT, V4L2_WIDTH, V4L2_HEIGHT, V4L2_FPS)
+    )
+    print(f"[deepstream] source mode={source_mode}, device={V4L2_DEVICE}, format={fmt}, size={width}x{height}@{fps}")
 
     elems = []
 
@@ -187,27 +263,18 @@ def build_pipeline():
         src = Gst.ElementFactory.make("v4l2src", "source")
         src.set_property("device", V4L2_DEVICE)
         http_chain = False
-        if V4L2_FORMAT == "MJPG":
+        if fmt == "MJPG":
             caps_src = Gst.ElementFactory.make("capsfilter", "source_caps")
-            caps_src.set_property(
-                "caps",
-                Gst.Caps.from_string(
-                    f"image/jpeg,width={V4L2_WIDTH},height={V4L2_HEIGHT},framerate={V4L2_FPS}/1"
-                ),
-            )
+            caps_src.set_property("caps", Gst.Caps.from_string(f"image/jpeg,framerate={fps}/1"))
             jpegparse = Gst.ElementFactory.make("jpegparse", "jpegparse")
             decoder = Gst.ElementFactory.make("nvv4l2decoder", "mjpegdecoder") or Gst.ElementFactory.make("jpegdec", "jpegdec")
             elems.extend([src, caps_src, jpegparse, decoder])
         else:
-            caps_src = Gst.ElementFactory.make("capsfilter", "source_caps")
-            caps_src.set_property(
-                "caps",
-                Gst.Caps.from_string(
-                    f"video/x-raw,format=YUY2,width={V4L2_WIDTH},height={V4L2_HEIGHT},framerate={V4L2_FPS}/1"
-                ),
-            )
             conv = Gst.ElementFactory.make("videoconvert", "conv")
-            elems.extend([src, caps_src, conv])
+            scale = Gst.ElementFactory.make("videoscale", "videoscale")
+            target_caps = Gst.ElementFactory.make("capsfilter", "target_caps")
+            target_caps.set_property("caps", Gst.Caps.from_string(f"video/x-raw,width={width},height={height},framerate={fps}/1"))
+            elems.extend([src, conv, scale, target_caps])
 
     # Common downstream: convert to NV12 NVMM and feed streammux
     nvvidconv = Gst.ElementFactory.make("nvvidconv", "nvvidconv")
@@ -215,7 +282,7 @@ def build_pipeline():
     caps_nvmm.set_property(
         "caps",
         Gst.Caps.from_string(
-            f"video/x-raw(memory:NVMM),format=NV12,width={ENGINE_INPUT_SIZE},height={ENGINE_INPUT_SIZE},framerate={V4L2_FPS}/1"
+            f"video/x-raw(memory:NVMM),format=NV12,width={ENGINE_INPUT_SIZE},height={ENGINE_INPUT_SIZE},framerate={fps}/1"
         ),
     )
 
@@ -250,11 +317,11 @@ def build_pipeline():
         if not (src.link(demux) and jpeg_caps.link(jpegdec) and jpegdec.link(conv_http) and conv_http.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
             raise RuntimeError("Failed to link HTTP source elements")
     else:
-        if V4L2_FORMAT == "MJPG":
+        if fmt == "MJPG":
             if not (src.link(caps_src) and caps_src.link(jpegparse) and jpegparse.link(decoder) and decoder.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
                 raise RuntimeError("Failed to link V4L2 MJPG elements")
         else:
-            if not (src.link(caps_src) and caps_src.link(conv) and conv.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
+            if not (src.link(conv) and conv.link(scale) and scale.link(target_caps) and target_caps.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
                 raise RuntimeError("Failed to link V4L2 YUYV elements")
 
     sinkpad = mux.get_request_pad("sink_0")
@@ -277,40 +344,60 @@ def main():
         raise FileNotFoundError(f"ENGINE_CONFIG not found: {ENGINE_CONFIG}")
     print(f"Using nvinfer config: {ENGINE_CONFIG}")
 
-    pipeline, pgie = build_pipeline()
-    pgie_src_pad = pgie.get_static_pad("src")
-    if not pgie_src_pad:
-        raise RuntimeError("Unable to get src pad of nvinfer")
-    pgie_src_pad.add_probe(Gst.PadProbeType.BUFFER, infer_probe, {"mqtt": mqtt_client})
+    attempt = 0
+    while True:
+        attempt += 1
+        pipeline, pgie = build_pipeline()
+        pgie_src_pad = pgie.get_static_pad("src")
+        if not pgie_src_pad:
+            raise RuntimeError("Unable to get src pad of nvinfer")
+        pgie_src_pad.add_probe(Gst.PadProbeType.BUFFER, infer_probe, {"mqtt": mqtt_client})
 
-    ret = pipeline.set_state(Gst.State.PLAYING)
-    if ret not in (Gst.StateChangeReturn.SUCCESS, Gst.StateChangeReturn.ASYNC):
-        raise RuntimeError(f"Failed to start pipeline, state change returned {ret}")
-    print("DeepStream pipeline started")
+        ret = pipeline.set_state(Gst.State.PLAYING)
+        if ret not in (Gst.StateChangeReturn.SUCCESS, Gst.StateChangeReturn.ASYNC):
+            raise RuntimeError(f"Failed to start pipeline, state change returned {ret}")
+        print("DeepStream pipeline started")
 
-    bus = pipeline.get_bus()
-    bus.add_signal_watch()
-    loop = GObject.MainLoop()
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        loop = GObject.MainLoop()
+        error_state: dict | None = None
 
-    def on_message(bus, message, udata):
-        t = message.type
-        if t == Gst.MessageType.EOS:
-            print("[deepstream] EOS received")
-            udata.quit()
-        elif t == Gst.MessageType.ERROR:
-            err, dbg = message.parse_error()
-            print(f"[deepstream] ERROR: {err} {dbg}")
-            udata.quit()
+        def on_message(bus, message, udata):
+            nonlocal error_state
+            t = message.type
+            if t == Gst.MessageType.EOS:
+                print("[deepstream] EOS received")
+                udata.quit()
+            elif t == Gst.MessageType.ERROR:
+                err, dbg = message.parse_error()
+                print(f"[deepstream] ERROR: {err} {dbg}")
+                if "Device or resource busy" in str(err):
+                    print("[deepstream] V4L2 device appears BUSY or stuck. Run tools/camera_debug.sh, then tools/camera_reset.sh, then retry.")
+                error_state = {"err": err, "dbg": dbg}
+                udata.quit()
 
-    bus.connect("message", on_message, loop)
-    try:
-        loop.run()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        pipeline.set_state(Gst.State.NULL)
+        bus.connect("message", on_message, loop)
+        try:
+            loop.run()
+        except KeyboardInterrupt:
+            pipeline.set_state(Gst.State.NULL)
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+            return
+        finally:
+            pipeline.set_state(Gst.State.NULL)
+
+        if error_state and DS_V4L2_RETRY and attempt < DS_V4L2_RETRY_COUNT:
+            print(f"[deepstream] retrying in {DS_V4L2_RETRY_SLEEP}s (attempt {attempt}/{DS_V4L2_RETRY_COUNT})...")
+            time.sleep(DS_V4L2_RETRY_SLEEP)
+            continue
+
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
+        if error_state:
+            raise RuntimeError(f"Pipeline stopped due to error: {error_state['err']}")
+        break
 
 
 if __name__ == "__main__":
