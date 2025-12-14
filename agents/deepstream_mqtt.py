@@ -50,6 +50,8 @@ NMS_IOU = float(os.getenv("NMS_IOU", "0.6"))
 ENGINE_CONFIG = os.getenv("ENGINE_CONFIG", "/app/docker/deepstream/yolo11_pgie.txt")
 # Match streammux/nvinfer resolution to the engine. Default 320 aligns with yolov8s_worldv2_320_fp16.engine.
 ENGINE_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "320"))
+DEBUG_YOLO = os.getenv("DEBUG_YOLO", "0") == "1"
+_seen_layers: set[str] = set()
 
 
 def xywh_to_xyxy(xywh: np.ndarray) -> np.ndarray:
@@ -107,6 +109,9 @@ def parse_yolo_output(layer: pyds.NvDsInferLayerInfo, conf_thresh: float, iou_th
         classes.append(cls_id)
 
     if not boxes_xyxy:
+        if DEBUG_YOLO:
+            max_score = float(cls_scores.max()) if "cls_scores" in locals() else 0.0
+            print(f"[deepstream] no boxes; layer {layer.layerName} dims={dims.d[:dims.numDims]} max_score={max_score:.4f}")
         return []
     boxes_xyxy = np.stack(boxes_xyxy, axis=0)
     scores_np = np.array(scores)
@@ -141,7 +146,12 @@ def infer_probe(pad, info, u_data):
             tmeta = pyds.NvDsInferTensorMeta.cast(user_meta.user_meta_data)
             for i in range(tmeta.num_output_layers):
                 layer = pyds.get_nvds_LayerInfo(tmeta, i)
-                if layer and layer.layerName == "output0":
+                if not layer:
+                    continue
+                if DEBUG_YOLO and layer.layerName not in _seen_layers:
+                    print(f"[deepstream] saw layer name={layer.layerName} dims={layer.inferDims.d[:layer.inferDims.numDims]}")
+                    _seen_layers.add(layer.layerName)
+                if layer.layerName == "output0":
                     detections.extend(parse_yolo_output(layer, CONF_THRESHOLD, NMS_IOU))
         l_user = l_user.next
 
