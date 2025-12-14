@@ -14,7 +14,7 @@ RUN set -eux; \
 # Build and install pyds at image build time (avoid runtime compilation).
 # Requires buildx/BuildKit to bind host DeepStream/tegra libs during build on Jetson.
 RUN --mount=type=bind,source=/opt/nvidia/deepstream,target=/opt/nvidia/deepstream,readonly \
-    --mount=type=bind,source=/usr/lib/aarch64-linux-gnu/tegra,target=/usr/lib/aarch64-linux-gnu/tegra,readonly \
+    --mount=type=bind,source=/usr/lib/aarch64-linux-gnu/nvidia,target=/usr/lib/aarch64-linux-gnu/nvidia,readonly \
     set -eux; \
     workdir="$(mktemp -d /tmp/pyds.XXXX)"; \
     cd "$workdir"; \
