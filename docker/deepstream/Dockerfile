@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # DeepStream-based perception image (JetPack 6.1 / DeepStream 7.1)
 FROM nvcr.io/nvidia/deepstream-l4t:7.1-triton-multiarch
 
@@ -10,8 +11,11 @@ RUN set -eux; \
         git cmake build-essential libglib2.0-dev pkg-config; \
     pip3 install --no-cache-dir paho-mqtt cython
 
-# Build and install pyds at image build time (avoid runtime compilation)
-RUN set -eux; \
+# Build and install pyds at image build time (avoid runtime compilation).
+# Requires buildx/BuildKit to bind host DeepStream/tegra libs during build on Jetson.
+RUN --mount=type=bind,source=/opt/nvidia/deepstream,target=/opt/nvidia/deepstream,readonly \
+    --mount=type=bind,source=/usr/lib/aarch64-linux-gnu/tegra,target=/usr/lib/aarch64-linux-gnu/tegra,readonly \
+    set -eux; \
     workdir="$(mktemp -d /tmp/pyds.XXXX)"; \
     cd "$workdir"; \
     git clone https://github.com/NVIDIA-AI-IOT/deepstream_python_apps; \
