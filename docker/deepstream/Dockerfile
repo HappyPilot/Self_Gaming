@@ -8,6 +8,8 @@ RUN set -eux; \
         git cmake build-essential libglib2.0-dev pkg-config; \
     pip3 install --no-cache-dir paho-mqtt cython
 
+# pyds is expected to be provided via the mounted cache (/mnt/ssd/models/pyds) or preinstalled in the base image.
+
 COPY docker/deepstream/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
