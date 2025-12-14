@@ -35,14 +35,21 @@ except ImportError as exc:  # pragma: no cover
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 OBS_TOPIC = os.getenv("PERCEPTION_TOPIC", "vision/observation")
-V4L2_DEVICE = os.getenv("VIDEO_DEVICE", "/dev/video0")
-VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", "1280"))
-VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", "720"))
-VIDEO_FPS = int(os.getenv("VIDEO_FPS", "30"))
-VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "")  # if set to http/rtsp, use that instead of v4l2
+
+# Source selection
+DS_SOURCE = os.getenv("DS_SOURCE", os.getenv("VIDEO_SOURCE", "v4l2")).lower()
+VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "")  # used when DS_SOURCE=http
+V4L2_DEVICE = os.getenv("DS_V4L2_DEVICE", os.getenv("VIDEO_DEVICE", "/dev/video0"))
+V4L2_WIDTH = int(os.getenv("DS_V4L2_WIDTH", os.getenv("VIDEO_WIDTH", "1280")))
+V4L2_HEIGHT = int(os.getenv("DS_V4L2_HEIGHT", os.getenv("VIDEO_HEIGHT", "720")))
+V4L2_FPS = int(os.getenv("DS_V4L2_FPS", os.getenv("VIDEO_FPS", "30")))
+V4L2_FORMAT = os.getenv("DS_V4L2_FORMAT", "MJPG").upper()  # MJPG or YUYV
+
 CONF_THRESHOLD = float(os.getenv("CONF_THRESHOLD", "0.25"))
 NMS_IOU = float(os.getenv("NMS_IOU", "0.6"))
 ENGINE_CONFIG = os.getenv("ENGINE_CONFIG", "/app/docker/deepstream/yolo11_pgie.txt")
+# Match streammux/nvinfer resolution to the engine. Default 320 aligns with yolov8s_worldv2_320_fp16.engine.
+ENGINE_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "320"))
 
 
 def xywh_to_xyxy(xywh: np.ndarray) -> np.ndarray:
@@ -148,42 +155,64 @@ def build_pipeline():
     Gst.init(None)
     pipeline = Gst.Pipeline()
 
-    # Source branch: HTTP MJPEG (debug stream) or V4L2
-    if VIDEO_SOURCE.startswith("http"):
+    source_mode = DS_SOURCE or "v4l2"
+    print(f"[deepstream] source mode={source_mode}, device={V4L2_DEVICE}, format={V4L2_FORMAT}, size={V4L2_WIDTH}x{V4L2_HEIGHT}@{V4L2_FPS}")
+
+    elems = []
+
+    if source_mode == "http" or (source_mode == "auto" and VIDEO_SOURCE.startswith("http")):
         src = Gst.ElementFactory.make("souphttpsrc", "source")
         src.set_property("location", VIDEO_SOURCE)
         src.set_property("is-live", True)
         src.set_property("do-timestamp", True)
         demux = Gst.ElementFactory.make("multipartdemux", "demux")
         jpeg_caps = Gst.ElementFactory.make("capsfilter", "jpeg_caps")
-        jpeg_caps.set_property("caps", Gst.Caps.from_string(f"image/jpeg,framerate={VIDEO_FPS}/1"))
+        jpeg_caps.set_property("caps", Gst.Caps.from_string(f"image/jpeg,framerate={V4L2_FPS}/1"))
         jpegdec = Gst.ElementFactory.make("jpegdec", "jpegdec")
-        src_chain = [src, demux, jpeg_caps, jpegdec]
+        conv_http = Gst.ElementFactory.make("videoconvert", "conv_http")
+        elems.extend([src, demux, jpeg_caps, jpegdec, conv_http])
+        http_chain = True
     else:
+        # V4L2 source
         src = Gst.ElementFactory.make("v4l2src", "source")
         src.set_property("device", V4L2_DEVICE)
-        caps_src = Gst.ElementFactory.make("capsfilter", "source_caps")
-        caps_src.set_property(
-            "caps",
-            Gst.Caps.from_string(
-                f"video/x-raw,format=YUY2,width={VIDEO_WIDTH},height={VIDEO_HEIGHT},framerate={VIDEO_FPS}/1"
-            ),
-        )
-        conv = Gst.ElementFactory.make("videoconvert", "conv")
-        src_chain = [src, caps_src, conv]
+        http_chain = False
+        if V4L2_FORMAT == "MJPG":
+            caps_src = Gst.ElementFactory.make("capsfilter", "source_caps")
+            caps_src.set_property(
+                "caps",
+                Gst.Caps.from_string(
+                    f"image/jpeg,width={V4L2_WIDTH},height={V4L2_HEIGHT},framerate={V4L2_FPS}/1"
+                ),
+            )
+            jpegparse = Gst.ElementFactory.make("jpegparse", "jpegparse")
+            decoder = Gst.ElementFactory.make("nvv4l2decoder", "mjpegdecoder") or Gst.ElementFactory.make("jpegdec", "jpegdec")
+            elems.extend([src, caps_src, jpegparse, decoder])
+        else:
+            caps_src = Gst.ElementFactory.make("capsfilter", "source_caps")
+            caps_src.set_property(
+                "caps",
+                Gst.Caps.from_string(
+                    f"video/x-raw,format=YUY2,width={V4L2_WIDTH},height={V4L2_HEIGHT},framerate={V4L2_FPS}/1"
+                ),
+            )
+            conv = Gst.ElementFactory.make("videoconvert", "conv")
+            elems.extend([src, caps_src, conv])
 
-    caps_nv12 = Gst.ElementFactory.make("capsfilter", "caps_nv12")
-    caps_nv12.set_property("caps", Gst.Caps.from_string(f"video/x-raw,format=NV12,framerate={VIDEO_FPS}/1"))
-
-    conv_http = Gst.ElementFactory.make("videoconvert", "conv_http")
+    # Common downstream: convert to NV12 NVMM and feed streammux
     nvvidconv = Gst.ElementFactory.make("nvvidconv", "nvvidconv")
     caps_nvmm = Gst.ElementFactory.make("capsfilter", "caps_nvmm")
-    caps_nvmm.set_property("caps", Gst.Caps.from_string(f"video/x-raw(memory:NVMM),format=NV12,width=416,height=416,framerate={VIDEO_FPS}/1"))
+    caps_nvmm.set_property(
+        "caps",
+        Gst.Caps.from_string(
+            f"video/x-raw(memory:NVMM),format=NV12,width={ENGINE_INPUT_SIZE},height={ENGINE_INPUT_SIZE},framerate={V4L2_FPS}/1"
+        ),
+    )
 
     mux = Gst.ElementFactory.make("nvstreammux", "stream-muxer")
     mux.set_property("batch-size", 1)
-    mux.set_property("width", 416)
-    mux.set_property("height", 416)
+    mux.set_property("width", ENGINE_INPUT_SIZE)
+    mux.set_property("height", ENGINE_INPUT_SIZE)
     mux.set_property("batched-push-timeout", 4000000)
     mux.set_property("live-source", 1)
     mux.set_property("enable-padding", 1)
@@ -195,24 +224,29 @@ def build_pipeline():
     sink = Gst.ElementFactory.make("fakesink", "fakesink")
     sink.set_property("sync", False)
 
-    elems = src_chain + ([conv_http] if VIDEO_SOURCE.startswith("http") else []) + [caps_nv12, nvvidconv, caps_nvmm, mux, pgie, queue, sink]
+    elems += [nvvidconv, caps_nvmm, mux, pgie, queue, sink]
     for elem in elems:
         if not elem:
             raise RuntimeError("Failed to create element")
         pipeline.add(elem)
 
-    if VIDEO_SOURCE.startswith("http"):
+    if http_chain:
         def on_pad_added(mdemux, pad):
             sink_pad = jpeg_caps.get_static_pad("sink")
             if not sink_pad.is_linked():
                 pad.link(sink_pad)
 
         demux.connect("pad-added", on_pad_added)
-        if not (src.link(demux) and jpeg_caps.link(jpegdec) and jpegdec.link(conv_http) and conv_http.link(caps_nv12) and caps_nv12.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
+        if not (src.link(demux) and jpeg_caps.link(jpegdec) and jpegdec.link(conv_http) and conv_http.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
             raise RuntimeError("Failed to link HTTP source elements")
     else:
-        if not (src.link(src_chain[1]) and src_chain[1].link(src_chain[2]) and src_chain[2].link(caps_nv12) and caps_nv12.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
-            raise RuntimeError("Failed to link V4L2 source elements")
+        if V4L2_FORMAT == "MJPG":
+            if not (src.link(caps_src) and caps_src.link(jpegparse) and jpegparse.link(decoder) and decoder.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
+                raise RuntimeError("Failed to link V4L2 MJPG elements")
+        else:
+            if not (src.link(caps_src) and caps_src.link(conv) and conv.link(nvvidconv) and nvvidconv.link(caps_nvmm)):
+                raise RuntimeError("Failed to link V4L2 YUYV elements")
+
     sinkpad = mux.get_request_pad("sink_0")
     srcpad = caps_nvmm.get_static_pad("src")
     if srcpad.link(sinkpad) != Gst.PadLinkReturn.OK:

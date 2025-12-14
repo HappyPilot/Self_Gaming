@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import base64
 import io
+import hashlib
 import json
 import logging
 import os
@@ -47,6 +48,15 @@ MAX_LINE_LENGTH = int(os.getenv("OCR_MAX_LINE_CHARS", "160"))
 VARIANT_THRESHOLD = os.getenv("OCR_VARIANT_THRESHOLD", "adaptive")
 MAX_RESULTS = int(os.getenv("OCR_MAX_RESULTS", "12"))
 
+# Frame hash gating (skip OCR on unchanged frames)
+HASH_ENABLE = os.getenv("OCR_HASH_ENABLE", "1") == "1"
+HASH_SIZE = int(os.getenv("OCR_HASH_SIZE", "160"))
+HASH_FORCE_SEC = float(os.getenv("OCR_HASH_FORCE_SEC", "30.0"))
+
+last_frame_hash: Optional[str] = None
+last_ocr_ts: float = 0.0
+MAX_RESULTS = int(os.getenv("OCR_MAX_RESULTS", "12"))
+
 if FORCE_CPU:
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 
@@ -55,6 +65,17 @@ def _as_int(code) -> int:
         if hasattr(code, "value"): return int(code.value)
         return int(code)
     except (TypeError, ValueError): return 0
+
+
+def _frame_hash(img: Image.Image) -> str:
+    """Compute a small grayscale hash for change detection."""
+    if HASH_SIZE <= 0:
+        return ""
+    w = HASH_SIZE
+    h = max(1, int(img.height * (HASH_SIZE / max(1, img.width))))
+    gray = img.convert("L").resize((w, h), resample=Image.BILINEAR)
+    arr = np.array(gray)
+    return hashlib.md5(arr.tobytes()).hexdigest()
 
 class OcrEasyAgent:
     def __init__(self):
@@ -275,6 +296,16 @@ class OcrEasyAgent:
 
         try:
             img = Image.open(io.BytesIO(jpeg))
+            global last_frame_hash, last_ocr_ts
+            if HASH_ENABLE:
+                h = _frame_hash(img)
+                now = time.time()
+                # Force a full OCR at least every HASH_FORCE_SEC even if unchanged
+                if last_frame_hash == h and (now - last_ocr_ts) < HASH_FORCE_SEC:
+                    self.client.publish(OCR_TEXT, json.dumps({"ok": True, "text": "", "results": [], "backend": self.backend, "empty": True, "skipped": "unchanged_frame"}))
+                    return
+                last_frame_hash = h
+                last_ocr_ts = now
             
             all_results = []
             seen_texts = set()

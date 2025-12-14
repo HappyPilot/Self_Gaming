@@ -206,17 +206,15 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_OBS_TOPIC=vision/observation
-    - OCR_TEXT_TOPIC=ocr_easy/text
-    - SCENE_TOPIC=scene/state
-    - CURSOR_TOPIC=cursor/state
-    - ACT_CMD_TOPIC=act/cmd
-    - GAME_SCHEMA_TOPIC=game/schema
-    - CONTROL_PROFILE_PATH=/app/data/control_profiles.json
-    - POLICY_BRAIN_ACTION_INTERVAL=1.0
-    - POLICY_BRAIN_STATE_TTL=3.0
+    - POLICY_BRAIN_SCENE_TOPIC=scene/state
+    - POLICY_BRAIN_ACT_TOPIC=act/cmd
+    - POLICY_BRAIN_PUB_TOPIC=policy_brain/cmd
+    - POLICY_BRAIN_METRIC_TOPIC=policy_brain/metrics
+    - POLICY_BRAIN_VECTOR_SIZE=512
+    - POLICY_BRAIN_SCHEMA_VERSION=1
+    - POLICY_BRAIN_CMD_WINDOW_SEC=1.0
+    - POLICY_BRAIN_DEVICE=cpu
     - POLICY_BRAIN_LOG_LEVEL=INFO
-    - POLICY_BRAIN_LOG_PATH=/app/logs/policy_brain.log
     depends_on:
     - mq
     - vision
@@ -276,20 +274,25 @@ services:
     - VISION_SNAPSHOT=vision/snapshot
     - OCR_CMD=ocr_easy/cmd
     - OCR_TEXT=ocr_easy/text
-    - OCR_LANGS=en,ru
+    - OCR_LANGS=en
     - OCR_BACKEND=paddle
-    - OCR_DEBUG_SAVE=1
+    - OCR_DEBUG_SAVE=0
     - OCR_DEBUG_DIR=/tmp/ocr_debug
     - OCR_SCALE_FACTOR=1.0
     - OCR_MAX_BASE_WIDTH=640
-    - OCR_GAMMA=1.2
+    - OCR_GAMMA=1.0
     - OCR_MIN_ALPHA_RATIO=0.1
     - OCR_MAX_LINE_CHARS=400
-    - OCR_MAX_RESULTS=10
+    - OCR_MAX_RESULTS=6
     - OCR_VARIANT_THRESHOLD=off
-    - OCR_AUTO_INTERVAL=4.0
+    - OCR_AUTO_INTERVAL=6.0
     - OCR_AUTO_TIMEOUT=5.0
     - OCR_FORCE_CPU=1
+    - OMP_NUM_THREADS=1
+    - OPENBLAS_NUM_THREADS=1
+    - MKL_NUM_THREADS=1
+    - VECLIB_MAXIMUM_THREADS=1
+    - NUMEXPR_NUM_THREADS=1
     depends_on:
     - mq
     - vision
@@ -1056,11 +1059,13 @@ services:
     network_mode: host
     privileged: true
     devices:
-    - /dev/video0:/dev/video0
+    - ${DS_V4L2_DEVICE:-/dev/video0}:${DS_V4L2_DEVICE:-/dev/video0}
     - /dev/video1:/dev/video1
+    - /dev/v4l:/dev/v4l
     restart: unless-stopped
     working_dir: /app
     volumes:
+    - /run/udev:/run/udev:ro
     - ./agents:/app
     - ./docker/deepstream:/app/docker/deepstream
     - /mnt/ssd/models:/mnt/ssd/models
@@ -1071,7 +1076,13 @@ services:
     - PERCEPTION_TOPIC=vision/observation
     - HEARTBEAT_INTERVAL=5.0
     - CONF_THRESHOLD=0.05
-    - VIDEO_SOURCE=http://10.0.0.68:5008/video_feed
+    - DS_SOURCE=v4l2
+    - DS_V4L2_DEVICE=${DS_V4L2_DEVICE:-/dev/video0}
+    - DS_V4L2_WIDTH=${DS_V4L2_WIDTH:-1280}
+    - DS_V4L2_HEIGHT=${DS_V4L2_HEIGHT:-720}
+    - DS_V4L2_FPS=${DS_V4L2_FPS:-30}
+    - DS_V4L2_FORMAT=${DS_V4L2_FORMAT:-MJPG}
+    - VIDEO_SOURCE=
     depends_on:
     - mq
   yolo_logger:
