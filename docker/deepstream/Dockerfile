@@ -1,6 +1,8 @@
 # DeepStream-based perception image (JetPack 6.1 / DeepStream 7.1)
 FROM nvcr.io/nvidia/deepstream-l4t:7.1-triton-multiarch
 
+ENV DS_PATH=/opt/nvidia/deepstream/deepstream-7.1
+
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -22,8 +24,9 @@ RUN set -eux; \
     sed -i '/NVDS_FRAME_META_NVDSANALYTICS/d' bindings/src/bindnvdsmeta.cpp; \
     sed -i '/NVDS_OBJ_META_NVDSANALYTICS/d' bindings/src/bindnvdsmeta.cpp; \
     cd bindings; \
+    ls -l $DS_PATH/lib/libnvbufsurface.so; \
     mkdir -p build && cd build; \
-    cmake .. -DPYTHON_MAJOR_VERSION=3 -DPYTHON_MINOR_VERSION=10 -DDS_PATH=/opt/nvidia/deepstream/deepstream-7.1; \
+    cmake .. -DPYTHON_MAJOR_VERSION=3 -DPYTHON_MINOR_VERSION=10 -DDS_PATH=$DS_PATH; \
     make -j"$(nproc)"; \
     python3 -m pip install --no-cache-dir .; \
     cd /; rm -rf "$workdir"
