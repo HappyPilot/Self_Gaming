@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/latency_event.schema.json",
+  "title": "LatencyEvent",
+  "type": "object",
+  "required": ["event", "stage", "duration_ms", "timestamp"],
+  "properties": {
+    "event": {
+      "type": "string",
+      "const": "latency"
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1
+    },
+    "duration_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "timestamp": {
+      "type": "number"
+    },
+    "sla_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "agent": {
+      "type": "string"
+    },
+    "trace_id": {
+      "type": "string"
+    },
+    "span_id": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    }
+  },
+  "additionalProperties": true
+}

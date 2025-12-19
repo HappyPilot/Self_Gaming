@@ -23,6 +23,7 @@ All payloads are JSON. Many producers include "ok": true and "timestamp", but no
 - train/reward: reward events from reward_manager
 - train/status: trainer status events
 - train/jobs: training jobs published by teacher/train manager
+- metrics/latency: latency events (see schemas/latency_event.schema.json)
 - logs/summary: log monitor summary
 - logs/alerts: log monitor alerts
 
@@ -116,3 +117,16 @@ Note: box coordinates are in the producer coordinate space (pixel or normalized)
   "timestamp": 1712345678.5
 }
 ```
+
+### metrics/latency
+```json
+{
+  "event": "latency",
+  "stage": "detect",
+  "duration_ms": 42.3,
+  "sla_ms": 100,
+  "timestamp": 1712345678.9,
+  "tags": {"agent": "object_detection_agent", "frame_id": 120}
+}
+```
+Schema: `schemas/latency_event.schema.json`
