@@ -2,7 +2,7 @@
 """External heavy-vision server for open-vocab hints.
 
 Run on the Mac/PC with GPU:
-    python3 tools/hint_server.py --port 5010 --weights yolov8s-world.pt
+    python3 tools/hint_server.py --port 5010 --weights /mnt/ssd/models/yolo/yolov8s-world.pt
 """
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=5010)
-    parser.add_argument("--weights", default=os.getenv("HINT_WEIGHTS", "yolov8s-world.pt"))
+    parser.add_argument("--weights", default=os.getenv("HINT_WEIGHTS", "/mnt/ssd/models/yolo/yolov8s-world.pt"))
     parser.add_argument("--classes", default=os.getenv("HINT_CLASSES", "enemy,boss,player,npc,loot,portal,waypoint,quest_marker,dialog_button"))
     parser.add_argument("--device", default=os.getenv("HINT_DEVICE", "cuda:0"))
     parser.add_argument("--conf", type=float, default=float(os.getenv("HINT_CONF", "0.1")))
