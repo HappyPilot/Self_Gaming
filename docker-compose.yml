@@ -1,5 +1,6 @@
 x-python-env-file: &id001
-- ./python.env
+  - ./config/defaults.env
+  - ./config/${SG_PROFILE:-jetson}.env
 services:
   mq:
     container_name: mq
@@ -30,8 +31,6 @@ services:
     - MQTT_TOPIC_METRIC=vision/mean
     - MQTT_TOPIC_SNAPSHOT=vision/snapshot
     - VISION_FRAME_TOPIC=vision/frame
-    - VISION_FRAME_INTERVAL=0.5
-    - VISION_FRAME_JPEG_QUALITY=98
     - VISION_FRAME_ENABLED=1
     - VIDEO_DEVICE=/dev/video1
     - VIDEO_WIDTH=1280
@@ -276,7 +275,6 @@ services:
     - OCR_CMD=ocr_easy/cmd
     - OCR_TEXT=ocr_easy/text
     - OCR_LANGS=en
-    - OCR_BACKEND=paddle
     - OCR_DEBUG_SAVE=0
     - OCR_DEBUG_DIR=/tmp/ocr_debug
     - OCR_SCALE_FACTOR=1.0
@@ -288,7 +286,6 @@ services:
     - OCR_VARIANT_THRESHOLD=off
     - OCR_AUTO_INTERVAL=6.0
     - OCR_AUTO_TIMEOUT=5.0
-    - OCR_FORCE_CPU=1
     - OMP_NUM_THREADS=1
     - OPENBLAS_NUM_THREADS=1
     - MKL_NUM_THREADS=1
@@ -830,7 +827,6 @@ services:
     - MQTT_PORT=1883
     - VISION_FRAME_TOPIC=vision/frame
     - OBJECT_TOPIC=vision/objects
-    - OBJECT_DETECTOR_BACKEND=onnx
     - OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx
     - OBJECT_DEVICE=cpu
     - OBJECT_IMAGE_SIZE=320

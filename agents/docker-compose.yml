@@ -1,5 +1,6 @@
 x-python-env-file: &python_env_file
-  - ./python.env
+  - ../config/defaults.env
+  - ../config/${SG_PROFILE:-jetson}.env
 
 services:
   mq:
@@ -146,7 +147,6 @@ services:
       - OCR_LANGS=en,ru
       - OCR_AUTO_INTERVAL=3.0
       - OCR_AUTO_TIMEOUT=5.0
-      - OCR_FORCE_CPU=1
     depends_on:
       - mq
       - vision
