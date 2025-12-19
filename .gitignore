@@ -24,6 +24,8 @@ tmp/
 .env
 *.env
 python.env
+!config/*.env
+config/local.env
 
 # Build / artifacts
 *.engine

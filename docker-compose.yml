@@ -1,5 +1,7 @@
 x-python-env-file: &id001
-- ./python.env
+  - ./config/defaults.env
+  - ./config/${SG_PROFILE:-jetson}.env
+  - ${SG_LOCAL_ENV_FILE:-/dev/null}
 services:
   mq:
     container_name: mq
@@ -30,10 +32,7 @@ services:
     - MQTT_TOPIC_METRIC=vision/mean
     - MQTT_TOPIC_SNAPSHOT=vision/snapshot
     - VISION_FRAME_TOPIC=vision/frame
-    - VISION_FRAME_INTERVAL=0.5
-    - VISION_FRAME_JPEG_QUALITY=98
     - VISION_FRAME_ENABLED=1
-    - VIDEO_DEVICE=/dev/video1
     - VIDEO_WIDTH=1280
     - VIDEO_HEIGHT=720
     - VIDEO_FPS=30
@@ -180,7 +179,6 @@ services:
     - CURSOR_TOPIC=cursor/state
     - ACT_CMD_TOPIC=act/cmd
     - GAME_SCHEMA_TOPIC=game/schema
-    - LLM_ENDPOINT=http://10.0.0.230:11434/v1/chat/completions
     - LLM_MODEL=models/qwen2.5-7b-instruct-q4_k_m.gguf
     - LLM_API_KEY=dummy
     - LLM_TIMEOUT=8.0
@@ -243,7 +241,7 @@ services:
     - VISION_SNAPSHOT=vision/snapshot
     - OCR_TEXT=ocr/text
     - OCR_CMD=ocr/cmd
-    - OCR_LANGS=eng+rus
+    - OCR_LANGS=en
     depends_on:
     - mq
     - vision
@@ -276,7 +274,6 @@ services:
     - OCR_CMD=ocr_easy/cmd
     - OCR_TEXT=ocr_easy/text
     - OCR_LANGS=en
-    - OCR_BACKEND=paddle
     - OCR_DEBUG_SAVE=0
     - OCR_DEBUG_DIR=/tmp/ocr_debug
     - OCR_SCALE_FACTOR=1.0
@@ -288,7 +285,6 @@ services:
     - OCR_VARIANT_THRESHOLD=off
     - OCR_AUTO_INTERVAL=6.0
     - OCR_AUTO_TIMEOUT=5.0
-    - OCR_FORCE_CPU=1
     - OMP_NUM_THREADS=1
     - OPENBLAS_NUM_THREADS=1
     - MKL_NUM_THREADS=1
@@ -684,7 +680,6 @@ services:
     - ACT_RESULT_TOPIC=act/result
     - TEACHER_ACTION_TOPIC=teacher/action
     - TEACHER_PROVIDER=local
-    - TEACHER_LOCAL_ENDPOINT=http://10.0.0.230:11434/v1/chat/completions
     - TEACHER_LOCAL_TIMEOUT=60
     - TEACHER_INTERVAL_SEC=10.0
     depends_on:
@@ -780,7 +775,6 @@ services:
     - MQTT_PORT=1883
     - KEY_TOPIC=control/keys
     - ACT_TOPIC=act/cmd
-    - HTTP_BRIDGE_URL=http://10.0.0.230:5001/cmd
     depends_on:
     - mq
   hid_bridge:
@@ -830,7 +824,6 @@ services:
     - MQTT_PORT=1883
     - VISION_FRAME_TOPIC=vision/frame
     - OBJECT_TOPIC=vision/objects
-    - OBJECT_DETECTOR_BACKEND=onnx
     - OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx
     - OBJECT_DEVICE=cpu
     - OBJECT_IMAGE_SIZE=320
@@ -905,7 +898,6 @@ services:
     - MQTT_PORT=1883
     - FRAME_TOPIC=vision/frame
     - HINT_TOPIC=vision/hints
-    - HINT_SERVER_URL=http://10.0.0.230:5010/infer
     - HINT_INTERVAL=2.0
     - HINT_TIMEOUT=4.0
     - HINT_MAX_QUEUE=1
