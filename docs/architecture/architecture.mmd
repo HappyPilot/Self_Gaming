@@ -1,0 +1,54 @@
+flowchart LR
+  subgraph Inputs
+    Camera[Camera or HDMI Capture]
+    Game[Game Client / UI]
+  end
+
+  subgraph Broker
+    MQ[(MQTT Broker)]
+  end
+
+  Camera --> Vision[vision_agent]
+  Vision -->|vision/frame, vision/mean, vision/snapshot| MQ
+
+  subgraph Perception
+    OCR[ocr_easy_agent / ocr_agent]
+    Detect[object_detection_agent or perception_agent]
+    Cursor[cursor_tracker_agent]
+  end
+
+  MQ --> OCR
+  MQ --> Detect
+  MQ --> Cursor
+  OCR -->|ocr_easy/text| MQ
+  Detect -->|vision/objects or vision/observation| MQ
+  Cursor -->|cursor/state| MQ
+
+  Scene[scene_agent]
+  MQ --> Scene
+  Scene -->|scene/state| MQ
+
+  subgraph Decision
+    Policy[policy_agent]
+    Teacher[teacher_agent]
+  end
+
+  MQ --> Policy
+  MQ --> Teacher
+  Teacher -->|teacher/action| MQ
+  Policy -->|act/cmd, control/keys| MQ
+
+  Actuation[act_agent / control bridge]
+  MQ --> Actuation
+  Actuation -->|act/result| MQ
+
+  subgraph Training
+    Reward[reward_manager]
+    Recorder[recorder_agent]
+    Trainer[train_manager_agent]
+  end
+
+  MQ --> Reward
+  Reward -->|train/reward| MQ
+  MQ --> Recorder
+  Recorder -->|train/jobs, datasets| Trainer

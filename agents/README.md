@@ -80,7 +80,7 @@ python3 -m unittest \
   - `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` – rotation settings (default 5 MB × 5 files).
   - `LOG_LEVEL` – default `INFO`; set to `DEBUG` for chatty traces.
 
-- To copy Jetson logs onto this Mac, run `tools/sync_jetson_logs.sh` (uses `rsync`).  Override `JETSON_HOST`, `JETSON_LOG_DIR`, or `JETSON_LOGS_DEST` if the defaults (`dima@10.0.0.68:/mnt/ssd/logs` → `logs_jetson/`) need to change.
+- To copy Jetson logs onto this Mac, run `tools/sync_jetson_logs.sh` (uses `rsync`).  Override `JETSON_HOST`, `JETSON_LOG_DIR`, or `JETSON_LOGS_DEST` if the defaults (`user@jetson.local:/mnt/ssd/logs` -> `logs_jetson/`) need to change.
 
 ### Log Monitor Agent
 
