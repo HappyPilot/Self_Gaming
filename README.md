@@ -25,7 +25,7 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 
 ## Policy Blending
 
-`policy_agent.py` now blends its heuristic actions with the teacher’s recommendations. A linear annealing coefficient `teacher_alpha` (configurable via `TEACHER_ALPHA_START` and `TEACHER_ALPHA_DECAY_STEPS`) starts at 1.0, prioritising teacher advice, then decays to rely on the learned policy. The final action is emitted on both `control/keys` and `act/cmd`, preserving the previous behaviour.
+`policy_agent.py` now blends its heuristic actions with the teacher's recommendations. A linear annealing coefficient `teacher_alpha` (configurable via `TEACHER_ALPHA_START` and `TEACHER_ALPHA_DECAY_STEPS`) starts at 1.0, prioritising teacher advice, then decays to rely on the learned policy. The final action is emitted on both `control/keys` and `act/cmd`, preserving the previous behaviour.
 
 ## Object-Detection Agent
 
@@ -45,9 +45,9 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
   Swap in `yolo11s.pt`, `yolo11m.pt`, etc., if you prefer the larger variants and update `OBJECT_MODEL_PATH` accordingly.
   For the hint server, set `HINT_WEIGHTS=/mnt/ssd/models/yolo/yolov8s-world.pt` (or pass `--weights`).
 - Relevant environment switches (see `docker-compose.yml`):
-  - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` – sampling rate + encoding coming from `vision_agent`.
-  - `OBJECT_DETECTOR_BACKEND` – `ultralytics` for real inference or `dummy` for smoke tests.
-  - `OBJECT_CONF_THRESHOLD`, `OBJECT_IOU_THRESHOLD`, `OBJECT_QUEUE` – runtime tuning knobs.
+  - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` - sampling rate + encoding coming from `vision_agent`.
+  - `OBJECT_DETECTOR_BACKEND` - `ultralytics` for real inference or `dummy` for smoke tests.
+  - `OBJECT_CONF_THRESHOLD`, `OBJECT_IOU_THRESHOLD`, `OBJECT_QUEUE` - runtime tuning knobs.
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
 
@@ -66,11 +66,11 @@ The `scene_agent` now fuses OCR, mean luminance, and the most recent detection p
 
 `reward_manager.py` pulls three signals to publish dense rewards on `train/reward`:
 
-1. Tail the local PoE client log at `/mnt/ssd/poe_client.txt` (streamed from Windows via the Flask receiver) and normalise entries such as “You have entered…”, “You have killed…”, and “Picked up …”.
+1. Tail the local PoE client log at `/mnt/ssd/poe_client.txt` (streamed from Windows via the Flask receiver) and normalise entries such as "You have entered...", "You have killed...", and "Picked up ...".
 2. Consume `scene/state` so the latest YOLO detections contribute enemy density + loot pressure (important for map-progress/loot weights).
 3. Watch `act/result` to stay in lockstep with the control loop.
 
-The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specific weights (`S0…S4`), step-costs, death penalties, and loot-value buckets (currency, maps, contracts, etc.). Rewards are clipped to `[-1, 1]` and include a `components` breakdown plus the last few parsed events for debugging.
+The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specific weights (`S0...S4`), step-costs, death penalties, and loot-value buckets (currency, maps, contracts, etc.). Rewards are clipped to `[-1, 1]` and include a `components` breakdown plus the last few parsed events for debugging.
 
 ## Training Pipeline Updates
 
@@ -81,7 +81,7 @@ The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specif
 ### Workflow
 
 1. Ensure all agents are running (including `teacher_agent` and `reward_manager`).
-2. During early training epochs, the policy will follow the teacher’s commands; as `teacher_alpha` decays, it transitions to autonomous behaviour.
+2. During early training epochs, the policy will follow the teacher's commands; as `teacher_alpha` decays, it transitions to autonomous behaviour.
 3. Rewards emitted on `train/reward` guide the trainer and are stored with each recorded sample.
 
 ## Testing
@@ -108,9 +108,9 @@ export OCR_BACKEND=easyocr   # fallback if PaddleOCR is unavailable
 
 Additional toggles:
 
-- `OCR_LANGS` – comma-separated language hints. The Paddle/RapidOCR backend automatically selects `ru` when Cyrillic is present, otherwise `en`.
-- `OCR_FORCE_CPU=1` – disable CUDA usage for either backend.
-- `OCR_DEBUG_SAVE=1` and `OCR_DEBUG_DIR=/tmp/ocr_debug` – persist the preprocessed crops for troubleshooting recognition issues.
+- `OCR_LANGS` - comma-separated language hints. The Paddle/RapidOCR backend automatically selects `ru` when Cyrillic is present, otherwise `en`.
+- `OCR_FORCE_CPU=1` - disable CUDA usage for either backend.
+- `OCR_DEBUG_SAVE=1` and `OCR_DEBUG_DIR=/tmp/ocr_debug` - persist the preprocessed crops for troubleshooting recognition issues.
 
 The MQTT schema on `ocr_easy/text` is unchanged, but the payload now includes `{"backend": "paddle", ...}` so downstream agents can log which recogniser produced the text.
 
@@ -118,11 +118,11 @@ The MQTT schema on `ocr_easy/text` is unchanged, but the payload now includes `{
 
 - A global `sitecustomize.py` initialises rotating log files for *every* agent. By default logs are written to the first writable path among `LOG_DIR`, `<repo>/logs`, `~/agent_logs`, `/mnt/ssd/logs`, and `/tmp/agent_logs`. Each process receives `<agent_name>.log` plus the usual stdout stream, so Mac-side runs automatically drop files into `self-gaming/logs/` unless you override `LOG_DIR`.
 - Tune log behaviour via the following environment variables:
-  - `LOG_DIR` – preferred directory (falls back automatically if unavailable).
-  - `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` – rotation settings (default 5 MB × 5 files).
-  - `LOG_LEVEL` – default `INFO`; set to `DEBUG` for chatty traces.
+  - `LOG_DIR` - preferred directory (falls back automatically if unavailable).
+  - `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` - rotation settings (default 5 MB x 5 files).
+  - `LOG_LEVEL` - default `INFO`; set to `DEBUG` for chatty traces.
 
-- To copy Jetson logs onto this Mac, run `tools/sync_jetson_logs.sh` (uses `rsync`).  Override `JETSON_HOST`, `JETSON_LOG_DIR`, or `JETSON_LOGS_DEST` if the defaults (`dima@10.0.0.68:/mnt/ssd/logs` → `logs_jetson/`) need to change.
+- To copy Jetson logs onto this Mac, run `tools/sync_jetson_logs.sh` (uses `rsync`).  Override `JETSON_HOST`, `JETSON_LOG_DIR`, or `JETSON_LOGS_DEST` if the defaults (`dima@10.0.0.68:/mnt/ssd/logs` -> `logs_jetson/`) need to change.
 
 ### Log Monitor Agent
 
@@ -131,13 +131,13 @@ The MQTT schema on `ocr_easy/text` is unchanged, but the payload now includes `{
 | Topic | Payload |
 | --- | --- |
 | `logs/summary` | Aggregate counts per agent (`lines`, `warnings`, `errors`). |
-| `logs/alerts` | Structured alerts when errors, tracebacks, failed jobs, or NaN losses are detected (rate-limited by `LOG_ALERT_COOLDOWN`, default 30 s). |
+| `logs/alerts` | Structured alerts when errors, tracebacks, failed jobs, or NaN losses are detected (rate-limited by `LOG_ALERT_COOLDOWN`, default 30 s). |
 
 Configuration knobs:
 
-- `LOG_MONITOR_DIRS` (colon-separated) or `LOG_MONITOR_DIR` – directories to scan (default `/app/logs`).
-- `LOG_MONITOR_INTERVAL` – scan cadence in seconds.
-- `LOG_MONITOR_TRAINERS` – comma-separated list of log sources that should trigger the extra training-health heuristics (`train_manager,policy_agent,teach_agent` by default).
+- `LOG_MONITOR_DIRS` (colon-separated) or `LOG_MONITOR_DIR` - directories to scan (default `/app/logs`).
+- `LOG_MONITOR_INTERVAL` - scan cadence in seconds.
+- `LOG_MONITOR_TRAINERS` - comma-separated list of log sources that should trigger the extra training-health heuristics (`train_manager,policy_agent,teach_agent` by default).
 
 Add `log_monitor` to the `docker-compose.yml` stack (already wired) and check `logs/alerts` for actionable messages when training stalls or errors recur.
 
@@ -157,7 +157,7 @@ Refer to `docker-compose.yml` for full service definitions and environment varia
 - Symptom: any `v4l2src`/`v4l2-ctl` call fails with `Device or resource busy` even when `lsof/fuser` are empty.
 - Likely causes: hidden consumer (pipewire/wireplumber/portal) or a compose service auto-restarting and holding /dev/video0.
 - Steps:
-  1) `tools/camera_debug.sh` – dump formats, open handles, and likely consumers (including compose PIDs).
-  2) `tools/camera_reset.sh` – stops perception_ds/vision/ui_region/etc, stops pipewire/wireplumber, tries USB unbind/bind, reloads uvcvideo, runs a stream test (60 frames).
+  1) `tools/camera_debug.sh` - dump formats, open handles, and likely consumers (including compose PIDs).
+  2) `tools/camera_reset.sh` - stops perception_ds/vision/ui_region/etc, stops pipewire/wireplumber, tries USB unbind/bind, reloads uvcvideo, runs a stream test (60 frames).
   3) Verify: `v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=60 --stream-to=/dev/null`.
   4) Restart `docker compose up -d perception_ds`. If still EBUSY, physically replug the capture device or reboot.

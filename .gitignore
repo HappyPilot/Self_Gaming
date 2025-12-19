@@ -27,18 +27,15 @@ python.env
 !config/*.env
 config/local.env
 
+# Models (keep repo clean; allow fixtures elsewhere)
+models/
+!models/.gitkeep
+
 # Build / artifacts
 *.engine
-*.pt
-*.pth
-*.onnx
 *.trt
 *.plan
 *.onnx.cache
-*.ptl
-*.bin
-*.npy
-*.npz
 
 # Docker
 *.pid
