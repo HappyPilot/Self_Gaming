@@ -1,6 +1,7 @@
 x-python-env-file: &python_env_file
   - ../config/defaults.env
   - ../config/${SG_PROFILE:-jetson}.env
+  - ${SG_LOCAL_ENV_FILE:-/dev/null}
 
 services:
   mq:
@@ -453,7 +454,6 @@ services:
       - ACT_RESULT_TOPIC=act/result
       - TEACHER_ACTION_TOPIC=teacher/action
       - TEACHER_PROVIDER=local
-      - TEACHER_LOCAL_ENDPOINT=http://10.0.0.230:11434/v1/chat/completions
     depends_on:
       - mq
       - scene
@@ -542,7 +542,6 @@ services:
       - MQTT_PORT=1883
       - KEY_TOPIC=control/keys
       - ACT_TOPIC=act/cmd
-      - WINDOWS_BRIDGE_URL=http://10.0.0.230:5000/
     depends_on:
       - mq
 

@@ -4,12 +4,28 @@ This repo uses env profiles for Docker Compose.
 
 - Defaults: `config/defaults.env`
 - Profiles: `config/jetson.env`, `config/mac.env`, `config/production.env`
-- Select a profile with `SG_PROFILE`:
+
+## Select a profile
 ```bash
 export SG_PROFILE=jetson
 ```
 
-## Jetson execution
-- Docker runs on Jetson: `10.0.0.68` (SSH available)
-- All tests and compose sanity checks run on Jetson
-- Repo remote: `git@github.com:HappyPilot/Self_Gaming.git`
+Examples:
+```bash
+export SG_PROFILE=mac
+export SG_PROFILE=production
+```
+Notes:
+- `mac` profile uses `OCR_BACKEND=easyocr` and `OCR_FORCE_CPU=1`.
+- `production` keeps defaults and expects explicit overrides.
+
+## Local overrides (not committed)
+If you need host-specific endpoints, copy `config/local.env.example` to
+`config/local.env` and pass it via `SG_LOCAL_ENV_FILE` (use an absolute path):
+```bash
+export SG_LOCAL_ENV_FILE="$(pwd)/config/local.env"
+```
+
+## OCR language defaults
+`OCR_LANGS` defaults to `en` to reduce OCR latency and false positives.
+Enable more languages by overriding `OCR_LANGS` in your local env file.
