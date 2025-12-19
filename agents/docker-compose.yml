@@ -112,7 +112,7 @@ services:
       - VISION_SNAPSHOT=vision/snapshot
       - OCR_TEXT=ocr/text
       - OCR_CMD=ocr/cmd
-      - OCR_LANGS=en,ru
+      - OCR_LANGS=en
     depends_on:
       - mq
       - vision
@@ -144,7 +144,7 @@ services:
       - VISION_SNAPSHOT=vision/snapshot
       - OCR_CMD=ocr_easy/cmd
       - OCR_TEXT=ocr_easy/text
-      - OCR_LANGS=en,ru
+      - OCR_LANGS=en
       - OCR_AUTO_INTERVAL=3.0
       - OCR_AUTO_TIMEOUT=5.0
     depends_on:
