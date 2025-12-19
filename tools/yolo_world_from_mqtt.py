@@ -34,7 +34,7 @@ def main():
     parser.add_argument("--mqtt-port", type=int, default=1883)
     parser.add_argument("--frame-topic", default="vision/frame")
     parser.add_argument("--topic", default="vision/observation")
-    parser.add_argument("--model", default="yolov8s-world.pt")
+    parser.add_argument("--model", default="/mnt/ssd/models/yolo/yolov8s-world.pt")
     parser.add_argument("--conf", type=float, default=0.05)
     parser.add_argument(
         "--classes",

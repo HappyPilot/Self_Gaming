@@ -30,13 +30,20 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 ## Object-Detection Agent
 
 - `object_detection_agent.py` subscribes to `vision/frame`, runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
-- The agent is packaged in its own container (`local/object-detection-agent`). Drop TensorRT/Ultralytics weights under `/mnt/ssd/models/yolo/<checkpoint>` and point `OBJECT_MODEL_PATH` there. Use `tools/download_yolo11_weights.py` to fetch the latest YOLO11 checkpoints, for example:
+- The agent is packaged in its own container (`local/object-detection-agent`). Drop TensorRT/Ultralytics weights under `/mnt/ssd/models/yolo/<checkpoint>` and point `OBJECT_MODEL_PATH` there. Large model files are not stored in git; use `tools/download_models.sh` for the common set:
+
+  ```bash
+  tools/download_models.sh
+  ```
+
+  Or fetch a specific checkpoint with `tools/download_yolo11_weights.py`, for example:
 
   ```bash
   python3 tools/download_yolo11_weights.py yolo11n.pt --output /mnt/ssd/models/yolo
   ```
 
   Swap in `yolo11s.pt`, `yolo11m.pt`, etc., if you prefer the larger variants and update `OBJECT_MODEL_PATH` accordingly.
+  For the hint server, set `HINT_WEIGHTS=/mnt/ssd/models/yolo/yolov8s-world.pt` (or pass `--weights`).
 - Relevant environment switches (see `docker-compose.yml`):
   - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` – sampling rate + encoding coming from `vision_agent`.
   - `OBJECT_DETECTOR_BACKEND` – `ultralytics` for real inference or `dummy` for smoke tests.

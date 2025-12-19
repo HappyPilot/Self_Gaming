@@ -29,6 +29,11 @@ config/local.env
 
 # Build / artifacts
 *.engine
+*.pt
+*.pth
+*.onnx
+*.trt
+*.plan
 *.onnx.cache
 *.ptl
 *.bin
