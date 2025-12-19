@@ -29,6 +29,22 @@ def _handle_signal(_signum, _frame):
     stop = True
 
 
+def _connect_with_retry(client, host: str, port: int) -> bool:
+    delay = 0.5
+    max_delay = 5.0
+    while not stop:
+        try:
+            rc = client.connect(host, port, 30)
+            if rc == 0:
+                return True
+            print(f"[demo_policy_stub] connect rc={rc}, retrying...", flush=True)
+        except Exception as exc:
+            print(f"[demo_policy_stub] connect failed: {exc}. retrying...", flush=True)
+        time.sleep(delay)
+        delay = min(max_delay, delay * 2)
+    return False
+
+
 def _build_action(name: str) -> dict:
     if name == "click":
         return {"action": "click", "button": "left"}
@@ -80,9 +96,11 @@ def main():
     signal.signal(signal.SIGTERM, _handle_signal)
 
     client = mqtt.Client(client_id="demo_policy_stub", protocol=mqtt.MQTTv311)
+    client.reconnect_delay_set(min_delay=1, max_delay=10)
     client.on_connect = _on_connect
     client.on_message = _on_message
-    client.connect(MQTT_HOST, MQTT_PORT, 30)
+    if not _connect_with_retry(client, MQTT_HOST, MQTT_PORT):
+        return
     client.loop_start()
 
     while not stop:

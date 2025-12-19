@@ -8,6 +8,8 @@ This demo stack runs without a camera or GPU. It publishes a tiny demo frame to 
 docker compose -f docker-compose.demo.yml up --build
 ```
 
+If port 1883 is already in use, change the port mapping in `docker-compose.demo.yml` (for example, `1884:1883`).
+
 ## Verify
 
 Look for output like:
