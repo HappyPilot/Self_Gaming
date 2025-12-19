@@ -20,7 +20,7 @@ MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 KEY_TOPIC = os.getenv("KEY_TOPIC", "control/keys")
 ACT_TOPIC = os.getenv("ACT_TOPIC", "act/cmd")
-BRIDGE_URL = os.getenv("HTTP_BRIDGE_URL", "http://127.0.0.1:5000/")
+BRIDGE_URL = os.getenv("CONTROL_BRIDGE_URL") or os.getenv("HTTP_BRIDGE_URL", "http://127.0.0.1:5001/cmd")
 REQUEST_TIMEOUT = float(os.getenv("HTTP_BRIDGE_TIMEOUT", "1.5"))
 
 LETTER_KEYS = {chr(code): chr(code) for code in range(ord("a"), ord("z") + 1)}
