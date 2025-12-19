@@ -32,7 +32,6 @@ services:
     - MQTT_TOPIC_SNAPSHOT=vision/snapshot
     - VISION_FRAME_TOPIC=vision/frame
     - VISION_FRAME_ENABLED=1
-    - VIDEO_DEVICE=/dev/video1
     - VIDEO_WIDTH=1280
     - VIDEO_HEIGHT=720
     - VIDEO_FPS=30
@@ -242,7 +241,7 @@ services:
     - VISION_SNAPSHOT=vision/snapshot
     - OCR_TEXT=ocr/text
     - OCR_CMD=ocr/cmd
-    - OCR_LANGS=eng+rus
+    - OCR_LANGS=en,ru
     depends_on:
     - mq
     - vision
@@ -274,7 +273,7 @@ services:
     - VISION_SNAPSHOT=vision/snapshot
     - OCR_CMD=ocr_easy/cmd
     - OCR_TEXT=ocr_easy/text
-    - OCR_LANGS=en
+    - OCR_LANGS=en,ru
     - OCR_DEBUG_SAVE=0
     - OCR_DEBUG_DIR=/tmp/ocr_debug
     - OCR_SCALE_FACTOR=1.0
@@ -869,7 +868,7 @@ services:
     - DETECTOR_BACKEND=yolo11_torch
     - PERCEPTION_DEBUG=1
     - OCR_BACKEND=null
-    - OCR_LANGS=en
+    - OCR_LANGS=en,ru
     - OCR_USE_GPU=0
     - OCR_PADDLE_LANG=en
     - OCR_USE_ANGLE_CLS=1
