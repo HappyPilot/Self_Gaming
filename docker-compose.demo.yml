@@ -1,0 +1,67 @@
+x-demo-agent: &demo_agent
+  build:
+    context: .
+    dockerfile: docker/demo/Dockerfile
+  image: local/demo-agent:latest
+  volumes:
+    - ./:/app
+
+services:
+  mq:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  demo_frame_source:
+    <<: *demo_agent
+    command: ["/app/tools/demo/demo_frame_source.py"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MQTT_HOST=mq
+      - MQTT_PORT=1883
+      - FRAME_TOPIC=vision/frame
+      - MEAN_TOPIC=vision/mean
+      - FRAME_INTERVAL=1.0
+    depends_on:
+      - mq
+
+  demo_scene:
+    <<: *demo_agent
+    command: ["/app/agents/scene_agent.py"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MQTT_HOST=mq
+      - MQTT_PORT=1883
+      - VISION_MEAN_TOPIC=vision/mean
+      - SCENE_TOPIC=scene/state
+      - SCENE_WINDOW_SEC=1.0
+    depends_on:
+      - mq
+
+  demo_policy:
+    <<: *demo_agent
+    command: ["/app/tools/demo/demo_policy_stub.py"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MQTT_HOST=mq
+      - MQTT_PORT=1883
+      - SCENE_TOPIC=scene/state
+      - ACT_CMD_TOPIC=act/cmd
+      - DEMO_ACTIONS=noop,click,move,key
+    depends_on:
+      - mq
+      - demo_scene
+
+  demo_action_sink:
+    <<: *demo_agent
+    command: ["/app/tools/demo/demo_action_sink.py"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MQTT_HOST=mq
+      - MQTT_PORT=1883
+      - ACT_CMD_TOPIC=act/cmd
+    depends_on:
+      - mq
+      - demo_policy
