@@ -2,7 +2,6 @@
 """Cursor tracker that reads vision frames and publishes cursor coordinates."""
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -16,6 +15,8 @@ from typing import Dict, Optional, Tuple
 import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
+
+from utils.frame_transport import get_frame_bytes
 
 # --- Constants ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
@@ -60,14 +61,10 @@ def _prepare_kernel(size: int) -> Tuple[int, int]:
 
 
 def decode_frame(message: dict) -> Optional[np.ndarray]:
-    data_b64 = message.get("image_b64")
-    if not data_b64:
+    data = get_frame_bytes(message)
+    if not data:
         return None
-    try:
-        buffer = base64.b64decode(data_b64)
-    except Exception:
-        return None
-    array = np.frombuffer(buffer, dtype=np.uint8)
+    array = np.frombuffer(data, dtype=np.uint8)
     frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
     return frame
 

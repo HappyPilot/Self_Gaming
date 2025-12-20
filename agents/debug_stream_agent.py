@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Visual Debugger: Streams video with overlay of AI perception and intent."""
-import base64
 import json
 import logging
 import os
@@ -12,6 +11,8 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 from flask import Flask, Response, render_template_string
+
+from utils.frame_transport import get_frame_bytes
 
 # --- Configuration ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
@@ -46,10 +47,8 @@ def on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode("utf-8", "ignore"))
         
         if msg.topic == FRAME_TOPIC:
-            b64 = payload.get("image_b64")
-            if b64:
-                # Decode JPEG
-                data = base64.b64decode(b64)
+            data = get_frame_bytes(payload)
+            if data:
                 np_arr = np.frombuffer(data, np.uint8)
                 with state_lock:
                     latest_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)

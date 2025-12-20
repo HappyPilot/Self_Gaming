@@ -3,7 +3,6 @@
 Zero-shot detector using OWL-ViT.
 Subscribes to vision/frame/preview, runs text-prompt detection, publishes to vision/objects.
 """
-import base64
 import json
 import os
 import queue
@@ -18,6 +17,8 @@ import paho.mqtt.client as mqtt
 import torch
 from PIL import Image
 from transformers import OwlViTForObjectDetection, OwlViTProcessor
+
+from utils.frame_transport import get_frame_bytes
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
@@ -36,12 +37,11 @@ TORCH_THREADS = int(os.getenv("ZSD_THREADS", "2"))
 torch.set_num_threads(max(1, TORCH_THREADS))
 
 stop_event = threading.Event()
-frame_queue: "queue.Queue[str]" = queue.Queue(maxsize=2)
+frame_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=2)
 
 
-def decode_frame(b64: str):
+def decode_frame(raw: bytes):
     try:
-        raw = base64.b64decode(b64)
         img = Image.open(io.BytesIO(raw)).convert("RGB")
         return img
     except Exception:
@@ -55,12 +55,12 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode("utf-8"))
-        b64 = payload.get("image_b64")
-        if not b64:
+        raw = get_frame_bytes(payload)
+        if not raw:
             return
         if frame_queue.full():
             frame_queue.get_nowait()
-        frame_queue.put_nowait(b64)
+        frame_queue.put_nowait(raw)
     except Exception:
         pass
 
@@ -91,12 +91,12 @@ def run():
 
     while not stop_event.is_set():
         try:
-            b64 = frame_queue.get(timeout=0.5)
+            raw = frame_queue.get(timeout=0.5)
             last_frame_ts = time.time()
             if time.time() - last_infer < INFER_INTERVAL:
                 continue
 
-            img = decode_frame(b64)
+            img = decode_frame(raw)
             if img is None:
                 continue
 

@@ -40,3 +40,4 @@ Environment overrides (add to your shell or compose override):
 - `DEMO_IMAGE_B64` - base64-encoded image payload (default 1x1 PNG)
 - `DEMO_IMAGE_WIDTH` / `DEMO_IMAGE_HEIGHT` - image size metadata
 - `VISION_FRAME_TOPIC` - defaults to preview; set to `vision/frame/full` when you need full-quality frames
+- `FRAME_TRANSPORT` - `mqtt` (base64) or `shm` (shared memory descriptor)

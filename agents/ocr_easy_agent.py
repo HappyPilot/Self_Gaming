@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import base64
 import io
 import hashlib
 import json
@@ -15,6 +14,7 @@ import numpy as np
 import paho.mqtt.client as mqtt
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
+from utils.frame_transport import get_frame_bytes
 from utils.latency import emit_latency, get_sla_ms
 
 try:
@@ -146,10 +146,11 @@ class OcrEasyAgent:
     def _on_snapshot(self, client, userdata, msg):
         try:
             d = json.loads(msg.payload)
-            b64 = d.get("image_b64")
-            if not b64: return
+            raw = get_frame_bytes(d)
+            if not raw:
+                return
             with self.snap_lock:
-                self.snap_data = base64.b64decode(b64)
+                self.snap_data = raw
             logger.debug("Snapshot received, bytes: %s", len(self.snap_data))
         except Exception as e:
             logger.error("Snapshot error: %s", e)
@@ -157,9 +158,9 @@ class OcrEasyAgent:
     def _on_frame(self, client, userdata, msg):
         try:
             data = json.loads(msg.payload)
-            b64 = data.get("image_b64")
-            if not b64: return
-            raw = base64.b64decode(b64)
+            raw = get_frame_bytes(data)
+            if not raw:
+                return
             with self.frame_lock:
                 self.frame_data = raw
         except Exception:

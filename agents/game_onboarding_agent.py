@@ -2,7 +2,6 @@
 """Autonomous onboarding agent that maps a game's UI and controls."""
 from __future__ import annotations
 
-import base64
 import json
 import os
 import logging
@@ -18,6 +17,7 @@ import numpy as np
 import paho.mqtt.client as mqtt
 from control_profile import load_profile, safe_profile, upsert_profile
 from llm_client import fetch_control_profile, guess_game_id
+from utils.frame_transport import get_frame_bytes
 
 logging.basicConfig(level=os.getenv("ONBOARD_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("game_onboarding")
@@ -84,12 +84,8 @@ def _handle_signal(_signum, _frame):
 
 
 def decode_frame(payload: dict) -> Optional[np.ndarray]:
-    encoded = payload.get("image_b64")
-    if not encoded:
-        return None
-    try:
-        data = base64.b64decode(encoded)
-    except Exception:
+    data = get_frame_bytes(payload)
+    if not data:
         return None
     frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
     return frame
