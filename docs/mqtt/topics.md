@@ -12,6 +12,9 @@ All payloads are JSON.
 - Object labels:
   - vision/objects uses "class" for the detector label.
   - scene/state uses "label"; scene_agent maps class -> label when fusing.
+- Control metrics:
+  - metrics/control uses "metric" and "value" fields.
+  - expected metric names: control/tick_ms, control/chunk_boundary_jerk, control/next_chunk_ready_ratio.
 
 ## Topic tree (key topics)
 - vision/
@@ -35,6 +38,7 @@ All payloads are JSON.
 - train/status: trainer status events
 - train/jobs: training jobs published by teacher/train manager
 - metrics/latency: latency events (see schemas/latency_event.schema.json)
+- metrics/control: control loop metrics (see schemas/control_metric.schema.json)
 - logs/summary: log monitor summary
 - logs/alerts: log monitor alerts
 
@@ -153,3 +157,19 @@ Required: ok, reward, timestamp
 }
 ```
 Schema: `schemas/latency_event.schema.json`
+
+### metrics/control
+Required: event, metric, value, timestamp
+```json
+{
+  "event": "control_metric",
+  "metric": "control/tick_ms",
+  "value": 12.3,
+  "ok": true,
+  "timestamp": 1712345678.9,
+  "tags": {"window": 50}
+}
+```
+Schema: `schemas/control_metric.schema.json`
+
+Note: tick_ms and next_chunk_ready_ratio may be sampled (CONTROL_METRIC_SAMPLE_EVERY) and use a rolling window size (CONTROL_READY_WINDOW).

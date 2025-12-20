@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 LATENCY_TOPIC = os.getenv("LATENCY_TOPIC", "metrics/latency")
+CONTROL_METRIC_TOPIC = os.getenv("CONTROL_METRIC_TOPIC", "metrics/control")
 
 
 def _parse_float_env(name: str, default: Optional[float] = None) -> Optional[float]:
@@ -22,6 +23,10 @@ def _parse_float_env(name: str, default: Optional[float] = None) -> Optional[flo
 
 
 def get_sla_ms(name: str, default: Optional[float] = None) -> Optional[float]:
+    return _parse_float_env(name, default)
+
+
+def get_float_env(name: str, default: Optional[float] = None) -> Optional[float]:
     return _parse_float_env(name, default)
 
 
@@ -71,6 +76,46 @@ def emit_latency(
     payload = build_latency_event(stage, duration_ms, sla_ms=sla_ms, tags=tags, agent=agent)
     try:
         client.publish(topic or LATENCY_TOPIC, json.dumps(payload))
+    except Exception:
+        return None
+    return payload
+
+
+def build_control_event(
+    metric: str,
+    value: float,
+    *,
+    ok: Optional[bool] = None,
+    tags: Optional[Dict[str, Any]] = None,
+    timestamp: Optional[float] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "event": "control_metric",
+        "metric": metric,
+        "value": round(float(value), 3),
+        "timestamp": float(timestamp) if timestamp is not None else time.time(),
+    }
+    if ok is not None:
+        payload["ok"] = bool(ok)
+    if tags:
+        payload["tags"] = tags
+    return payload
+
+
+def emit_control_metric(
+    client,
+    metric: str,
+    value: float,
+    *,
+    ok: Optional[bool] = None,
+    tags: Optional[Dict[str, Any]] = None,
+    topic: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if client is None:
+        return None
+    payload = build_control_event(metric, value, ok=ok, tags=tags)
+    try:
+        client.publish(topic or CONTROL_METRIC_TOPIC, json.dumps(payload))
     except Exception:
         return None
     return payload
