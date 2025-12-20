@@ -9,6 +9,9 @@ All payloads are JSON.
   - vision/objects uses "box" in pixel XYXY format: [x1, y1, x2, y2].
   - vision/observation and scene/state use "bbox" in normalized XYXY format: [x1, y1, x2, y2] with values in [0, 1].
   - ocr_easy/text results use "box" in normalized XYWH format: [x, y, w, h] with values in [0, 1].
+- Object labels:
+  - vision/objects uses "class" for the detector label.
+  - scene/state uses "label"; scene_agent maps class -> label when fusing.
 
 ## Topic tree (key topics)
 - vision/
