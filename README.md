@@ -2,6 +2,16 @@
 
 This repository hosts the collection of MQTT-driven agents that coordinate UI automation, perception, and learning on the Jetson edge device. Recent additions introduce a language-model-based teacher, YOLO-based object perception, and a dense reward stream wired to the Path of Exile telemetry outlined in `~/Documents/poe_reward_system_v1.md`.
 
+## Getting Started
+
+- `docs/quickstart.md` - one-command demo (no camera or GPU required)
+- `docs/architecture/architecture.mmd` - service diagram and data flow
+- `docs/mqtt/topics.md` - MQTT topic map and payload examples
+- `config/README.md` - env profiles and local overrides
+- `docs/compose_config.yaml` - compose overview and wiring hints
+- `PROJECT_OVERVIEW.md` - high-level project summary
+- `agents/README.md` - agent-specific notes
+
 ## OpenAI Teacher Agent
 
 Set an OpenAI API key before starting the stack so the teacher agent can call the Chat Completions API:
@@ -122,7 +132,7 @@ The MQTT schema on `ocr_easy/text` is unchanged, but the payload now includes `{
   - `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` - rotation settings (default 5 MB x 5 files).
   - `LOG_LEVEL` - default `INFO`; set to `DEBUG` for chatty traces.
 
-- To copy Jetson logs onto this Mac, run `tools/sync_jetson_logs.sh` (uses `rsync`).  Override `JETSON_HOST`, `JETSON_LOG_DIR`, or `JETSON_LOGS_DEST` if the defaults (`dima@10.0.0.68:/mnt/ssd/logs` -> `logs_jetson/`) need to change.
+- To copy Jetson logs onto this Mac, run `tools/sync_jetson_logs.sh` (uses `rsync`).  Override `JETSON_HOST`, `JETSON_LOG_DIR`, or `JETSON_LOGS_DEST` if the defaults (`user@jetson.local:/mnt/ssd/logs` -> `logs_jetson/`) need to change.
 
 ### Log Monitor Agent
 
