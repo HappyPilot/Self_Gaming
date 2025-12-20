@@ -13,9 +13,14 @@ cat /etc/nv_tegra_release
 ```
 
 ## Performance Mode
-Enable MAXN and lock clocks (requires root):
+List available power modes, then select MAXN for your SKU (requires root):
 ```bash
-sudo nvpmodel -m 0
+sudo nvpmodel -q
+```
+
+Set the MAXN mode by index:
+```bash
+sudo nvpmodel -m <maxn-index>
 sudo jetson_clocks
 ```
 
@@ -35,10 +40,16 @@ If ZRAM is disabled, enable the default config:
 sudo systemctl enable --now nvzramconfig
 ```
 
+If the unit name differs on your JetPack build:
+```bash
+systemctl status nvzramconfig
+systemctl list-unit-files | grep -i zram
+```
+
 ## Docker + NVIDIA Runtime
 Confirm the NVIDIA runtime is available:
 ```bash
-docker info | rg -n "Runtimes"
+docker info | grep -n "Runtimes"
 ```
 
 ## Repo Profile
@@ -46,6 +57,9 @@ Use the Jetson profile:
 ```bash
 export SG_PROFILE=jetson
 ```
+
+Notes:
+- `OCR_FORCE_CPU=1` overrides `OCR_USE_GPU=1`. Keep `OCR_FORCE_CPU=0` if you want GPU OCR.
 
 If you need host-specific overrides, create `config/local.env` and export:
 ```bash
