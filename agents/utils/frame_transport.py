@@ -12,7 +12,7 @@ try:
     SHM_AVAILABLE = True
 except Exception:
     shared_memory = None
-SHM_AVAILABLE = False
+    SHM_AVAILABLE = False
 
 _SHM_LOG_INTERVAL_SEC = 5.0
 _last_shm_log = 0.0
