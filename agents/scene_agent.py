@@ -10,6 +10,7 @@ from typing import Dict
 
 import paho.mqtt.client as mqtt
 
+from utils.latency import emit_latency, get_sla_ms
 # --- Constants ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
@@ -35,6 +36,7 @@ ENEMY_KEYWORDS = {label.strip().lower() for label in os.getenv("SCENE_ENEMY_KEYW
 RESOURCE_KEYWORDS = {"life": ["life", "hp", "health"], "mana": ["mana", "mp"]}
 ALLOW_GENERIC_PLAYER = os.getenv("SCENE_GENERIC_PLAYER", "1") != "0"
 ALLOW_GENERIC_ENEMIES = os.getenv("SCENE_GENERIC_ENEMIES", "1") != "0"
+SLA_STAGE_FUSE_MS = get_sla_ms("SLA_STAGE_FUSE_MS")
 
 stop_event = threading.Event()
 
@@ -150,6 +152,7 @@ class SceneAgent:
     def _maybe_publish(self, client):
         now = time.time()
         if now - self.state["snapshot_ts"] > WINDOW_SEC or not self.state["mean"]: return
+        fuse_start = time.perf_counter()
         entries = [self.state["easy_text"]] if self.state["easy_text"] else [self.state["simple_text"]] if self.state["simple_text"] else []
         text_payload = [self._normalize_text(entry) for entry in entries] if entries and NORMALIZE_TEXT else entries
         obs = self.state.get("observation", {})
@@ -185,6 +188,15 @@ class SceneAgent:
         else: self._symbolic_candidate_since = 0.0
         if payload.get("flags", {}).get("death"): payload["death_text"] = text_payload
         client.publish(SCENE_TOPIC, json.dumps(payload))
+        fuse_ms = (time.perf_counter() - fuse_start) * 1000.0
+        emit_latency(
+            client,
+            "fuse",
+            fuse_ms,
+            sla_ms=SLA_STAGE_FUSE_MS,
+            tags={"objects": len(objects), "texts": len(text_payload)},
+            agent="scene_agent",
+        )
 
     def _on_message(self, client, userdata, msg):
         try:

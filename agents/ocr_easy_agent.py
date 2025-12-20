@@ -15,6 +15,8 @@ import numpy as np
 import paho.mqtt.client as mqtt
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
+from utils.latency import emit_latency, get_sla_ms
+
 try:
     import cv2
 except ImportError:
@@ -35,6 +37,7 @@ OCR_CMD = os.getenv("OCR_CMD", "ocr_easy/cmd")
 OCR_TEXT = os.getenv("OCR_TEXT", "ocr_easy/text")
 OCR_LANGS = [lang.strip() for lang in os.getenv("OCR_LANGS", "en,ru").split(",") if lang.strip()]
 OCR_BACKEND = os.getenv("OCR_BACKEND", "paddle").strip().lower()
+SLA_STAGE_OCR_MS = get_sla_ms("SLA_STAGE_OCR_MS")
 AUTO_INTERVAL = float(os.getenv("OCR_AUTO_INTERVAL", "3.0"))
 AUTO_TIMEOUT = float(os.getenv("OCR_AUTO_TIMEOUT", "2.0"))
 DEBUG_SAVE = os.getenv("OCR_DEBUG_SAVE", "0") == "1"
@@ -294,6 +297,7 @@ class OcrEasyAgent:
                 self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": "no_frame", "timeout": timeout}))
                 return
 
+        ocr_start = time.perf_counter()
         try:
             img = Image.open(io.BytesIO(jpeg))
             global last_frame_hash, last_ocr_ts
@@ -340,6 +344,16 @@ class OcrEasyAgent:
         except Exception as e:
             self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": str(e)}))
             logger.error("OCR error: %s", e)
+        finally:
+            ocr_ms = (time.perf_counter() - ocr_start) * 1000.0
+            emit_latency(
+                self.client,
+                "ocr",
+                ocr_ms,
+                sla_ms=SLA_STAGE_OCR_MS,
+                tags={"backend": self.backend, "source": source},
+                agent="ocr_easy_agent",
+            )
 
     def _auto_loop(self):
         if not self.ready or AUTO_INTERVAL <= 0: return
