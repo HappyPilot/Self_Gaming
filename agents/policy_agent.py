@@ -20,7 +20,7 @@ import torch
 import torch.nn as nn
 
 from models.backbone import Backbone
-from utils.latency import emit_control_metric, emit_latency, get_sla_ms
+from utils.latency import emit_control_metric, emit_latency, get_float_env, get_sla_ms
 
 
 def _normalize_phrase(text: str) -> str:
@@ -64,8 +64,9 @@ THRESH = float(os.getenv("THRESH", "120.0"))
 DEBOUNCE = float(os.getenv("DEBOUNCE", "0.25"))
 SLA_STAGE_POLICY_MS = get_sla_ms("SLA_STAGE_POLICY_MS")
 SLA_TICK_MS = get_sla_ms("SLA_TICK_MS")
-SLA_JERK_MAX = get_sla_ms("SLA_JERK_MAX")
-CONTROL_READY_WINDOW = 50
+SLA_JERK_MAX = get_float_env("SLA_JERK_MAX")
+CONTROL_READY_WINDOW = max(1, int(os.getenv("CONTROL_READY_WINDOW", "50")))
+CONTROL_METRIC_SAMPLE_EVERY = max(1, int(os.getenv("CONTROL_METRIC_SAMPLE_EVERY", "5")))
 TEACHER_ALPHA_START = float(os.getenv("TEACHER_ALPHA_START", "1.0"))
 TEACHER_DECAY_STEPS = int(os.getenv("TEACHER_ALPHA_DECAY_STEPS", "500"))
 MIN_ALPHA = float(os.getenv("TEACHER_ALPHA_MIN", "0.0"))
@@ -288,6 +289,7 @@ class PolicyAgent:
         self.respawn_macro_block_until = 0.0
         self.latest_cursor = {}
         self.control_ready_window: Deque[int] = deque(maxlen=CONTROL_READY_WINDOW)
+        self.control_tick_count = 0
         self.last_control_action: Optional[dict] = None
         if self.hot_reload_enabled:
             self._initial_model_load()
@@ -1643,26 +1645,28 @@ class PolicyAgent:
         return {"label": str(label), "vector": vector}
 
     def _record_control_metrics(self, client, tick_ms: float, action: Optional[Dict[str, object]]):
-        tick_ok = tick_ms <= SLA_TICK_MS if SLA_TICK_MS else None
-        emit_control_metric(
-            client,
-            "control/tick_ms",
-            tick_ms,
-            ok=tick_ok,
-            tags={"agent": "policy_agent"},
-        )
         ready = action is not None
         if SLA_TICK_MS:
             ready = ready and tick_ms <= SLA_TICK_MS
         self.control_ready_window.append(1 if ready else 0)
-        if self.control_ready_window:
-            ratio = sum(self.control_ready_window) / len(self.control_ready_window)
+        self.control_tick_count += 1
+        if self.control_tick_count % CONTROL_METRIC_SAMPLE_EVERY == 0:
+            tick_ok = tick_ms <= SLA_TICK_MS if SLA_TICK_MS else None
             emit_control_metric(
                 client,
-                "control/next_chunk_ready_ratio",
-                ratio,
-                tags={"window": len(self.control_ready_window)},
+                "control/tick_ms",
+                tick_ms,
+                ok=tick_ok,
+                tags={"agent": "policy_agent", "sample_every": CONTROL_METRIC_SAMPLE_EVERY},
             )
+            if self.control_ready_window:
+                ratio = sum(self.control_ready_window) / len(self.control_ready_window)
+                emit_control_metric(
+                    client,
+                    "control/next_chunk_ready_ratio",
+                    ratio,
+                    tags={"window": len(self.control_ready_window), "sample_every": CONTROL_METRIC_SAMPLE_EVERY},
+                )
         if not action:
             return
         current = self._control_action_signature(action)

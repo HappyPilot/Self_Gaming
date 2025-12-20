@@ -171,3 +171,5 @@ Required: event, metric, value, timestamp
 }
 ```
 Schema: `schemas/control_metric.schema.json`
+
+Note: tick_ms and next_chunk_ready_ratio may be sampled (CONTROL_METRIC_SAMPLE_EVERY) and use a rolling window size (CONTROL_READY_WINDOW).

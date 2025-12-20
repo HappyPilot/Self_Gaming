@@ -26,6 +26,10 @@ def get_sla_ms(name: str, default: Optional[float] = None) -> Optional[float]:
     return _parse_float_env(name, default)
 
 
+def get_float_env(name: str, default: Optional[float] = None) -> Optional[float]:
+    return _parse_float_env(name, default)
+
+
 def build_latency_event(
     stage: str,
     duration_ms: float,
