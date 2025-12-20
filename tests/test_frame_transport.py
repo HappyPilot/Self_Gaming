@@ -1,7 +1,7 @@
 import base64
 import unittest
 
-from agents.utils.frame_transport import SHM_AVAILABLE, ShmFrameRing, get_frame_b64, get_frame_bytes
+from utils.frame_transport import SHM_AVAILABLE, ShmFrameRing, get_frame_b64, get_frame_bytes
 
 
 class FrameTransportTest(unittest.TestCase):

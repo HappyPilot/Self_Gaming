@@ -43,5 +43,5 @@ Environment overrides (add to your shell or compose override):
 - `FRAME_TRANSPORT` - `mqtt` (base64) or `shm` (shared memory descriptor)
 
 For FRAME_TRANSPORT=shm, containers must share an IPC namespace and have enough /dev/shm:
-- set `ipc: host` (or `ipc: "service:mq"`) on vision and every consumer in the pipeline
+- set `ipc: host` (or `ipc: "service:mq"`) on vision and every consumer in the pipeline (same IPC namespace, or you will see "SHM segment not found")
 - set `shm_size: 1g` (or similar) to avoid random SHM failures
