@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import math
 import json
 import logging
 import os
@@ -19,7 +20,7 @@ import torch
 import torch.nn as nn
 
 from models.backbone import Backbone
-from utils.latency import emit_latency, get_sla_ms
+from utils.latency import emit_control_metric, emit_latency, get_sla_ms
 
 
 def _normalize_phrase(text: str) -> str:
@@ -62,6 +63,9 @@ CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
 THRESH = float(os.getenv("THRESH", "120.0"))
 DEBOUNCE = float(os.getenv("DEBOUNCE", "0.25"))
 SLA_STAGE_POLICY_MS = get_sla_ms("SLA_STAGE_POLICY_MS")
+SLA_TICK_MS = get_sla_ms("SLA_TICK_MS")
+SLA_JERK_MAX = get_sla_ms("SLA_JERK_MAX")
+CONTROL_READY_WINDOW = 50
 TEACHER_ALPHA_START = float(os.getenv("TEACHER_ALPHA_START", "1.0"))
 TEACHER_DECAY_STEPS = int(os.getenv("TEACHER_ALPHA_DECAY_STEPS", "500"))
 MIN_ALPHA = float(os.getenv("TEACHER_ALPHA_MIN", "0.0"))
@@ -283,6 +287,8 @@ class PolicyAgent:
         self.respawn_macro_active = False
         self.respawn_macro_block_until = 0.0
         self.latest_cursor = {}
+        self.control_ready_window: Deque[int] = deque(maxlen=CONTROL_READY_WINDOW)
+        self.last_control_action: Optional[dict] = None
         if self.hot_reload_enabled:
             self._initial_model_load()
         logger.info(
@@ -407,15 +413,35 @@ class PolicyAgent:
                         logger.info("Received teacher action: %s", action_text)
             elif msg.topic == OBS_TOPIC or (SIM_TOPIC and msg.topic == SIM_TOPIC):
                 self.latest_state = data
-                policy_start = time.perf_counter()
+                tick_start = time.perf_counter()
                 policy_action = self._policy_from_observation(data)
                 if policy_action is None:
+                    tick_ms = (time.perf_counter() - tick_start) * 1000.0
+                    emit_latency(
+                        client,
+                        "policy",
+                        tick_ms,
+                        sla_ms=SLA_STAGE_POLICY_MS,
+                        tags={"scene_ts": data.get("timestamp")},
+                        agent="policy_agent",
+                    )
+                    self._record_control_metrics(client, tick_ms, None)
                     return
                 final_action = self._blend_with_teacher(policy_action)
                 if final_action is None:
+                    tick_ms = (time.perf_counter() - tick_start) * 1000.0
+                    emit_latency(
+                        client,
+                        "policy",
+                        tick_ms,
+                        sla_ms=SLA_STAGE_POLICY_MS,
+                        tags={"scene_ts": data.get("timestamp")},
+                        agent="policy_agent",
+                    )
+                    self._record_control_metrics(client, tick_ms, None)
                     return
                 self._publish_action(client, final_action, policy_action)
-                policy_ms = (time.perf_counter() - policy_start) * 1000.0
+                policy_ms = (time.perf_counter() - tick_start) * 1000.0
                 emit_latency(
                     client,
                     "policy",
@@ -424,6 +450,7 @@ class PolicyAgent:
                     tags={"scene_ts": data.get("timestamp")},
                     agent="policy_agent",
                 )
+                self._record_control_metrics(client, policy_ms, final_action)
             elif GOAP_TOPIC and msg.topic == GOAP_TOPIC:
                 if data.get("status") == "pending":
                     self.task_queue.append(data)
@@ -1607,6 +1634,55 @@ class PolicyAgent:
         self._maybe_advance_task(chosen)
         self.feedback_pending = True
         self.feedback_signature = self._state_signature(self.latest_state or {})
+
+    def _control_action_signature(self, action: Dict[str, object]) -> Dict[str, object]:
+        label = action.get("label") or action.get("action") or ""
+        vector = None
+        if isinstance(action.get("dx"), (int, float)) or isinstance(action.get("dy"), (int, float)):
+            vector = (float(action.get("dx", 0.0)), float(action.get("dy", 0.0)))
+        return {"label": str(label), "vector": vector}
+
+    def _record_control_metrics(self, client, tick_ms: float, action: Optional[Dict[str, object]]):
+        tick_ok = tick_ms <= SLA_TICK_MS if SLA_TICK_MS else None
+        emit_control_metric(
+            client,
+            "control/tick_ms",
+            tick_ms,
+            ok=tick_ok,
+            tags={"agent": "policy_agent"},
+        )
+        ready = action is not None
+        if SLA_TICK_MS:
+            ready = ready and tick_ms <= SLA_TICK_MS
+        self.control_ready_window.append(1 if ready else 0)
+        if self.control_ready_window:
+            ratio = sum(self.control_ready_window) / len(self.control_ready_window)
+            emit_control_metric(
+                client,
+                "control/next_chunk_ready_ratio",
+                ratio,
+                tags={"window": len(self.control_ready_window)},
+            )
+        if not action:
+            return
+        current = self._control_action_signature(action)
+        prev = self.last_control_action
+        self.last_control_action = current
+        if not prev or prev.get("label") == current.get("label"):
+            return
+        prev_vec = prev.get("vector")
+        curr_vec = current.get("vector")
+        if prev_vec is None or curr_vec is None:
+            return
+        jerk = math.hypot(curr_vec[0] - prev_vec[0], curr_vec[1] - prev_vec[1])
+        jerk_ok = jerk <= SLA_JERK_MAX if SLA_JERK_MAX else None
+        emit_control_metric(
+            client,
+            "control/chunk_boundary_jerk",
+            jerk,
+            ok=jerk_ok,
+            tags={"from": prev.get("label"), "to": current.get("label")},
+        )
 
     # ----------------------------------------------------------------- Public
     def start(self):

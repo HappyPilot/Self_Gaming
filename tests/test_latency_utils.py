@@ -1,6 +1,6 @@
 import unittest
 
-from agents.utils.latency import build_latency_event
+from agents.utils.latency import build_control_event, build_latency_event
 
 
 class LatencyUtilsTest(unittest.TestCase):
@@ -25,6 +25,21 @@ class LatencyUtilsTest(unittest.TestCase):
         self.assertEqual(event["event"], "latency")
         self.assertEqual(event["stage"], "fuse")
         self.assertNotIn("ok", event)
+
+    def test_build_control_event(self):
+        event = build_control_event(
+            "control/tick_ms",
+            12.3,
+            ok=True,
+            tags={"window": 50},
+            timestamp=2.34,
+        )
+        self.assertEqual(event["event"], "control_metric")
+        self.assertEqual(event["metric"], "control/tick_ms")
+        self.assertEqual(event["value"], 12.3)
+        self.assertEqual(event["timestamp"], 2.34)
+        self.assertTrue(event["ok"])
+        self.assertIn("tags", event)
 
 
 if __name__ == "__main__":

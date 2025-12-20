@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/control_metric.schema.json",
+  "title": "ControlMetric",
+  "type": "object",
+  "required": ["event", "metric", "value", "timestamp"],
+  "properties": {
+    "event": {
+      "type": "string",
+      "const": "control_metric"
+    },
+    "metric": {
+      "type": "string",
+      "minLength": 1
+    },
+    "value": {
+      "type": "number"
+    },
+    "timestamp": {
+      "type": "number"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "tags": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    }
+  },
+  "additionalProperties": true
+}
