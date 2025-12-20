@@ -47,7 +47,7 @@ All payloads are JSON.
 ## Payload examples
 
 ### vision/frame/preview
-Required: ok, timestamp, image_b64, width, height
+Required: ok, timestamp, image_b64, width, height, variant
 ```json
 {
   "ok": true,
@@ -60,7 +60,7 @@ Required: ok, timestamp, image_b64, width, height
 ```
 
 ### vision/frame/full
-Required: ok, timestamp, image_b64, width, height
+Required: ok, timestamp, image_b64, width, height, variant
 ```json
 {
   "ok": true,

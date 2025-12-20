@@ -205,7 +205,13 @@ class VisionAgent:
                     self.last_frame_pub_ts = now
                     preview_topic = MQTT_TOPIC_FRAME_PREVIEW or ""
                     full_topic = MQTT_TOPIC_FRAME_FULL or ""
+                    legacy_topic = MQTT_TOPIC_FRAME or ""
+                    preview_topics = []
                     if preview_topic:
+                        preview_topics.append(preview_topic)
+                    if legacy_topic and legacy_topic not in preview_topics and legacy_topic != full_topic:
+                        preview_topics.append(legacy_topic)
+                    if preview_topics:
                         ok, jpg = cv2.imencode(
                             ".jpg",
                             frame,
@@ -213,20 +219,18 @@ class VisionAgent:
                         )
                         if ok:
                             b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
-                            self.client.publish(
-                                preview_topic,
-                                json.dumps(
-                                    {
-                                        "ok": True,
-                                        "timestamp": now,
-                                        "image_b64": b64,
-                                        "width": frame.shape[1],
-                                        "height": frame.shape[0],
-                                        "variant": "preview",
-                                    }
-                                ),
-                                qos=0,
+                            payload = json.dumps(
+                                {
+                                    "ok": True,
+                                    "timestamp": now,
+                                    "image_b64": b64,
+                                    "width": frame.shape[1],
+                                    "height": frame.shape[0],
+                                    "variant": "preview",
+                                }
                             )
+                            for topic in preview_topics:
+                                self.client.publish(topic, payload, qos=0)
                     if full_topic and full_topic != preview_topic:
                         ok, jpg = cv2.imencode(
                             ".jpg",
