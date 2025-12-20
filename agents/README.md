@@ -25,16 +25,16 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 
 ## Policy Blending
 
-`policy_agent.py` now blends its heuristic actions with the teacher’s recommendations. A linear annealing coefficient `teacher_alpha` (configurable via `TEACHER_ALPHA_START` and `TEACHER_ALPHA_DECAY_STEPS`) starts at 1.0, prioritising teacher advice, then decays to rely on the learned policy. The final action is emitted on both `control/keys` and `act/cmd`, preserving the previous behaviour.
+`policy_agent.py` now blends its heuristic actions with the teacher's recommendations. A linear annealing coefficient `teacher_alpha` (configurable via `TEACHER_ALPHA_START` and `TEACHER_ALPHA_DECAY_STEPS`) starts at 1.0, prioritising teacher advice, then decays to rely on the learned policy. The final action is emitted on both `control/keys` and `act/cmd`, preserving the previous behaviour.
 
 ## Object-Detection Agent
 
 - `object_detection_agent.py` subscribes to `vision/frame`, runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
 - The agent is packaged in its own container (`local/object-detection-agent`). Drop TensorRT/Ultralytics weights under `/mnt/ssd/models/yolo/<checkpoint>` and point `OBJECT_MODEL_PATH` there.
 - Relevant environment switches (see `docker-compose.yml`):
-  - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` – sampling rate + encoding coming from `vision_agent`.
-  - `OBJECT_DETECTOR_BACKEND` – `ultralytics` for real inference or `dummy` for smoke tests.
-  - `OBJECT_CONF_THRESHOLD`, `OBJECT_IOU_THRESHOLD`, `OBJECT_QUEUE` – runtime tuning knobs.
+  - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` - sampling rate + encoding coming from `vision_agent`.
+  - `OBJECT_DETECTOR_BACKEND` - `ultralytics` for real inference or `dummy` for smoke tests.
+  - `OBJECT_CONF_THRESHOLD`, `OBJECT_IOU_THRESHOLD`, `OBJECT_QUEUE` - runtime tuning knobs.
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
 
@@ -42,11 +42,11 @@ The `scene_agent` now fuses OCR, mean luminance, and the most recent detection p
 
 `reward_manager.py` pulls three signals to publish dense rewards on `train/reward`:
 
-1. Tail the local PoE client log at `/mnt/ssd/poe_client.txt` (streamed from Windows via the Flask receiver) and normalise entries such as “You have entered…”, “You have killed…”, and “Picked up …”.
+1. Tail the local PoE client log at `/mnt/ssd/poe_client.txt` (streamed from Windows via the Flask receiver) and normalise entries such as "You have entered...", "You have killed...", and "Picked up ...".
 2. Consume `scene/state` so the latest YOLO detections contribute enemy density + loot pressure (important for map-progress/loot weights).
 3. Watch `act/result` to stay in lockstep with the control loop.
 
-The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specific weights (`S0…S4`), step-costs, death penalties, and loot-value buckets (currency, maps, contracts, etc.). Rewards are clipped to `[-1, 1]` and include a `components` breakdown plus the last few parsed events for debugging.
+The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specific weights (`S0...S4`), step-costs, death penalties, and loot-value buckets (currency, maps, contracts, etc.). Rewards are clipped to `[-1, 1]` and include a `components` breakdown plus the last few parsed events for debugging.
 
 ## Training Pipeline Updates
 
@@ -57,7 +57,7 @@ The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specif
 ### Workflow
 
 1. Ensure all agents are running (including `teacher_agent` and `reward_manager`).
-2. During early training epochs, the policy will follow the teacher’s commands; as `teacher_alpha` decays, it transitions to autonomous behaviour.
+2. During early training epochs, the policy will follow the teacher's commands; as `teacher_alpha` decays, it transitions to autonomous behaviour.
 3. Rewards emitted on `train/reward` guide the trainer and are stored with each recorded sample.
 
 ## Testing
@@ -76,9 +76,9 @@ python3 -m unittest \
 
 - A global `sitecustomize.py` initialises rotating log files for *every* agent. By default logs are written to the first writable path among `LOG_DIR`, `<repo>/logs`, `~/agent_logs`, `/mnt/ssd/logs`, and `/tmp/agent_logs`. Each process receives `<agent_name>.log` plus the usual stdout stream, so Mac-side runs automatically drop files into `self-gaming/logs/` unless you override `LOG_DIR`.
 - Tune log behaviour via the following environment variables:
-  - `LOG_DIR` – preferred directory (falls back automatically if unavailable).
-  - `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` – rotation settings (default 5 MB × 5 files).
-  - `LOG_LEVEL` – default `INFO`; set to `DEBUG` for chatty traces.
+  - `LOG_DIR` - preferred directory (falls back automatically if unavailable).
+  - `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` - rotation settings (default 5 MB x 5 files).
+  - `LOG_LEVEL` - default `INFO`; set to `DEBUG` for chatty traces.
 
 - To copy Jetson logs onto this Mac, run `tools/sync_jetson_logs.sh` (uses `rsync`).  Override `JETSON_HOST`, `JETSON_LOG_DIR`, or `JETSON_LOGS_DEST` if the defaults (`user@jetson.local:/mnt/ssd/logs` -> `logs_jetson/`) need to change.
 
@@ -89,13 +89,13 @@ python3 -m unittest \
 | Topic | Payload |
 | --- | --- |
 | `logs/summary` | Aggregate counts per agent (`lines`, `warnings`, `errors`). |
-| `logs/alerts` | Structured alerts when errors, tracebacks, failed jobs, or NaN losses are detected (rate-limited by `LOG_ALERT_COOLDOWN`, default 30 s). |
+| `logs/alerts` | Structured alerts when errors, tracebacks, failed jobs, or NaN losses are detected (rate-limited by `LOG_ALERT_COOLDOWN`, default 30 s). |
 
 Configuration knobs:
 
-- `LOG_MONITOR_DIRS` (colon-separated) or `LOG_MONITOR_DIR` – directories to scan (default `/app/logs`).
-- `LOG_MONITOR_INTERVAL` – scan cadence in seconds.
-- `LOG_MONITOR_TRAINERS` – comma-separated list of log sources that should trigger the extra training-health heuristics (`train_manager,policy_agent,teach_agent` by default).
+- `LOG_MONITOR_DIRS` (colon-separated) or `LOG_MONITOR_DIR` - directories to scan (default `/app/logs`).
+- `LOG_MONITOR_INTERVAL` - scan cadence in seconds.
+- `LOG_MONITOR_TRAINERS` - comma-separated list of log sources that should trigger the extra training-health heuristics (`train_manager,policy_agent,teach_agent` by default).
 
 Add `log_monitor` to the `docker-compose.yml` stack (already wired) and check `logs/alerts` for actionable messages when training stalls or errors recur.
 
