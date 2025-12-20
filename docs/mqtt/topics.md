@@ -24,7 +24,7 @@ All payloads are JSON.
   - ocr_easy/text: OCR output from ocr_easy_agent
 - cursor/state: cursor tracker output
 - scene/state: fused scene state (mean, text, objects, player, etc)
-- teacher/action: teacher_agent suggested action and reasoning
+- teacher/action: teacher_agent guidance text
 - act/cmd: action command produced by policy_agent or demo stub
 - control/keys: legacy key command topic (policy_agent)
 - act/result: actuation feedback from act_agent/control bridge
