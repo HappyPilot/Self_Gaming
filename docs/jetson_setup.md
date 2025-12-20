@@ -66,6 +66,17 @@ If you need host-specific overrides, create `config/local.env` and export:
 export SG_LOCAL_ENV_FILE="$(pwd)/config/local.env"
 ```
 
+## GStreamer Capture (Optional)
+Switch the vision capture backend to GStreamer:
+```bash
+export CAPTURE_BACKEND=gstreamer
+```
+
+Override the pipeline if needed:
+```bash
+export GST_PIPELINE="v4l2src device=/dev/video0 ! video/x-raw,width=1280,height=720,framerate=30/1 ! nvvidconv ! video/x-raw,format=BGRx ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1 max-buffers=1 sync=false"
+```
+
 ## SHM Transport (Optional)
 If you enable `FRAME_TRANSPORT=shm`, every container that reads frames must share IPC:
 - use `ipc: host` (or `ipc: "service:mq"`) for vision and all consumers
