@@ -11,6 +11,8 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 
+from utils.latency import emit_latency, get_sla_ms
+
 # --- Setup ---
 logging.basicConfig(level=os.getenv("VISION_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("vision_agent")
@@ -36,6 +38,7 @@ VIDEO_WIDTH = int(os.environ.get("VIDEO_WIDTH", "0"))
 VIDEO_HEIGHT = int(os.environ.get("VIDEO_HEIGHT", "0"))
 VIDEO_FPS = float(os.environ.get("VIDEO_FPS", "0"))
 VIDEO_PIXFMT = os.environ.get("VIDEO_PIXFMT", "")[:4]
+SLA_STAGE_CAPTURE_MS = get_sla_ms("SLA_STAGE_CAPTURE_MS")
 
 def _float_env(name: str, fallback: float) -> float:
     try: return float(os.environ.get(name, str(fallback)))
@@ -169,10 +172,20 @@ class VisionAgent:
         last_status_pub = 0
         try:
             while not stop_event.is_set():
+                capture_start = time.perf_counter()
                 ok, frame = cap.read()
+                capture_ms = (time.perf_counter() - capture_start) * 1000.0
                 if not ok or frame is None:
                     stop_event.wait(0.02)
                     continue
+                emit_latency(
+                    self.client,
+                    "capture",
+                    capture_ms,
+                    sla_ms=SLA_STAGE_CAPTURE_MS,
+                    tags={"device": str(active_device)},
+                    agent="vision_agent",
+                )
 
                 with self.frame_lock:
                     self.last_frame = frame

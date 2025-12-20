@@ -27,6 +27,7 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 
+from utils.latency import emit_latency, get_sla_ms
 logger = logging.getLogger("object_detection_agent")
 logging.basicConfig(level=os.getenv("OBJECT_LOG_LEVEL", "INFO"))
 
@@ -47,6 +48,7 @@ CLASS_PATHS = os.getenv("OBJECT_CLASS_PATH", "")  # Optional: comma-separated pa
 GAME_ID = os.getenv("GAME_ID", "").strip().lower()
 VISION_CONFIG_TOPIC = os.getenv("VISION_CONFIG_TOPIC", "vision/config")
 VISION_MODE_DEFAULT = os.getenv("VISION_MODE_DEFAULT", "medium").lower()
+SLA_STAGE_DETECT_MS = get_sla_ms("SLA_STAGE_DETECT_MS")
 
 MODE_SETTINGS = {
     "low": {"frame_stride": 3, "conf": min(0.6, CONF_THRESHOLD + 0.15), "imgsz": max(320, IMG_SIZE // 2)},
@@ -393,7 +395,17 @@ class ObjectDetectionAgent:
             if frame is None:
                 continue
 
+            detect_start = time.perf_counter()
             detections = self.detector.detect(frame)
+            detect_ms = (time.perf_counter() - detect_start) * 1000.0
+            emit_latency(
+                self.client,
+                "detect",
+                detect_ms,
+                sla_ms=SLA_STAGE_DETECT_MS,
+                tags={"frame_ts": payload.get("timestamp")},
+                agent="object_detection_agent",
+            )
             logger.info("Detected %d objects", len(detections))
             result_payload = {
                 "ok": True,
