@@ -74,6 +74,7 @@ If FRAME_TRANSPORT=shm, publish a descriptor instead of image_b64:
   "variant": "preview"
 }
 ```
+Note: SHM transport requires a shared IPC namespace (ipc: host or ipc: service:mq) and enough shm_size for all containers reading frames.
 
 ### vision/frame/full
 Required: ok, timestamp, width, height, variant, image_b64 (or shm descriptor when FRAME_TRANSPORT=shm)

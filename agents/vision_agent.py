@@ -80,6 +80,7 @@ class VisionAgent:
         self.current_frame_interval = MODE_FRAME_INTERVALS[self.current_mode]
         self.last_config_reason = "default"
         self.frame_transport = FRAME_TRANSPORT
+        self._last_shm_fallback_log = 0.0
         self.shm_ring = None
         if self.frame_transport == "shm":
             if not SHM_AVAILABLE:
@@ -113,14 +114,22 @@ class VisionAgent:
         if self.frame_transport == "shm" and self.shm_ring:
             desc = self.shm_ring.write(jpg_bytes)
             if not desc:
-                logger.warning(
-                    "SHM write failed (size=%s, max=%s)", len(jpg_bytes), self.shm_ring.max_bytes
-                )
-                return None
+                now = time.time()
+                if now - self._last_shm_fallback_log >= 5.0:
+                    logger.warning(
+                        "SHM write failed (size=%s, max=%s); falling back to mqtt",
+                        len(jpg_bytes),
+                        self.shm_ring.max_bytes,
+                    )
+                    self._last_shm_fallback_log = now
+                return self._build_base64_payload(payload, jpg_bytes)
             payload.update(desc)
             payload["transport"] = "shm"
             payload["encoding"] = "jpeg"
             return payload
+        return self._build_base64_payload(payload, jpg_bytes)
+
+    def _build_base64_payload(self, payload: dict, jpg_bytes: bytes) -> dict:
         b64 = base64.b64encode(jpg_bytes).decode("ascii")
         payload["image_b64"] = b64
         return payload

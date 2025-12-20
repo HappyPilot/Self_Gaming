@@ -1,6 +1,7 @@
 import base64
 import logging
 import os
+import time
 import uuid
 from typing import Optional
 
@@ -11,7 +12,18 @@ try:
     SHM_AVAILABLE = True
 except Exception:
     shared_memory = None
-    SHM_AVAILABLE = False
+SHM_AVAILABLE = False
+
+_SHM_LOG_INTERVAL_SEC = 5.0
+_last_shm_log = 0.0
+
+
+def _log_shm_debug(message: str, *args) -> None:
+    global _last_shm_log
+    now = time.time()
+    if now - _last_shm_log >= _SHM_LOG_INTERVAL_SEC:
+        logger.debug(message, *args)
+        _last_shm_log = now
 
 
 def get_transport_mode() -> str:
@@ -79,9 +91,10 @@ def read_shm_bytes(name: str, size: int) -> Optional[bytes]:
     try:
         shm = shared_memory.SharedMemory(name=name)
     except FileNotFoundError:
+        _log_shm_debug("SHM segment not found: %s", name)
         return None
     except Exception:
-        logger.debug("Failed to open shm segment %s", name)
+        _log_shm_debug("Failed to open shm segment %s", name)
         return None
     try:
         size = min(size, shm.size)
