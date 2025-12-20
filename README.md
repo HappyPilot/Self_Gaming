@@ -7,6 +7,7 @@ This repository hosts the collection of MQTT-driven agents that coordinate UI au
 - `docs/quickstart.md` - one-command demo (no camera or GPU required)
 - `docs/architecture/architecture.mmd` - service diagram and data flow
 - `docs/mqtt/topics.md` - MQTT topic map and payload examples
+- `docs/jetson_setup.md` - Jetson setup checklist (JetPack, MAXN, ZRAM, runtime)
 - `config/README.md` - env profiles and local overrides
 - `docs/compose_config.yaml` - compose overview and wiring hints
 - `PROJECT_OVERVIEW.md` - high-level project summary
