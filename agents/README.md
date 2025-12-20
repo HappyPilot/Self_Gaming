@@ -29,7 +29,7 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 
 ## Object-Detection Agent
 
-- `object_detection_agent.py` subscribes to `vision/frame`, runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
+- `object_detection_agent.py` subscribes to `vision/frame/preview` by default (set `VISION_FRAME_TOPIC=vision/frame/full` for full quality), runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
 - The agent is packaged in its own container (`local/object-detection-agent`). Drop TensorRT/Ultralytics weights under `/mnt/ssd/models/yolo/<checkpoint>` and point `OBJECT_MODEL_PATH` there.
 - Relevant environment switches (see `docker-compose.yml`):
   - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` - sampling rate + encoding coming from `vision_agent`.

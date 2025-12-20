@@ -39,7 +39,7 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 
 ## Object-Detection Agent
 
-- `object_detection_agent.py` subscribes to `vision/frame`, runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
+- `object_detection_agent.py` subscribes to `vision/frame/preview` by default (set `VISION_FRAME_TOPIC=vision/frame/full` for full quality), runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
 - The agent is packaged in its own container (`local/object-detection-agent`). Drop TensorRT/Ultralytics weights under `/mnt/ssd/models/yolo/<checkpoint>` and point `OBJECT_MODEL_PATH` there. Large model files are not stored in git; use `tools/download_models.sh` for the common set:
 
   ```bash
@@ -63,7 +63,7 @@ The `scene_agent` now fuses OCR, mean luminance, and the most recent detection p
 
 ### Cursor tracker
 
-`cursor_tracker_agent.py` listens to `vision/frame`, finds the bright cursor blob in the HDMI feed, and publishes normalized coordinates on `cursor/state`. The policy agent subscribes to this topic (see `CURSOR_TOPIC` / `CURSOR_TIMEOUT_SEC`), so MOVE/CLICK plans can be corrected with real feedback instead of purely integrating the issued `mouse_move` deltas.
+`cursor_tracker_agent.py` listens to `vision/frame/preview`, finds the bright cursor blob in the HDMI feed, and publishes normalized coordinates on `cursor/state`. The policy agent subscribes to this topic (see `CURSOR_TOPIC` / `CURSOR_TIMEOUT_SEC`), so MOVE/CLICK plans can be corrected with real feedback instead of purely integrating the issued `mouse_move` deltas.
 
 - Policy now gates dialog clicks on two checks:
   1. `cursor/state` must confirm the pointer is already within `CURSOR_TOLERANCE` of the GOAP target.

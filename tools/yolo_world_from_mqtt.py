@@ -56,6 +56,8 @@ def main():
     )
     args = parser.parse_args()
 
+    print(f"[yolo_world_from_mqtt] frame topic: {args.frame_topic}", flush=True)
+
     model = YOLO(args.model)
     device = "cpu"  # force CPU to avoid GPU alloc issues on Jetson
     model.to(device)

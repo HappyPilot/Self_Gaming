@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Zero-shot detector using OWL-ViT.
-Subscribes to vision/frame, runs text-prompt detection, publishes to vision/objects.
+Subscribes to vision/frame/preview, runs text-prompt detection, publishes to vision/objects.
 """
 import base64
 import json
@@ -21,7 +21,7 @@ from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame")
+FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
 OBJECT_TOPIC = os.getenv("OBJECT_TOPIC", "vision/objects")
 MODEL_ID = os.getenv("ZSD_MODEL_ID", "google/owlvit-base-patch32")
 PROMPTS = [p.strip() for p in os.getenv("ZSD_PROMPTS", "enemy,boss,player,npc,loot,portal,waypoint,minimap,inventory,quest_marker,dialog_button,health_orb,mana_orb,menu_button").split(",") if p.strip()]

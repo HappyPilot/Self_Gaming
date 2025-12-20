@@ -20,7 +20,7 @@ import paho.mqtt.client as mqtt
 # --- Constants ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame")
+FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
 CURSOR_TOPIC = os.getenv("CURSOR_TOPIC", "cursor/state")
 ACT_CMD_TOPIC = os.getenv("CURSOR_ACT_TOPIC") or os.getenv("ACT_CMD_TOPIC", "act/cmd")
 MIN_AREA = float(os.getenv("CURSOR_MIN_AREA", "30"))

@@ -32,6 +32,10 @@ services:
     - MQTT_TOPIC_METRIC=vision/mean
     - MQTT_TOPIC_SNAPSHOT=vision/snapshot
     - VISION_FRAME_TOPIC=vision/frame/preview
+    - VISION_FRAME_PREVIEW_TOPIC=vision/frame/preview
+    - VISION_FRAME_FULL_TOPIC=vision/frame/full
+    - VISION_FRAME_PREVIEW_QUALITY=50
+    - VISION_FRAME_FULL_QUALITY=95
     - VISION_FRAME_ENABLED=1
     - VIDEO_WIDTH=1280
     - VIDEO_HEIGHT=720
@@ -346,7 +350,7 @@ services:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
     - SIMPLE_OCR_INTERVAL=2.5
-    - FRAME_TOPIC=vision/frame
+    - FRAME_TOPIC=vision/frame/preview
     - OCR_REGIONS_TOPIC=ocr/regions
     - OCR_UNIFIED_TOPIC=ocr/unified
     - REGION_TTL_SEC=5.0
@@ -896,7 +900,7 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - FRAME_TOPIC=vision/frame
+    - FRAME_TOPIC=vision/frame/preview
     - HINT_TOPIC=vision/hints
     - HINT_INTERVAL=2.0
     - HINT_TIMEOUT=4.0

@@ -34,7 +34,7 @@ DEBUG = os.getenv("PERCEPTION_DEBUG", "0").lower() not in {"0", "false", "no"}
 # --- Constants ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame")
+FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
 OBS_TOPIC = os.getenv("PERCEPTION_TOPIC", "vision/observation")
 YOLO_WEIGHTS = os.getenv("YOLO11_WEIGHTS", "/mnt/ssd/models/yolo/yolo11n.pt")
 YOLO_DEVICE = os.getenv("YOLO11_DEVICE", "cuda:0")

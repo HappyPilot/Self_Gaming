@@ -34,6 +34,10 @@ services:
       - MQTT_TOPIC_METRIC=vision/mean
       - MQTT_TOPIC_SNAPSHOT=vision/snapshot
       - VISION_FRAME_TOPIC=vision/frame/preview
+      - VISION_FRAME_PREVIEW_TOPIC=vision/frame/preview
+      - VISION_FRAME_FULL_TOPIC=vision/frame/full
+      - VISION_FRAME_PREVIEW_QUALITY=50
+      - VISION_FRAME_FULL_QUALITY=95
       - VISION_FRAME_INTERVAL=0.5
       - VISION_FRAME_JPEG_QUALITY=50
       - VISION_FRAME_ENABLED=1
@@ -130,7 +134,7 @@ services:
       context: .
       dockerfile: docker/ocr_easy/Dockerfile
     image: local/ocr-easy-agent:latest
-    # GPU не обязателен; если есть torch+CUDA в образе, агент сам использует GPU
+    # GPU optional; if CUDA is available in the image, the agent will use it.
     runtime: nvidia
     network_mode: host
     restart: unless-stopped

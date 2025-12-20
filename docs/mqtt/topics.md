@@ -21,6 +21,7 @@ All payloads are JSON.
   - vision/mean: grayscale mean brightness from vision_agent
   - vision/frame/preview: JPEG preview frames (base64, low quality)
   - vision/frame/full: JPEG full frames (base64, high quality)
+  - vision/frame: legacy alias (publish by setting VISION_FRAME_PREVIEW_TOPIC=vision/frame)
   - vision/snapshot: on-demand snapshot payload (base64)
   - vision/objects: object detections from object_detection_agent
   - vision/observation: fused perception payload from perception_agent
