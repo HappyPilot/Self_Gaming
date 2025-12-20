@@ -24,9 +24,13 @@ MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_TOPIC_CMD = os.environ.get("MQTT_TOPIC_CMD", "vision/cmd")
 MQTT_TOPIC_METRIC = os.environ.get("MQTT_TOPIC_METRIC", "vision/mean")
 MQTT_TOPIC_SNAPSHOT = os.environ.get("MQTT_TOPIC_SNAPSHOT", "vision/snapshot")
-MQTT_TOPIC_FRAME = os.environ.get("VISION_FRAME_TOPIC", "vision/frame")
+MQTT_TOPIC_FRAME = os.environ.get("VISION_FRAME_TOPIC", "vision/frame/preview")
+MQTT_TOPIC_FRAME_PREVIEW = os.environ.get("VISION_FRAME_PREVIEW_TOPIC", MQTT_TOPIC_FRAME)
+MQTT_TOPIC_FRAME_FULL = os.environ.get("VISION_FRAME_FULL_TOPIC", "vision/frame/full")
 FRAME_PUBLISH_INTERVAL = float(os.environ.get("VISION_FRAME_INTERVAL", "0.5"))
 FRAME_JPEG_QUALITY = int(os.environ.get("VISION_FRAME_JPEG_QUALITY", "70"))
+FRAME_PREVIEW_QUALITY = int(os.environ.get("VISION_FRAME_PREVIEW_QUALITY", FRAME_JPEG_QUALITY))
+FRAME_FULL_QUALITY = int(os.environ.get("VISION_FRAME_FULL_QUALITY", "95"))
 FRAME_STREAM_ENABLED = os.environ.get("VISION_FRAME_ENABLED", "1") not in {"0", "false", "False"}
 VISION_CONFIG_TOPIC = os.environ.get("VISION_CONFIG_TOPIC", "vision/config")
 VISION_STATUS_TOPIC = os.environ.get("VISION_STATUS_TOPIC", "vision/status")
@@ -199,10 +203,52 @@ class VisionAgent:
                 
                 if FRAME_STREAM_ENABLED and (now - self.last_frame_pub_ts) >= frame_interval:
                     self.last_frame_pub_ts = now
-                    ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), max(10, min(FRAME_JPEG_QUALITY, 95))])
-                    if ok:
-                        b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
-                        self.client.publish(MQTT_TOPIC_FRAME, json.dumps({"ok": True, "timestamp": now, "image_b64": b64, "width": frame.shape[1], "height": frame.shape[0]}), qos=0)
+                    preview_topic = MQTT_TOPIC_FRAME_PREVIEW or ""
+                    full_topic = MQTT_TOPIC_FRAME_FULL or ""
+                    if preview_topic:
+                        ok, jpg = cv2.imencode(
+                            ".jpg",
+                            frame,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), max(10, min(FRAME_PREVIEW_QUALITY, 95))],
+                        )
+                        if ok:
+                            b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+                            self.client.publish(
+                                preview_topic,
+                                json.dumps(
+                                    {
+                                        "ok": True,
+                                        "timestamp": now,
+                                        "image_b64": b64,
+                                        "width": frame.shape[1],
+                                        "height": frame.shape[0],
+                                        "variant": "preview",
+                                    }
+                                ),
+                                qos=0,
+                            )
+                    if full_topic and full_topic != preview_topic:
+                        ok, jpg = cv2.imencode(
+                            ".jpg",
+                            frame,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), max(10, min(FRAME_FULL_QUALITY, 95))],
+                        )
+                        if ok:
+                            b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+                            self.client.publish(
+                                full_topic,
+                                json.dumps(
+                                    {
+                                        "ok": True,
+                                        "timestamp": now,
+                                        "image_b64": b64,
+                                        "width": frame.shape[1],
+                                        "height": frame.shape[0],
+                                        "variant": "full",
+                                    }
+                                ),
+                                qos=0,
+                            )
 
                 if VISION_STATUS_TOPIC and (now - last_status_pub) >= VISION_STATUS_INTERVAL:
                     self.publish_status()

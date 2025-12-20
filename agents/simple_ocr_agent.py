@@ -25,7 +25,10 @@ stop_event = threading.Event()
 # Env
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-FRAME_TOPIC = os.getenv("FRAME_TOPIC", os.getenv("SIMPLE_OCR_FRAME_TOPIC", "vision/frame"))
+FRAME_TOPIC = os.getenv(
+    "FRAME_TOPIC",
+    os.getenv("SIMPLE_OCR_FRAME_TOPIC", os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")),
+)
 REGIONS_TOPIC = os.getenv("OCR_REGIONS_TOPIC", "ocr/regions")
 OUTPUT_TOPIC = os.getenv("SIMPLE_OCR_TOPIC", "simple_ocr/text")  # backward compatibility
 UNIFIED_TOPIC = os.getenv("OCR_UNIFIED_TOPIC", "ocr/unified")

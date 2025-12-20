@@ -20,7 +20,7 @@ logger = logging.getLogger("vision_hint_client")
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-FRAME_TOPIC = os.getenv("FRAME_TOPIC", "vision/frame")
+FRAME_TOPIC = os.getenv("FRAME_TOPIC", os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview"))
 HINT_TOPIC = os.getenv("HINT_TOPIC", "vision/hints")
 HINT_SERVER_URL = os.getenv("HINT_SERVER_URL", "")
 HINT_INTERVAL = float(os.getenv("HINT_INTERVAL", "2.0"))
