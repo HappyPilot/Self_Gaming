@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 
 from models.backbone import Backbone
+from utils.latency import emit_latency, get_sla_ms
 
 
 def _normalize_phrase(text: str) -> str:
@@ -60,6 +61,7 @@ TEACHER_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action")
 CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
 THRESH = float(os.getenv("THRESH", "120.0"))
 DEBOUNCE = float(os.getenv("DEBOUNCE", "0.25"))
+SLA_STAGE_POLICY_MS = get_sla_ms("SLA_STAGE_POLICY_MS")
 TEACHER_ALPHA_START = float(os.getenv("TEACHER_ALPHA_START", "1.0"))
 TEACHER_DECAY_STEPS = int(os.getenv("TEACHER_ALPHA_DECAY_STEPS", "500"))
 MIN_ALPHA = float(os.getenv("TEACHER_ALPHA_MIN", "0.0"))
@@ -405,6 +407,7 @@ class PolicyAgent:
                         logger.info("Received teacher action: %s", action_text)
             elif msg.topic == OBS_TOPIC or (SIM_TOPIC and msg.topic == SIM_TOPIC):
                 self.latest_state = data
+                policy_start = time.perf_counter()
                 policy_action = self._policy_from_observation(data)
                 if policy_action is None:
                     return
@@ -412,6 +415,15 @@ class PolicyAgent:
                 if final_action is None:
                     return
                 self._publish_action(client, final_action, policy_action)
+                policy_ms = (time.perf_counter() - policy_start) * 1000.0
+                emit_latency(
+                    client,
+                    "policy",
+                    policy_ms,
+                    sla_ms=SLA_STAGE_POLICY_MS,
+                    tags={"scene_ts": data.get("timestamp")},
+                    agent="policy_agent",
+                )
             elif GOAP_TOPIC and msg.topic == GOAP_TOPIC:
                 if data.get("status") == "pending":
                     self.task_queue.append(data)
