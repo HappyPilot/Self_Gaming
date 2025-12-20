@@ -23,7 +23,7 @@ services:
       - PYTHONUNBUFFERED=1
       - MQTT_HOST=mq
       - MQTT_PORT=1883
-      - FRAME_TOPIC=vision/frame
+      - FRAME_TOPIC=vision/frame/preview
       - MEAN_TOPIC=vision/mean
       - FRAME_INTERVAL=1.0
     depends_on:

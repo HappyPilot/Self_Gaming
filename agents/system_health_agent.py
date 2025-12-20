@@ -35,6 +35,8 @@ THRESHOLDS = {
 # Topics to map to services
 TOPIC_MAP = {
     "vision/mean": "vision",
+    "vision/frame/preview": "vision",
+    "vision/frame/full": "vision",
     "vision/frame": "vision",
     "scene/state": "scene",
     "act/cmd": "policy",

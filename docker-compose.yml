@@ -31,7 +31,11 @@ services:
     - MQTT_TOPIC_CMD=vision/cmd
     - MQTT_TOPIC_METRIC=vision/mean
     - MQTT_TOPIC_SNAPSHOT=vision/snapshot
-    - VISION_FRAME_TOPIC=vision/frame
+    - VISION_FRAME_TOPIC=vision/frame/preview
+    - VISION_FRAME_PREVIEW_TOPIC=vision/frame/preview
+    - VISION_FRAME_FULL_TOPIC=vision/frame/full
+    - VISION_FRAME_PREVIEW_QUALITY=50
+    - VISION_FRAME_FULL_QUALITY=95
     - VISION_FRAME_ENABLED=1
     - VIDEO_WIDTH=1280
     - VIDEO_HEIGHT=720
@@ -86,7 +90,7 @@ services:
     - PYTHONPATH=/app
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_FRAME_TOPIC=vision/frame
+    - VISION_FRAME_TOPIC=vision/frame/preview
     - CURSOR_TOPIC=cursor/state
     - CURSOR_MIN_AREA=5
     - CURSOR_MAX_AREA=12000
@@ -174,7 +178,7 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_FRAME_TOPIC=vision/frame
+    - VISION_FRAME_TOPIC=vision/frame/preview
     - SCENE_TOPIC=scene/state
     - CURSOR_TOPIC=cursor/state
     - ACT_CMD_TOPIC=act/cmd
@@ -346,7 +350,7 @@ services:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
     - SIMPLE_OCR_INTERVAL=2.5
-    - FRAME_TOPIC=vision/frame
+    - FRAME_TOPIC=vision/frame/preview
     - OCR_REGIONS_TOPIC=ocr/regions
     - OCR_UNIFIED_TOPIC=ocr/unified
     - REGION_TTL_SEC=5.0
@@ -380,7 +384,7 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_FRAME_TOPIC=vision/frame
+    - VISION_FRAME_TOPIC=vision/frame/preview
     - OBJECT_TOPIC=vision/objects
     - ZSD_MODEL_ID=google/owlvit-base-patch32
     - HF_HOME=/mnt/ssd/models/zeroshot/hf
@@ -822,7 +826,7 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_FRAME_TOPIC=vision/frame
+    - VISION_FRAME_TOPIC=vision/frame/preview
     - OBJECT_TOPIC=vision/objects
     - OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx
     - OBJECT_DEVICE=cpu
@@ -854,7 +858,7 @@ services:
     - PYTHONPATH=/app:/workspace:/opt/ultralytics_repo
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_FRAME_TOPIC=vision/frame
+    - VISION_FRAME_TOPIC=vision/frame/preview
     - PERCEPTION_TOPIC=vision/observation
     - YOLO11_WEIGHTS=/mnt/ssd/models/yolo/yolo11n.pt
     - YOLO11_DEVICE=cuda:0
@@ -896,7 +900,7 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - FRAME_TOPIC=vision/frame
+    - FRAME_TOPIC=vision/frame/preview
     - HINT_TOPIC=vision/hints
     - HINT_INTERVAL=2.0
     - HINT_TIMEOUT=4.0

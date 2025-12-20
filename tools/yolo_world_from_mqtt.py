@@ -32,7 +32,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mqtt-host", default="127.0.0.1")
     parser.add_argument("--mqtt-port", type=int, default=1883)
-    parser.add_argument("--frame-topic", default="vision/frame")
+    parser.add_argument("--frame-topic", default="vision/frame/preview")
     parser.add_argument("--topic", default="vision/observation")
     parser.add_argument("--model", default="/mnt/ssd/models/yolo/yolov8s-world.pt")
     parser.add_argument("--conf", type=float, default=0.05)
@@ -55,6 +55,8 @@ def main():
         ],
     )
     args = parser.parse_args()
+
+    print(f"[yolo_world_from_mqtt] frame topic: {args.frame_topic}", flush=True)
 
     model = YOLO(args.model)
     device = "cpu"  # force CPU to avoid GPU alloc issues on Jetson

@@ -33,9 +33,13 @@ services:
       - MQTT_TOPIC_CMD=vision/cmd
       - MQTT_TOPIC_METRIC=vision/mean
       - MQTT_TOPIC_SNAPSHOT=vision/snapshot
-      - VISION_FRAME_TOPIC=vision/frame
+      - VISION_FRAME_TOPIC=vision/frame/preview
+      - VISION_FRAME_PREVIEW_TOPIC=vision/frame/preview
+      - VISION_FRAME_FULL_TOPIC=vision/frame/full
+      - VISION_FRAME_PREVIEW_QUALITY=50
+      - VISION_FRAME_FULL_QUALITY=95
       - VISION_FRAME_INTERVAL=0.5
-      - VISION_FRAME_JPEG_QUALITY=70
+      - VISION_FRAME_JPEG_QUALITY=50
       - VISION_FRAME_ENABLED=1
       - VIDEO_DEVICE=/dev/video0
       - VIDEO_WIDTH=1920
@@ -130,7 +134,7 @@ services:
       context: .
       dockerfile: docker/ocr_easy/Dockerfile
     image: local/ocr-easy-agent:latest
-    # GPU не обязателен; если есть torch+CUDA в образе, агент сам использует GPU
+    # GPU optional; if CUDA is available in the image, the agent will use it.
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
@@ -586,7 +590,7 @@ services:
     environment:
       - MQTT_HOST=127.0.0.1
       - MQTT_PORT=1883
-      - VISION_FRAME_TOPIC=vision/frame
+      - VISION_FRAME_TOPIC=vision/frame/preview
       - OBJECT_TOPIC=vision/objects
       - OBJECT_DETECTOR_BACKEND=ultralytics
       - OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolov8n.pt

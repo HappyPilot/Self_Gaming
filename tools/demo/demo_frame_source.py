@@ -13,7 +13,7 @@ DEFAULT_IMAGE_B64 = (
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-FRAME_TOPIC = os.getenv("FRAME_TOPIC", "vision/frame")
+FRAME_TOPIC = os.getenv("FRAME_TOPIC", "vision/frame/preview")
 MEAN_TOPIC = os.getenv("MEAN_TOPIC", "vision/mean")
 FRAME_INTERVAL = float(os.getenv("FRAME_INTERVAL", "1.0"))
 LOG_EVERY = int(os.getenv("LOG_EVERY", "10"))

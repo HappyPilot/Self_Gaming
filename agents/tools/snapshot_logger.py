@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Subscribe to vision/frame and persist decoded frames to disk."""
+"""Subscribe to vision/frame/preview and persist decoded frames to disk."""
 import argparse
 import base64
 import json
@@ -12,10 +12,10 @@ import paho.mqtt.client as mqtt
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Store frames from vision/frame topic")
+    parser = argparse.ArgumentParser(description="Store frames from vision/frame/preview topic")
     parser.add_argument("--host", default=os.getenv("MQTT_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("MQTT_PORT", "1883")))
-    parser.add_argument("--topic", default=os.getenv("VISION_FRAME_TOPIC", "vision/frame"))
+    parser.add_argument("--topic", default=os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview"))
     parser.add_argument("--output", default="/mnt/ssd/datasets/snapshots")
     parser.add_argument("--interval", type=float, default=1.0, help="Seconds between saved frames")
     parser.add_argument("--max", type=int, default=0, help="Optional cap on number of frames to save (0=no limit)")

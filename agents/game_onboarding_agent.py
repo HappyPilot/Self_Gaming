@@ -24,7 +24,7 @@ logger = logging.getLogger("game_onboarding")
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame")
+FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
 SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 CURSOR_TOPIC = os.getenv("CURSOR_TOPIC", "cursor/state")
 ACT_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")

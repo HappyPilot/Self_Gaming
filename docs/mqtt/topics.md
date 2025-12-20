@@ -19,7 +19,9 @@ All payloads are JSON.
 ## Topic tree (key topics)
 - vision/
   - vision/mean: grayscale mean brightness from vision_agent
-  - vision/frame: JPEG frame payload (base64)
+  - vision/frame/preview: JPEG preview frames (base64, low quality)
+  - vision/frame/full: JPEG full frames (base64, high quality)
+  - vision/frame: legacy alias (publish by setting VISION_FRAME_PREVIEW_TOPIC=vision/frame)
   - vision/snapshot: on-demand snapshot payload (base64)
   - vision/objects: object detections from object_detection_agent
   - vision/observation: fused perception payload from perception_agent
@@ -44,15 +46,29 @@ All payloads are JSON.
 
 ## Payload examples
 
-### vision/frame
-Required: ok, timestamp, image_b64, width, height
+### vision/frame/preview
+Required: ok, timestamp, image_b64, width, height, variant
 ```json
 {
   "ok": true,
   "timestamp": 1712345678.1,
   "image_b64": "...",
   "width": 1280,
-  "height": 720
+  "height": 720,
+  "variant": "preview"
+}
+```
+
+### vision/frame/full
+Required: ok, timestamp, image_b64, width, height, variant
+```json
+{
+  "ok": true,
+  "timestamp": 1712345678.1,
+  "image_b64": "...",
+  "width": 1280,
+  "height": 720,
+  "variant": "full"
 }
 ```
 
