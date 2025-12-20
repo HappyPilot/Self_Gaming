@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Subscribe to vision/frame/preview and persist decoded frames to disk."""
 import argparse
-import base64
 import json
 import os
 import time
@@ -9,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
+
+from utils.frame_transport import get_frame_bytes
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,12 +44,8 @@ def main():
             payload = json.loads(msg.payload.decode("utf-8"))
         except json.JSONDecodeError:
             return
-        b64 = payload.get("image_b64")
-        if not b64:
-            return
-        try:
-            data = base64.b64decode(b64)
-        except Exception:
+        data = get_frame_bytes(payload)
+        if not data:
             return
         fname = output_dir / f"frame_{state['count']:06d}.jpg"
         with open(fname, "wb") as handle:

@@ -1,6 +1,6 @@
 import unittest
 
-from agents.utils.latency import build_control_event, build_latency_event
+from utils.latency import build_control_event, build_latency_event
 
 
 class LatencyUtilsTest(unittest.TestCase):

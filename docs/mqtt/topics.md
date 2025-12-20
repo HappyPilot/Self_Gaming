@@ -47,7 +47,7 @@ All payloads are JSON.
 ## Payload examples
 
 ### vision/frame/preview
-Required: ok, timestamp, image_b64, width, height, variant
+Required: ok, timestamp, width, height, variant, image_b64 (or shm descriptor when FRAME_TRANSPORT=shm)
 ```json
 {
   "ok": true,
@@ -59,8 +59,25 @@ Required: ok, timestamp, image_b64, width, height, variant
 }
 ```
 
+If FRAME_TRANSPORT=shm, publish a descriptor instead of image_b64:
+```json
+{
+  "ok": true,
+  "timestamp": 1712345678.1,
+  "transport": "shm",
+  "encoding": "jpeg",
+  "shm_name": "sg_frame_1234_abcd_0",
+  "shm_size": 235421,
+  "shm_seq": 42,
+  "width": 1280,
+  "height": 720,
+  "variant": "preview"
+}
+```
+Note: SHM transport requires a shared IPC namespace for vision_agent and all consumers (ipc: host or ipc: service:mq) and enough shm_size.
+
 ### vision/frame/full
-Required: ok, timestamp, image_b64, width, height, variant
+Required: ok, timestamp, width, height, variant, image_b64 (or shm descriptor when FRAME_TRANSPORT=shm)
 ```json
 {
   "ok": true,

@@ -27,6 +27,7 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 
+from utils.frame_transport import get_frame_bytes
 from utils.latency import emit_latency, get_sla_ms
 logger = logging.getLogger("object_detection_agent")
 logging.basicConfig(level=os.getenv("OBJECT_LOG_LEVEL", "INFO"))
@@ -136,11 +137,14 @@ class Detection:
         return {"class": self.label, "confidence": round(self.confidence, 4), "box": [round(v, 2) for v in self.box]}
 
 
-def decode_frame(image_b64: str) -> Optional[np.ndarray]:
-    if not image_b64:
+def decode_frame(image_payload: str | bytes) -> Optional[np.ndarray]:
+    if not image_payload:
         return None
     try:
-        buffer = base64.b64decode(image_b64)
+        if isinstance(image_payload, str):
+            buffer = base64.b64decode(image_payload)
+        else:
+            buffer = image_payload
         array = np.frombuffer(buffer, dtype=np.uint8)
         return cv2.imdecode(array, cv2.IMREAD_COLOR)
     except Exception as exc:
@@ -391,7 +395,8 @@ class ObjectDetectionAgent:
                 logger.debug("Non-JSON frame payload dropped in worker")
                 continue
 
-            frame = decode_frame(payload.get("image_b64", ""))
+            frame_bytes = get_frame_bytes(payload)
+            frame = decode_frame(frame_bytes)
             if frame is None:
                 continue
 

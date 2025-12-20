@@ -2,7 +2,6 @@
 """Perception agent that fuses YOLO11 detections + OCR into GameObservation."""
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -24,6 +23,7 @@ from vision.ocr_backends import NullOcrBackend, build_ocr_backend
 from vision.perception import PerceptionPipeline
 from vision.player_locator import PlayerLocator, PlayerLocatorConfig
 from vision.regions import TEXT_REGIONS
+from utils.frame_transport import get_frame_bytes
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("PERCEPTION_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -66,11 +66,11 @@ def _as_int(code) -> int:
     except (TypeError, ValueError): return 0
 
 def decode_frame(message: dict) -> np.ndarray | None:
-    encoded = message.get("image_b64")
-    if not encoded: return None
+    data = get_frame_bytes(message)
+    if not data:
+        return None
     try:
-        buffer = base64.b64decode(encoded)
-        array = np.frombuffer(buffer, dtype=np.uint8)
+        array = np.frombuffer(data, dtype=np.uint8)
         frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
         if frame is None:
             raise ValueError("cv2.imdecode returned None")

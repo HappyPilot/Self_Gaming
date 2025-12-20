@@ -2,7 +2,6 @@
 """Universal OCR fast path: run Tesseract on dynamic ROIs from ui_region_agent."""
 from __future__ import annotations
 
-import base64
 import io
 import json
 import logging
@@ -16,6 +15,8 @@ from typing import Dict, List
 import paho.mqtt.client as mqtt
 import pytesseract
 from PIL import Image, ImageEnhance, ImageOps
+
+from utils.frame_transport import get_frame_bytes
 
 # Logging / setup
 logging.basicConfig(level=os.getenv("SIMPLE_OCR_LOG_LEVEL", "INFO"))
@@ -78,15 +79,11 @@ class SimpleOcrAgent:
             return
 
         if msg.topic == FRAME_TOPIC:
-            b64 = payload.get("image_b64")
-            if not b64:
+            raw = get_frame_bytes(payload)
+            if not raw:
                 return
-            try:
-                raw = base64.b64decode(b64)
-                with self.frame_lock:
-                    self.last_frame = raw
-            except Exception as exc:
-                logger.warning("Frame decode failed: %s", exc)
+            with self.frame_lock:
+                self.last_frame = raw
         elif msg.topic == REGIONS_TOPIC:
             regions = payload.get("regions") or []
             with self.frame_lock:

@@ -2,7 +2,6 @@
 """Hint client: sends frames to external vision server for heavy open-vocab detection."""
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -14,6 +13,8 @@ from typing import Any, Dict, Optional
 
 import paho.mqtt.client as mqtt
 import requests
+
+from utils.frame_transport import get_frame_b64
 
 logging.basicConfig(level=os.getenv("HINT_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("vision_hint_client")
@@ -72,8 +73,11 @@ class HintClient:
 
     # Networking
     def _post_frame(self, frame: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        frame_b64 = get_frame_b64(frame)
+        if not frame_b64:
+            return None
         data = {
-            "image_b64": frame.get("image_b64"),
+            "image_b64": frame_b64,
             "frame_id": frame.get("frame_id"),
             "frame_ts": frame.get("timestamp"),
         }
@@ -110,8 +114,6 @@ class HintClient:
                     continue
                 now = time.time()
                 if now - self.last_sent < HINT_INTERVAL:
-                    continue
-                if not isinstance(frame.get("image_b64"), str):
                     continue
                 result = self._post_frame(frame)
                 if result is not None:

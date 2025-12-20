@@ -12,6 +12,7 @@ import numpy as np
 import paho.mqtt.client as mqtt
 
 from utils.latency import emit_latency, get_sla_ms
+from utils.frame_transport import SHM_AVAILABLE, ShmFrameRing, get_transport_mode
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("VISION_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -31,6 +32,10 @@ FRAME_PUBLISH_INTERVAL = float(os.environ.get("VISION_FRAME_INTERVAL", "0.5"))
 FRAME_JPEG_QUALITY = int(os.environ.get("VISION_FRAME_JPEG_QUALITY", "70"))
 FRAME_PREVIEW_QUALITY = int(os.environ.get("VISION_FRAME_PREVIEW_QUALITY", FRAME_JPEG_QUALITY))
 FRAME_FULL_QUALITY = int(os.environ.get("VISION_FRAME_FULL_QUALITY", "95"))
+FRAME_TRANSPORT = get_transport_mode()
+FRAME_SHM_MAX_BYTES = int(os.environ.get("FRAME_SHM_MAX_BYTES", str(5 * 1024 * 1024)))
+FRAME_SHM_SLOTS = int(os.environ.get("FRAME_SHM_SLOTS", "8"))
+FRAME_SHM_PREFIX = os.environ.get("FRAME_SHM_PREFIX", "sg_frame")
 FRAME_STREAM_ENABLED = os.environ.get("VISION_FRAME_ENABLED", "1") not in {"0", "false", "False"}
 VISION_CONFIG_TOPIC = os.environ.get("VISION_CONFIG_TOPIC", "vision/config")
 VISION_STATUS_TOPIC = os.environ.get("VISION_STATUS_TOPIC", "vision/status")
@@ -74,6 +79,60 @@ class VisionAgent:
         self.current_mode = VISION_MODE_DEFAULT if VISION_MODE_DEFAULT in MODE_FRAME_INTERVALS else "medium"
         self.current_frame_interval = MODE_FRAME_INTERVALS[self.current_mode]
         self.last_config_reason = "default"
+        self.frame_transport = FRAME_TRANSPORT
+        self._last_shm_fallback_log = 0.0
+        self.shm_ring = None
+        if self.frame_transport == "shm":
+            if not SHM_AVAILABLE:
+                logger.warning("FRAME_TRANSPORT=shm requested but shared_memory is unavailable; falling back to mqtt")
+                self.frame_transport = "mqtt"
+            else:
+                self.shm_ring = ShmFrameRing(FRAME_SHM_MAX_BYTES, FRAME_SHM_SLOTS, FRAME_SHM_PREFIX)
+                logger.info(
+                    "SHM transport enabled (slots=%s, max_bytes=%s, prefix=%s)",
+                    FRAME_SHM_SLOTS,
+                    FRAME_SHM_MAX_BYTES,
+                    FRAME_SHM_PREFIX,
+                )
+
+    def _build_frame_payload(self, frame: np.ndarray, quality: int, variant: str, timestamp: float) -> dict | None:
+        ok, jpg = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), max(10, min(quality, 95))],
+        )
+        if not ok:
+            return None
+        jpg_bytes = jpg.tobytes()
+        payload = {
+            "ok": True,
+            "timestamp": timestamp,
+            "width": frame.shape[1],
+            "height": frame.shape[0],
+            "variant": variant,
+        }
+        if self.frame_transport == "shm" and self.shm_ring:
+            desc = self.shm_ring.write(jpg_bytes)
+            if not desc:
+                now = time.time()
+                if now - self._last_shm_fallback_log >= 5.0:
+                    logger.warning(
+                        "SHM write failed (size=%s, max=%s); falling back to mqtt",
+                        len(jpg_bytes),
+                        self.shm_ring.max_bytes,
+                    )
+                    self._last_shm_fallback_log = now
+                return self._build_base64_payload(payload, jpg_bytes)
+            payload.update(desc)
+            payload["transport"] = "shm"
+            payload["encoding"] = "jpeg"
+            return payload
+        return self._build_base64_payload(payload, jpg_bytes)
+
+    def _build_base64_payload(self, payload: dict, jpg_bytes: bytes) -> dict:
+        b64 = base64.b64encode(jpg_bytes).decode("ascii")
+        payload["image_b64"] = b64
+        return payload
 
     def _on_connect(self, client, userdata, flags, rc):
         if _as_int(rc) == 0:
@@ -212,47 +271,15 @@ class VisionAgent:
                     if legacy_topic and legacy_topic not in preview_topics and legacy_topic != full_topic:
                         preview_topics.append(legacy_topic)
                     if preview_topics:
-                        ok, jpg = cv2.imencode(
-                            ".jpg",
-                            frame,
-                            [int(cv2.IMWRITE_JPEG_QUALITY), max(10, min(FRAME_PREVIEW_QUALITY, 95))],
-                        )
-                        if ok:
-                            b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
-                            payload = json.dumps(
-                                {
-                                    "ok": True,
-                                    "timestamp": now,
-                                    "image_b64": b64,
-                                    "width": frame.shape[1],
-                                    "height": frame.shape[0],
-                                    "variant": "preview",
-                                }
-                            )
+                        payload = self._build_frame_payload(frame, FRAME_PREVIEW_QUALITY, "preview", now)
+                        if payload:
+                            packed = json.dumps(payload)
                             for topic in preview_topics:
-                                self.client.publish(topic, payload, qos=0)
-                    if full_topic and full_topic != preview_topic:
-                        ok, jpg = cv2.imencode(
-                            ".jpg",
-                            frame,
-                            [int(cv2.IMWRITE_JPEG_QUALITY), max(10, min(FRAME_FULL_QUALITY, 95))],
-                        )
-                        if ok:
-                            b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
-                            self.client.publish(
-                                full_topic,
-                                json.dumps(
-                                    {
-                                        "ok": True,
-                                        "timestamp": now,
-                                        "image_b64": b64,
-                                        "width": frame.shape[1],
-                                        "height": frame.shape[0],
-                                        "variant": "full",
-                                    }
-                                ),
-                                qos=0,
-                            )
+                                self.client.publish(topic, packed, qos=0)
+                    if full_topic and full_topic not in preview_topics:
+                        payload = self._build_frame_payload(frame, FRAME_FULL_QUALITY, "full", now)
+                        if payload:
+                            self.client.publish(full_topic, json.dumps(payload), qos=0)
 
                 if VISION_STATUS_TOPIC and (now - last_status_pub) >= VISION_STATUS_INTERVAL:
                     self.publish_status()
@@ -262,6 +289,8 @@ class VisionAgent:
         finally:
             cap.release()
             self.client.loop_stop()
+            if self.shm_ring:
+                self.shm_ring.close()
             self.client.disconnect()
             logger.info("Vision agent shut down cleanly.")
 
