@@ -1,6 +1,14 @@
 # MQTT Topics
 
-All payloads are JSON. Many producers include "ok": true and "timestamp", but not every topic guarantees those fields.
+All payloads are JSON.
+
+## Conventions
+- ok: boolean success flag. When ok is false, an "error" string may be present.
+- timestamp: Unix seconds (float). Required on some topics only.
+- Bounding boxes:
+  - vision/objects uses "box" in pixel XYXY format: [x1, y1, x2, y2].
+  - vision/observation and scene/state use "bbox" in normalized XYXY format: [x1, y1, x2, y2] with values in [0, 1].
+  - ocr_easy/text results use "box" in normalized XYWH format: [x, y, w, h] with values in [0, 1].
 
 ## Topic tree (key topics)
 - vision/
@@ -30,6 +38,7 @@ All payloads are JSON. Many producers include "ok": true and "timestamp", but no
 ## Payload examples
 
 ### vision/frame
+Required: ok, timestamp, image_b64, width, height
 ```json
 {
   "ok": true,
@@ -41,6 +50,7 @@ All payloads are JSON. Many producers include "ok": true and "timestamp", but no
 ```
 
 ### vision/mean
+Required: ok, mean, timestamp
 ```json
 {
   "ok": true,
@@ -50,6 +60,7 @@ All payloads are JSON. Many producers include "ok": true and "timestamp", but no
 ```
 
 ### vision/objects
+Required: ok, timestamp, objects
 ```json
 {
   "ok": true,
@@ -61,34 +72,41 @@ All payloads are JSON. Many producers include "ok": true and "timestamp", but no
 }
 ```
 
-Note: box coordinates are in the producer coordinate space (pixel or normalized), depending on the detector backend.
+Note: object_detection_agent publishes pixel boxes in XYXY format.
 
 ### ocr_easy/text
+Required: ok, text, results, backend
 ```json
 {
   "ok": true,
   "text": "Play",
-  "backend": "paddle",
+  "backend": "easyocr",
   "results": [
     {"text": "Play", "conf": 0.92, "box": [0.12, 0.18, 0.15, 0.06]}
   ]
 }
 ```
 
+Note: backend is "paddle" or "easyocr" depending on OCR_BACKEND.
+
 ### scene/state
+Required: ok, event, mean, text, objects, timestamp
 ```json
 {
   "ok": true,
   "event": "scene_update",
   "mean": 0.44,
   "text": ["Play"],
-  "objects": [{"label": "enemy", "confidence": 0.82, "bbox": [120, 80, 260, 240]}],
-  "player": {"label": "player", "confidence": 0.5, "bbox": [400, 200, 520, 480]},
+  "objects": [{"label": "enemy", "confidence": 0.82, "bbox": [0.12, 0.08, 0.26, 0.24]}],
+  "player": {"label": "player", "confidence": 0.5, "bbox": [0.4, 0.2, 0.52, 0.48]},
   "timestamp": 1712345678.2
 }
 ```
 
+Note: when scene/state is built from vision/observation (perception_agent), bbox values are normalized.
+
 ### act/cmd
+Required: action
 ```json
 {
   "action": "click",
@@ -99,16 +117,18 @@ Note: box coordinates are in the producer coordinate space (pixel or normalized)
 ```
 
 ### teacher/action
+Required: ok, text, timestamp
 ```json
 {
   "ok": true,
-  "action": "click_play",
-  "reasoning": "Detected main menu with Play button",
-  "timestamp": 1712345678.4
+  "text": "Click the Play button",
+  "timestamp": 1712345678.4,
+  "game_id": "poe"
 }
 ```
 
 ### train/reward
+Required: ok, reward, timestamp
 ```json
 {
   "ok": true,
