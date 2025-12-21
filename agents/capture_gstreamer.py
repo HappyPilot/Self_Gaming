@@ -19,14 +19,16 @@ def build_gstreamer_pipeline(
     if override:
         return override
 
-    source = os.getenv("GST_SOURCE", "v4l2src").strip()
-    if source == "v4l2src":
+    source_name = os.getenv("GST_SOURCE", "v4l2src").strip()
+    source = source_name
+    if source_name == "v4l2src":
         source = f"v4l2src device={device}"
-    elif source == "nvarguscamerasrc":
+    elif source_name == "nvarguscamerasrc":
         sensor_id = _int_env("GST_SENSOR_ID", 0)
         source = f"nvarguscamerasrc sensor-id={sensor_id}"
 
-    caps = ["video/x-raw"]
+    use_nvmm_caps = use_nvmm and source_name == "nvarguscamerasrc"
+    caps = ["video/x-raw(memory:NVMM)" if use_nvmm_caps else "video/x-raw"]
     if width > 0:
         caps.append(f"width={width}")
     if height > 0:

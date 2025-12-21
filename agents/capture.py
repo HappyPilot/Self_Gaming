@@ -1,5 +1,6 @@
 import logging
 import os
+import platform
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -69,16 +70,35 @@ class OpenCvCapture(CaptureAdapter):
         self._height = int(os.getenv("VIDEO_HEIGHT", "0"))
         self._fps = float(os.getenv("VIDEO_FPS", "0"))
         self._pixfmt = os.getenv("VIDEO_PIXFMT", "")[:4]
+        self._opencv_backend = None
+
+    def _resolve_backend(self, device: str) -> int:
+        override = os.getenv("OPENCV_BACKEND", "").strip().lower()
+        if override:
+            if override == "any":
+                return cv2.CAP_ANY
+            if override == "v4l2":
+                return getattr(cv2, "CAP_V4L2", cv2.CAP_ANY)
+            if override == "avfoundation":
+                return getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY)
+            if override == "msmf":
+                return getattr(cv2, "CAP_MSMF", cv2.CAP_ANY)
+            return cv2.CAP_ANY
+        if platform.system().lower() == "linux" and str(device).startswith("/dev/video"):
+            return getattr(cv2, "CAP_V4L2", cv2.CAP_ANY)
+        return cv2.CAP_ANY
 
     def start(self) -> bool:
         candidates = [self._device] + self._fallbacks
         for cand_str in candidates:
             cand = int(cand_str) if cand_str.isdigit() else cand_str
-            cap = cv2.VideoCapture(cand, cv2.CAP_V4L2)
+            backend = self._resolve_backend(cand_str)
+            cap = cv2.VideoCapture(cand, backend)
             if cap.isOpened():
                 self._configure_capture(cap)
                 self._cap = cap
                 self._active_device = cand
+                self._opencv_backend = backend
                 return True
             cap.release()
         return False
@@ -110,7 +130,7 @@ class OpenCvCapture(CaptureAdapter):
             self._cap = None
 
     def describe(self) -> str:
-        return f"v4l2 device={self._active_device}"
+        return f"opencv device={self._active_device} backend={self._opencv_backend}"
 
 
 class GStreamerCapture(CaptureAdapter):

@@ -35,6 +35,7 @@ FRAME_PREVIEW_QUALITY = int(os.environ.get("VISION_FRAME_PREVIEW_QUALITY", FRAME
 FRAME_FULL_QUALITY = int(os.environ.get("VISION_FRAME_FULL_QUALITY", "95"))
 FRAME_TRANSPORT = get_transport_mode()
 CAPTURE_BACKEND = os.environ.get("CAPTURE_BACKEND", "v4l2")
+CAPTURE_BACKEND_FALLBACKS = os.environ.get("CAPTURE_BACKEND_FALLBACKS", "")
 FRAME_SHM_MAX_BYTES = int(os.environ.get("FRAME_SHM_MAX_BYTES", str(5 * 1024 * 1024)))
 FRAME_SHM_SLOTS = int(os.environ.get("FRAME_SHM_SLOTS", "8"))
 FRAME_SHM_PREFIX = os.environ.get("FRAME_SHM_PREFIX", "sg_frame")
@@ -207,13 +208,27 @@ class VisionAgent:
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
         self.client.loop_start()
 
-        capture = build_capture_backend(CAPTURE_BACKEND)
-        if not capture.start():
-            logger.error("Failed to start capture backend %s; falling back to dummy", CAPTURE_BACKEND)
-            capture = build_capture_backend("dummy")
-            if not capture.start():
-                logger.critical("Failed to start dummy capture backend")
-                return
+        fallback_list = [v.strip() for v in CAPTURE_BACKEND_FALLBACKS.split(",") if v.strip()]
+        if not fallback_list:
+            if CAPTURE_BACKEND in {"gstreamer", "gst"}:
+                fallback_list = ["v4l2", "dummy"]
+            else:
+                fallback_list = ["dummy"]
+        backend_candidates = []
+        for name in [CAPTURE_BACKEND] + fallback_list:
+            if name and name not in backend_candidates:
+                backend_candidates.append(name)
+
+        capture = None
+        for name in backend_candidates:
+            candidate = build_capture_backend(name)
+            if candidate.start():
+                capture = candidate
+                break
+            logger.warning("Capture backend %s failed to start", name)
+        if capture is None:
+            logger.critical("Failed to start capture backends: %s", backend_candidates)
+            return
         logger.info("Capture backend started: %s (%s)", capture.name, capture.describe())
         
         last_status_pub = 0
