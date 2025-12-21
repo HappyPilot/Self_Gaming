@@ -30,4 +30,6 @@ python -c "import onnx; onnx.load('/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx')"
 
 ## Notes
 - `OBJECT_MODEL_PATH` in `config/defaults.env` expects an ONNX model path when `OBJECT_DETECTOR_BACKEND=onnx`.
+- `perception_agent` uses `DETECTOR_BACKEND` / `YOLO11_*` separately; this doc targets the object detection agent's ONNX path.
 - Use `--dynamic` only if you need variable input sizes; static inputs are generally faster.
+- If your runtime needs a newer opset (for example TensorRT), try `--opset 17`.

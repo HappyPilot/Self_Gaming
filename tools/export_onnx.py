@@ -12,7 +12,7 @@ except Exception as exc:  # pragma: no cover - script run manually
     raise SystemExit(f"Failed to import ultralytics. Install it first: pip install ultralytics -- reason: {exc}")
 
 
-def resolve_export_path(exported, search_dirs: list[Path]) -> Path:
+def resolve_export_path(exported, search_dirs: list[Path], weights_stem: str | None) -> Path:
     candidates: list[Path] = []
     if isinstance(exported, (str, Path)):
         candidates.append(Path(exported))
@@ -26,6 +26,10 @@ def resolve_export_path(exported, search_dirs: list[Path]) -> Path:
             if value:
                 candidates.append(Path(value))
 
+    if weights_stem:
+        for candidate in candidates:
+            if candidate.exists() and weights_stem in candidate.stem:
+                return candidate
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -33,6 +37,10 @@ def resolve_export_path(exported, search_dirs: list[Path]) -> Path:
     for directory in search_dirs:
         if not directory.exists():
             continue
+        if weights_stem:
+            matches = list(directory.glob(f"*{weights_stem}*.onnx"))
+            if matches:
+                return max(matches, key=lambda p: p.stat().st_mtime)
         newest = max(directory.glob("*.onnx"), key=lambda p: p.stat().st_mtime, default=None)
         if newest:
             return newest
@@ -63,7 +71,7 @@ def export_onnx(
         device=device,
         half=half,
     )
-    export_path = resolve_export_path(exported, [weights.parent, Path.cwd()])
+    export_path = resolve_export_path(exported, [weights.parent, Path.cwd()], weights.stem)
 
     if output is None:
         return export_path
