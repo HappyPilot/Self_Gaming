@@ -94,6 +94,10 @@ For INT8, supply a calibration cache file:
 CALIB_CACHE=/mnt/ssd/models/yolo/calibration.cache IMG_W=416 IMG_H=416 INPUT_NAME=images tools/build_trt_engine.sh /mnt/ssd/models/yolo/yolo11n_416_fp32.onnx int8
 ```
 
+Notes:
+- Set `FORCE=1` to rebuild an existing engine.
+- Set `EXPLICIT_BATCH=0` if your TensorRT version does not accept `--explicitBatch`.
+
 ## SHM Transport (Optional)
 If you enable `FRAME_TRANSPORT=shm`, every container that reads frames must share IPC:
 - use `ipc: host` (or `ipc: "service:mq"`) for vision and all consumers
