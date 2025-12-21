@@ -97,6 +97,7 @@ CALIB_CACHE=/mnt/ssd/models/yolo/calibration.cache IMG_W=416 IMG_H=416 INPUT_NAM
 Notes:
 - Set `FORCE=1` to rebuild an existing engine.
 - Set `EXPLICIT_BATCH=0` if your TensorRT version does not accept `--explicitBatch`.
+- Set `CALIB_FLAG=calibCache` or `CALIB_FLAG=calibFile` if your `trtexec` uses a different INT8 flag.
 
 ## SHM Transport (Optional)
 If you enable `FRAME_TRANSPORT=shm`, every container that reads frames must share IPC:

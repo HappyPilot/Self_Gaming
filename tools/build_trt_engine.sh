@@ -22,18 +22,20 @@ MAX_BATCH="${MAX_BATCH:-1}"
 WORKSPACE_MB="${WORKSPACE_MB:-4096}"
 WORKSPACE_BYTES=$((WORKSPACE_MB * 1024 * 1024))
 OUTPUT_DIR="${OUTPUT_DIR:-$(dirname "$WEIGHTS")}"
-ENGINE_NAME="${ENGINE_NAME:-$(basename "${WEIGHTS%.*}")_${IMG_W}_${PRECISION}.engine}"
+ENGINE_NAME="${ENGINE_NAME:-$(basename "${WEIGHTS%.*}")_${IMG_W}x${IMG_H}_${PRECISION}.engine}"
 CALIB_DATA="${CALIB_DATA:-}"
 CALIB_CACHE="${CALIB_CACHE:-${OUTPUT_DIR}/calibration.cache}"
 FORCE_CALIB="${FORCE_CALIB:-0}"
 EXPLICIT_BATCH="${EXPLICIT_BATCH:-1}"
 FORCE="${FORCE:-0}"
+CALIB_FLAG="${CALIB_FLAG:-calib}"
 
 mkdir -p "$OUTPUT_DIR"
 ENGINE_PATH="${OUTPUT_DIR}/${ENGINE_NAME}"
 
 echo "[info] input=${INPUT_NAME} shape=${MAX_BATCH}x3x${IMG_H}x${IMG_W}"
 echo "[info] workspace=${WORKSPACE_MB}MB (${WORKSPACE_BYTES} bytes)"
+echo "[info] batch=${MAX_BATCH} (fixed)"
 
 if [[ -f "$ENGINE_PATH" && "$FORCE" != "1" ]]; then
   echo "[skip] engine exists: $ENGINE_PATH (set FORCE=1 to rebuild)"
@@ -69,8 +71,11 @@ elif [[ "$PRECISION" == "int8" ]]; then
     echo "[hint] Set FORCE_CALIB=1 to bypass this check" >&2
     exit 1
   fi
+  if [[ "$FORCE_CALIB" == "1" ]]; then
+    echo "[warn] FORCE_CALIB=1 set; skipping cache existence check" >&2
+  fi
   echo "[info] building INT8 engine: $ENGINE_PATH"
-  "$TRT_EXEC" "${COMMON_ARGS[@]}" --int8 --calib="${CALIB_CACHE}"
+  "$TRT_EXEC" "${COMMON_ARGS[@]}" --int8 "--${CALIB_FLAG}=${CALIB_CACHE}"
 else
   echo "[error] Unknown precision: $PRECISION (use fp16 or int8)" >&2
   exit 1
