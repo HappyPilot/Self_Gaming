@@ -312,8 +312,20 @@ def build_detector() -> BaseDetector:
     if DETECTOR_BACKEND in {"ultralytics", "torch", "trt", "tensorrt"}:
         try:
             if DETECTOR_BACKEND in {"trt", "tensorrt"} and not MODEL_PATH.endswith(".engine"):
-                logger.warning("TRT backend expects a .engine model (OBJECT_MODEL_PATH=%s)", MODEL_PATH)
-            return UltralyticsDetector(MODEL_PATH, DEVICE, CONF_THRESHOLD, IMG_SIZE)
+                logger.warning(
+                    "DETECTOR_BACKEND=%s expects .engine model; OBJECT_MODEL_PATH=%s",
+                    DETECTOR_BACKEND,
+                    MODEL_PATH,
+                )
+            detector = UltralyticsDetector(MODEL_PATH, DEVICE, CONF_THRESHOLD, IMG_SIZE)
+            logger.info(
+                "Detector init: backend=%s impl=UltralyticsDetector model=%s device=%s imgsz=%s",
+                DETECTOR_BACKEND,
+                MODEL_PATH,
+                DEVICE,
+                IMG_SIZE,
+            )
+            return detector
         except Exception as exc:
             logger.error("Failed to init Ultralytics detector: %s", exc)
     elif DETECTOR_BACKEND == "onnx":
