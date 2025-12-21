@@ -86,12 +86,12 @@ Useful env vars:
 ## TensorRT Engine Build (Optional)
 Build FP16/INT8 engines with `trtexec`:
 ```bash
-tools/build_trt_engine.sh /mnt/ssd/models/yolo/yolo11n_416_fp32.onnx fp16
+IMG_W=416 IMG_H=416 INPUT_NAME=images tools/build_trt_engine.sh /mnt/ssd/models/yolo/yolo11n_416_fp32.onnx fp16
 ```
 
-For INT8, supply a calibration image folder:
+For INT8, supply a calibration cache file:
 ```bash
-CALIB_DATA=/mnt/ssd/datasets/calib tools/build_trt_engine.sh /mnt/ssd/models/yolo/yolo11n_416_fp32.onnx int8
+CALIB_CACHE=/mnt/ssd/models/yolo/calibration.cache IMG_W=416 IMG_H=416 INPUT_NAME=images tools/build_trt_engine.sh /mnt/ssd/models/yolo/yolo11n_416_fp32.onnx int8
 ```
 
 ## SHM Transport (Optional)
