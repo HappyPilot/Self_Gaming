@@ -208,6 +208,7 @@ class VisionAgent:
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
         self.client.loop_start()
 
+        capture = None
         fallback_list = [v.strip() for v in CAPTURE_BACKEND_FALLBACKS.split(",") if v.strip()]
         if not fallback_list:
             if CAPTURE_BACKEND in {"gstreamer", "gst"}:
@@ -219,7 +220,6 @@ class VisionAgent:
             if name and name not in backend_candidates:
                 backend_candidates.append(name)
 
-        capture = None
         for name in backend_candidates:
             candidate = build_capture_backend(name)
             if candidate.start():
@@ -287,7 +287,8 @@ class VisionAgent:
                 
                 stop_event.wait(0.05)
         finally:
-            capture.stop()
+            if capture:
+                capture.stop()
             self.client.loop_stop()
             if self.shm_ring:
                 self.shm_ring.close()
