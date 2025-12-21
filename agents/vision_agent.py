@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 
+from capture import build_capture_backend
 from utils.latency import emit_latency, get_sla_ms
 from utils.frame_transport import SHM_AVAILABLE, ShmFrameRing, get_transport_mode
 
@@ -33,6 +34,8 @@ FRAME_JPEG_QUALITY = int(os.environ.get("VISION_FRAME_JPEG_QUALITY", "70"))
 FRAME_PREVIEW_QUALITY = int(os.environ.get("VISION_FRAME_PREVIEW_QUALITY", FRAME_JPEG_QUALITY))
 FRAME_FULL_QUALITY = int(os.environ.get("VISION_FRAME_FULL_QUALITY", "95"))
 FRAME_TRANSPORT = get_transport_mode()
+CAPTURE_BACKEND = os.environ.get("CAPTURE_BACKEND", "v4l2")
+CAPTURE_BACKEND_FALLBACKS = os.environ.get("CAPTURE_BACKEND_FALLBACKS", "")
 FRAME_SHM_MAX_BYTES = int(os.environ.get("FRAME_SHM_MAX_BYTES", str(5 * 1024 * 1024)))
 FRAME_SHM_SLOTS = int(os.environ.get("FRAME_SHM_SLOTS", "8"))
 FRAME_SHM_PREFIX = os.environ.get("FRAME_SHM_PREFIX", "sg_frame")
@@ -200,53 +203,50 @@ class VisionAgent:
             self.client.publish(VISION_STATUS_TOPIC, json.dumps(payload), qos=0, retain=False)
         except Exception as e:
             logger.warning(f"Failed to publish status: {e}")
-    
-    def _open_capture(self):
-        candidates = [VIDEO_DEVICE] + VIDEO_FALLBACKS
-        for cand_str in candidates:
-            if not cand_str: continue
-            cand = int(cand_str) if cand_str.isdigit() else cand_str
-            cap = cv2.VideoCapture(cand, cv2.CAP_V4L2)
-            if cap.isOpened():
-                self._configure_capture(cap)
-                return cap, cand
-            cap.release()
-        return None, None
-
-    def _configure_capture(self, cap):
-        if VIDEO_WIDTH > 0: cap.set(cv2.CAP_PROP_FRAME_WIDTH, VIDEO_WIDTH)
-        if VIDEO_HEIGHT > 0: cap.set(cv2.CAP_PROP_FRAME_HEIGHT, VIDEO_HEIGHT)
-        if VIDEO_FPS > 0: cap.set(cv2.CAP_PROP_FPS, VIDEO_FPS)
-        if VIDEO_PIXFMT:
-            try: cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*VIDEO_PIXFMT))
-            except Exception: pass
 
     def run(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
         self.client.loop_start()
 
-        cap, active_device = self._open_capture()
-        if cap is None:
-            logger.critical(f"Failed to open any video capture device. Searched: {[VIDEO_DEVICE] + VIDEO_FALLBACKS}")
+        capture = None
+        fallback_list = [v.strip() for v in CAPTURE_BACKEND_FALLBACKS.split(",") if v.strip()]
+        if not fallback_list:
+            if CAPTURE_BACKEND in {"gstreamer", "gst"}:
+                fallback_list = ["v4l2", "dummy"]
+            else:
+                fallback_list = ["dummy"]
+        backend_candidates = []
+        for name in [CAPTURE_BACKEND] + fallback_list:
+            if name and name not in backend_candidates:
+                backend_candidates.append(name)
+
+        for name in backend_candidates:
+            candidate = build_capture_backend(name)
+            if candidate.start():
+                capture = candidate
+                break
+            logger.warning("Capture backend %s failed to start", name)
+        if capture is None:
+            logger.critical("Failed to start capture backends: %s", backend_candidates)
             return
-            
-        logger.info(f"Capture opened on device {active_device} ({cap.get(cv2.CAP_PROP_FRAME_WIDTH)}x{cap.get(cv2.CAP_PROP_FRAME_HEIGHT)} @ {cap.get(cv2.CAP_PROP_FPS):.2f}fps)")
+        logger.info("Capture backend started: %s (%s)", capture.name, capture.describe())
         
         last_status_pub = 0
         try:
             while not stop_event.is_set():
                 capture_start = time.perf_counter()
-                ok, frame = cap.read()
+                handle = capture.read()
                 capture_ms = (time.perf_counter() - capture_start) * 1000.0
-                if not ok or frame is None:
+                if handle is None:
                     stop_event.wait(0.02)
                     continue
+                frame = handle.to_numpy()
                 emit_latency(
                     self.client,
                     "capture",
                     capture_ms,
                     sla_ms=SLA_STAGE_CAPTURE_MS,
-                    tags={"device": str(active_device)},
+                    tags={"device": str(handle.source or capture.name)},
                     agent="vision_agent",
                 )
 
@@ -254,7 +254,7 @@ class VisionAgent:
                     self.last_frame = frame
 
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 and frame.shape[2] == 3 else frame
-                now = time.time()
+                now = handle.timestamp
                 self.client.publish(MQTT_TOPIC_METRIC, json.dumps({"ok": True, "mean": round(float(np.mean(gray)), 2), "timestamp": now}), qos=0)
 
                 with self.config_lock:
@@ -287,7 +287,8 @@ class VisionAgent:
                 
                 stop_event.wait(0.05)
         finally:
-            cap.release()
+            if capture:
+                capture.stop()
             self.client.loop_stop()
             if self.shm_ring:
                 self.shm_ring.close()
