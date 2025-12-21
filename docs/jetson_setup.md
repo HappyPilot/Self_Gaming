@@ -83,6 +83,17 @@ Useful env vars:
 - `GST_USE_NVMM` (set to `1` to request NVMM caps)
 - `OPENCV_BACKEND` (`any`, `v4l2`, `avfoundation`, `msmf`)
 
+## TensorRT Engine Build (Optional)
+Build FP16/INT8 engines with `trtexec`:
+```bash
+tools/build_trt_engine.sh /mnt/ssd/models/yolo/yolo11n_416_fp32.onnx fp16
+```
+
+For INT8, supply a calibration image folder:
+```bash
+CALIB_DATA=/mnt/ssd/datasets/calib tools/build_trt_engine.sh /mnt/ssd/models/yolo/yolo11n_416_fp32.onnx int8
+```
+
 ## SHM Transport (Optional)
 If you enable `FRAME_TRANSPORT=shm`, every container that reads frames must share IPC:
 - use `ipc: host` (or `ipc: "service:mq"`) for vision and all consumers
