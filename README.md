@@ -58,7 +58,7 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
   For the hint server, set `HINT_WEIGHTS=/mnt/ssd/models/yolo/yolov8s-world.pt` (or pass `--weights`).
 - Relevant environment switches (see `docker-compose.yml`):
   - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` - sampling rate + encoding coming from `vision_agent`.
-  - `OBJECT_DETECTOR_BACKEND` - `ultralytics` for real inference or `dummy` for smoke tests.
+  - `OBJECT_DETECTOR_BACKEND` - `onnx`, `ultralytics` (`torch`/`trt` aliases), or `dummy` for smoke tests.
   - `OBJECT_CONF_THRESHOLD`, `OBJECT_IOU_THRESHOLD`, `OBJECT_QUEUE` - runtime tuning knobs.
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
