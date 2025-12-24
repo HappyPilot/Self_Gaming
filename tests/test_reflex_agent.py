@@ -1,6 +1,6 @@
 import unittest
 
-from reflex_policy import ReflexPolicyAdapter
+from agents.reflex_policy import ReflexPolicyAdapter
 
 
 class TestReflexPolicyAdapter(unittest.TestCase):

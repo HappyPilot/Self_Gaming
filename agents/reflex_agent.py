@@ -12,7 +12,7 @@ import json
 import paho.mqtt.client as mqtt
 
 from shared_state.strategy_state import build_strategy_state_adapter
-from reflex_policy import ReflexPolicyAdapter
+from agents.reflex_policy import ReflexPolicyAdapter
 
 logging.basicConfig(level=os.getenv("REFLEX_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("reflex_agent")
@@ -67,11 +67,21 @@ class ReflexAgent:
         except Exception:
             logger.exception("Failed to decode observation payload")
             return
+        if not isinstance(payload, dict):
+            logger.warning("Ignoring non-dict observation payload")
+            return
         self.latest_obs = payload
         strategy_state = self.adapter.read()
-        action = self.policy.predict(payload, strategy_state)
+        try:
+            action = self.policy.predict(payload, strategy_state)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Reflex policy error: %s", exc)
+            return
         if action:
-            client.publish(ACT_CMD_TOPIC, json.dumps(action))
+            try:
+                client.publish(ACT_CMD_TOPIC, json.dumps(action))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Failed to publish reflex action: %s", exc)
 
 
 def _handle_signal(signum, _frame):
