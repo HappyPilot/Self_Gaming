@@ -18,6 +18,14 @@ UPDATE_SEC = float(os.getenv("TACTICAL_UPDATE_SEC", "2.0"))
 STRATEGY_MODE = os.getenv("TACTICAL_STRATEGY_MODE", "scan")
 TACTICAL_ENABLED = os.getenv("TACTICAL_ENABLED", "1") != "0"
 TACTICAL_LOOP_KIND = os.getenv("TACTICAL_LOOP_KIND", "vlm_stub").strip().lower()
+TACTICAL_ALLOWED = {"vlm_stub", "rules", "planner"}
+if TACTICAL_LOOP_KIND not in TACTICAL_ALLOWED:
+    logger.warning(
+        "Unknown TACTICAL_LOOP_KIND=%s (allowed=%s); using vlm_stub",
+        TACTICAL_LOOP_KIND,
+        sorted(TACTICAL_ALLOWED),
+    )
+    TACTICAL_LOOP_KIND = "vlm_stub"
 
 
 class TacticalAgent:
