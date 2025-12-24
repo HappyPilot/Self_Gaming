@@ -84,6 +84,7 @@ VALUE_HEAD_PATH = Path(os.getenv("POLICY_VALUE_HEAD_PATH", "/mnt/ssd/models/head
 LABEL_MAP_PATH = Path(os.getenv("POLICY_LABEL_MAP_PATH", "/mnt/ssd/models/heads/ppo/label_map.json"))
 HOT_RELOAD_ENABLED = os.getenv("POLICY_HOT_RELOAD", "1") != "0"
 POLICY_LAZY_LOAD = os.getenv("POLICY_LAZY_LOAD", "1") != "0"
+POLICY_LAZY_RETRY_SEC = float(os.getenv("POLICY_LAZY_RETRY_SEC", "120"))
 LEARNING_STAGE = int(os.getenv("LEARNING_STAGE", "1"))
 STAGE0_ACTION_INTERVAL = float(os.getenv("STAGE0_ACTION_INTERVAL", "1.5"))
 STAGE0_SETTLE_SEC = float(os.getenv("STAGE0_SETTLE_SEC", "1.0"))
@@ -258,6 +259,9 @@ class PolicyAgent:
         self.model: Optional[Dict] = None
         self.hot_reload_enabled = HOT_RELOAD_ENABLED
         self.lazy_load_enabled = POLICY_LAZY_LOAD
+        self.lazy_retry_sec = max(0.0, POLICY_LAZY_RETRY_SEC)
+        self.lazy_next_retry_at = 0.0
+        self.lazy_last_retry_log_ts = 0.0
         self.model_load_attempted = False
         self.stage0_enabled = LEARNING_STAGE == 0
         self.stage0_pending = False
@@ -636,12 +640,25 @@ class PolicyAgent:
     # ----------------------------------------------------------------- Policy
     def _policy_from_observation(self, data: dict) -> Optional[Dict[str, object]]:
         state = data or self.latest_state or {}
-        if self.hot_reload_enabled and self.model is None and not self.model_load_attempted:
-            self.model_load_attempted = True
-            try:
-                self._initial_model_load()
-            except Exception as exc:  # noqa: BLE001
-                logger.error("Policy lazy-load failed: %s", exc)
+        if self.hot_reload_enabled and self.lazy_load_enabled and self.model is None:
+            now = time.time()
+            should_attempt = not self.model_load_attempted
+            if not should_attempt and self.lazy_retry_sec > 0 and now >= self.lazy_next_retry_at:
+                should_attempt = True
+            if should_attempt:
+                self.model_load_attempted = True
+                try:
+                    self._initial_model_load()
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Policy lazy-load failed: %s", exc)
+                if self.model is None and self.lazy_retry_sec > 0:
+                    self.lazy_next_retry_at = now + self.lazy_retry_sec
+                    if now - self.lazy_last_retry_log_ts >= self.lazy_retry_sec:
+                        logger.warning(
+                            "Policy lazy-load unavailable; retry scheduled in %.0fs",
+                            self.lazy_retry_sec,
+                        )
+                        self.lazy_last_retry_log_ts = now
         self._update_scene_targets(state)
         if self.active_target and time.time() > self.active_target_expires:
             self.active_target = None
