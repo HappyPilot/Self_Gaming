@@ -7,6 +7,7 @@ from typing import Iterable, List, Optional
 
 import cv2
 import numpy as np
+import torch
 from ultralytics import YOLOWorld
 
 from core.observations import DetectedObject
@@ -70,14 +71,15 @@ class YoloWorldBackend(ObjectDetectorBackend):
         )
 
     def _predict(self, frame: np.ndarray, device: str):
-        return self.model.predict(
-            source=frame,
-            device=device,
-            conf=self.conf,
-            imgsz=self.imgsz,
-            half=True,
-            verbose=False,
-        )
+        with torch.no_grad():
+            return self.model.predict(
+                source=frame,
+                device=device,
+                conf=self.conf,
+                imgsz=self.imgsz,
+                half=True,
+                verbose=False,
+            )
 
     def detect(self, frame: np.ndarray, frame_id: Optional[int] = None) -> Iterable[DetectedObject]:
         if frame is None or frame.size == 0:

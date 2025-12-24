@@ -21,6 +21,10 @@ try:
     import cv2
 except ImportError:
     cv2 = None
+try:
+    import torch
+except Exception:  # noqa: BLE001
+    torch = None
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("OCR_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -98,7 +102,9 @@ class OcrEasyAgent:
         self.rapidocr_reader = None
         self.backend = None
         self.init_error = None
-        self._init_backend()
+        self.ready = False
+        self._backend_lock = threading.Lock()
+        self._backend_initialized = False
 
     def _init_backend(self):
         try:
@@ -133,6 +139,15 @@ class OcrEasyAgent:
         self.ready = (self.backend == "paddle" and self.rapidocr_reader is not None) or \
                      (self.backend == "easyocr" and self.reader is not None)
         logger.info("OCR backend ready: %s (backend=%s, gpu=%s)", self.ready, self.backend, self.gpu)
+
+    def _ensure_backend(self):
+        if self._backend_initialized:
+            return
+        with self._backend_lock:
+            if self._backend_initialized:
+                return
+            self._init_backend()
+            self._backend_initialized = True
 
     def _on_connect(self, client, userdata, flags, rc):
         if _as_int(rc) == 0:
@@ -174,6 +189,7 @@ class OcrEasyAgent:
         threading.Thread(target=self._handle_cmd, args=(payload,), daemon=True).start()
 
     def _handle_cmd(self, payload):
+        self._ensure_backend()
         if not self.ready:
             self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": "easyocr_init_failed", "detail": self.init_error}))
             return
@@ -265,7 +281,11 @@ class OcrEasyAgent:
         elif self.backend == "easyocr":
             if self.reader is None: return []
             # EasyOCR: [ ([[x1,y1], ...], text, conf), ... ]
-            raw_res = self.reader.readtext(arr)
+            if torch is not None:
+                with torch.no_grad():
+                    raw_res = self.reader.readtext(arr)
+            else:
+                raw_res = self.reader.readtext(arr)
             for poly, text, conf in raw_res:
                 xs = [p[0] for p in poly]
                 ys = [p[1] for p in poly]
@@ -286,6 +306,7 @@ class OcrEasyAgent:
         return False
 
     def _process_once(self, payload):
+        self._ensure_backend()
         if not self.ready:
             self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": self.init_error or "ocr_not_ready"}))
             return
@@ -357,11 +378,15 @@ class OcrEasyAgent:
             )
 
     def _auto_loop(self):
-        if not self.ready or AUTO_INTERVAL <= 0: return
+        if AUTO_INTERVAL <= 0:
+            return
         while not stop_event.is_set():
-            try: self._process_once({"timeout": AUTO_TIMEOUT})
-            except Exception as e:
-                self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": f"auto_loop_failed:{e}"}))
+            self._ensure_backend()
+            if self.ready:
+                try:
+                    self._process_once({"timeout": AUTO_TIMEOUT})
+                except Exception as e:
+                    self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": f"auto_loop_failed:{e}"}))
             stop_event.wait(AUTO_INTERVAL)
 
     def run(self):

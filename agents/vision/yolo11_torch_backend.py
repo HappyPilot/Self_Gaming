@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Iterable, List, Optional
 
 import numpy as np
+import torch
 from ultralytics import YOLO
 
 from core.observations import DetectedObject
@@ -47,13 +48,14 @@ class Yolo11TorchBackend(ObjectDetectorBackend):
     def detect(self, frame: np.ndarray, frame_id: Optional[int] = None) -> Iterable[DetectedObject]:
         if frame is None or frame.size == 0:
             return []
-        results = self.model.predict(
-            source=frame,
-            device=self.device,
-            conf=self.conf,
-            imgsz=self.imgsz,
-            verbose=False,
-        )
+        with torch.no_grad():
+            results = self.model.predict(
+                source=frame,
+                device=self.device,
+                conf=self.conf,
+                imgsz=self.imgsz,
+                verbose=False,
+            )
         if not results:
             return []
         return _result_to_objects(results[0], frame.shape)

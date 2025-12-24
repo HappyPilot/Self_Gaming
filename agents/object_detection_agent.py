@@ -29,6 +29,10 @@ import paho.mqtt.client as mqtt
 
 from utils.frame_transport import get_frame_bytes
 from utils.latency import emit_latency, get_sla_ms
+try:
+    import torch
+except Exception:  # noqa: BLE001
+    torch = None
 logger = logging.getLogger("object_detection_agent")
 logging.basicConfig(level=os.getenv("OBJECT_LOG_LEVEL", "INFO"))
 
@@ -180,7 +184,25 @@ class UltralyticsDetector(BaseDetector):
     def detect(self, frame: np.ndarray) -> Iterable[Detection]:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         # Force FP32 (half=False) to prevent CUDA/AMP crashes on Jetson
-        results = self._model.predict(source=rgb, device=self._device, conf=self._conf, imgsz=self._imgsz, verbose=False, half=False)
+        if torch is not None:
+            with torch.no_grad():
+                results = self._model.predict(
+                    source=rgb,
+                    device=self._device,
+                    conf=self._conf,
+                    imgsz=self._imgsz,
+                    verbose=False,
+                    half=False,
+                )
+        else:
+            results = self._model.predict(
+                source=rgb,
+                device=self._device,
+                conf=self._conf,
+                imgsz=self._imgsz,
+                verbose=False,
+                half=False,
+            )
         detections: List[Detection] = []
         if not results:
             return detections
@@ -346,7 +368,8 @@ class ObjectDetectionAgent:
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
         
-        self.detector = build_detector()
+        self.detector = None
+        self.detector_lock = threading.Lock()
         self.vision_mode = VISION_MODE_DEFAULT if VISION_MODE_DEFAULT in MODE_SETTINGS else "medium"
         settings = MODE_SETTINGS.get(self.vision_mode, MODE_SETTINGS["medium"])
         self.frame_stride = settings.get("frame_stride", 1)
@@ -415,6 +438,7 @@ class ObjectDetectionAgent:
             if frame is None:
                 continue
 
+            self._ensure_detector()
             detect_start = time.perf_counter()
             detections = self.detector.detect(frame)
             detect_ms = (time.perf_counter() - detect_start) * 1000.0
@@ -435,8 +459,20 @@ class ObjectDetectionAgent:
             }
             self.client.publish(OBJECT_TOPIC, json.dumps(result_payload))
 
+    def _ensure_detector(self):
+        if self.detector is not None:
+            return
+        with self.detector_lock:
+            if self.detector is not None:
+                return
+            self.detector = build_detector()
+            if hasattr(self.detector, "update_runtime"):
+                settings = getattr(self, "_pending_settings", MODE_SETTINGS.get(self.vision_mode, MODE_SETTINGS["medium"]))
+                self.detector.update_runtime(settings)
+
     def _apply_detector_settings(self, settings: dict):
-        if hasattr(self.detector, "update_runtime"):
+        self._pending_settings = settings
+        if self.detector is not None and hasattr(self.detector, "update_runtime"):
             self.detector.update_runtime(settings)
 
     def _handle_config(self, payload: bytes):

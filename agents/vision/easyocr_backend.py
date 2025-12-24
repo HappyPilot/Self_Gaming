@@ -5,6 +5,10 @@ import importlib
 from typing import Iterable, Optional, Sequence
 
 import numpy as np
+try:
+    import torch
+except Exception:  # noqa: BLE001
+    torch = None
 
 from core.observations import OcrZone
 from vision.perception import OcrBackend
@@ -44,7 +48,11 @@ class EasyOcrBackend(OcrBackend):
     ) -> Optional[OcrZone]:
         if region_frame is None or region_frame.size == 0:
             return None
-        results = self.reader.readtext(region_frame)
+        if torch is not None:
+            with torch.no_grad():
+                results = self.reader.readtext(region_frame)
+        else:
+            results = self.reader.readtext(region_frame)
         if not results:
             return None
         best_text = ""
