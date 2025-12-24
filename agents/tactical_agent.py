@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tactical agent scaffold that writes shared strategy state."""
+"""Tactical agent scaffold (System 2) that writes shared strategy state."""
 from __future__ import annotations
 
 import logging
@@ -16,6 +16,16 @@ stop_event = threading.Event()
 
 UPDATE_SEC = float(os.getenv("TACTICAL_UPDATE_SEC", "2.0"))
 STRATEGY_MODE = os.getenv("TACTICAL_STRATEGY_MODE", "scan")
+TACTICAL_ENABLED = os.getenv("TACTICAL_ENABLED", "1") != "0"
+TACTICAL_LOOP_KIND = os.getenv("TACTICAL_LOOP_KIND", "vlm_stub").strip().lower()
+TACTICAL_ALLOWED = {"vlm_stub", "rules", "planner"}
+if TACTICAL_LOOP_KIND not in TACTICAL_ALLOWED:
+    logger.warning(
+        "Unknown TACTICAL_LOOP_KIND=%s (allowed=%s); using vlm_stub",
+        TACTICAL_LOOP_KIND,
+        sorted(TACTICAL_ALLOWED),
+    )
+    TACTICAL_LOOP_KIND = "vlm_stub"
 
 
 class TacticalAgent:
@@ -23,6 +33,10 @@ class TacticalAgent:
         self.adapter = build_strategy_state_adapter()
 
     def run(self) -> None:
+        if not TACTICAL_ENABLED:
+            logger.info("Tactical agent disabled (TACTICAL_ENABLED=0)")
+            return
+        logger.info("Tactical loop kind: %s", TACTICAL_LOOP_KIND)
         while not stop_event.is_set():
             update = {
                 "global_strategy": {"mode": STRATEGY_MODE, "ts": time.time()},
