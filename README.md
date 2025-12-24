@@ -56,7 +56,7 @@ export STRATEGY_STATE_PORT=54001
 export STRATEGY_STATE_AUTHKEY=strategy
 ```
 
-If you use Docker Compose, enable the optional `strategy_state` service (profile `shared_state`) and set `STRATEGY_STATE_HOST` to the service host or `127.0.0.1` when using host networking.
+If you use Docker Compose, enable the optional `strategy_state` service (profile `shared_state`). Use `STRATEGY_STATE_HOST=strategy_state` for bridged networking or `127.0.0.1` when running other services with host networking.
 
 ## Object-Detection Agent
 

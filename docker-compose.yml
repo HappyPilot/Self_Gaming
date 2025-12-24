@@ -13,8 +13,7 @@ services:
     env_file: *id001
   strategy_state:
     container_name: strategy_state
-    image: local/policy-agent:latest
-    network_mode: host
+    image: python:3.11-slim
     restart: unless-stopped
     profiles:
     - shared_state
@@ -23,6 +22,8 @@ services:
     - python3
     - -m
     - shared_state.state_server
+    ports:
+    - "54001:54001"
     volumes:
     - ./shared_state:/app/shared_state
     env_file: *id001
