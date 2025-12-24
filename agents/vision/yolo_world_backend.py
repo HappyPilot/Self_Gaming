@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Iterable, List, Optional
 
 import cv2
 import numpy as np
-from ultralytics import YOLOWorld
+try:
+    import torch
+except Exception:  # noqa: BLE001
+    torch = None
 
 from core.observations import DetectedObject
 from vision.perception import ObjectDetectorBackend
@@ -18,8 +21,9 @@ logger = logging.getLogger(__name__)
 @contextmanager
 def _clip_on_cpu():
     """Temporarily force CLIP text encoder to CPU to avoid GPU allocator crashes."""
-    import torch
-
+    if torch is None:
+        yield
+        return
     orig_is_available = torch.cuda.is_available
     try:
         torch.cuda.is_available = lambda: False  # type: ignore
@@ -42,6 +46,10 @@ class YoloWorldBackend(ObjectDetectorBackend):
         fallback_cpu: bool = False,
         clip_cpu: bool = True,
     ):
+        try:
+            from ultralytics import YOLOWorld
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("ultralytics is not installed. Install it to use yolo_world backend.") from exc
         self.model = YOLOWorld(weights_path)
         try:
             if clip_cpu:
@@ -70,14 +78,16 @@ class YoloWorldBackend(ObjectDetectorBackend):
         )
 
     def _predict(self, frame: np.ndarray, device: str):
-        return self.model.predict(
-            source=frame,
-            device=device,
-            conf=self.conf,
-            imgsz=self.imgsz,
-            half=True,
-            verbose=False,
-        )
+        ctx = torch.no_grad() if torch is not None else nullcontext()
+        with ctx:
+            return self.model.predict(
+                source=frame,
+                device=device,
+                conf=self.conf,
+                imgsz=self.imgsz,
+                half=True,
+                verbose=False,
+            )
 
     def detect(self, frame: np.ndarray, frame_id: Optional[int] = None) -> Iterable[DetectedObject]:
         if frame is None or frame.size == 0:

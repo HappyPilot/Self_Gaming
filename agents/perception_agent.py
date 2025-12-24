@@ -96,6 +96,10 @@ def text_zones_to_dict(zones: Dict[str, OcrZone]) -> Dict[str, Dict[str, object]
         out[name] = {"text": zone.text, "confidence": round(zone.confidence, 4), "bbox": [round(c, 4) for c in zone.bbox] if zone.bbox else None}
     return out
 
+class _NullDetector:
+    def detect(self, frame: np.ndarray, frame_id: Optional[int] = None):
+        return []
+
 class PerceptionAgent:
     def __init__(self) -> None:
         logger.info(
@@ -108,27 +112,34 @@ class PerceptionAgent:
             YOLO_MAX_SIZE,
             YOLO_WORLD_CLASSES,
         )
-        detector = build_detector_backend(
-            DETECTOR_BACKEND,
-            weights_path=YOLO_WEIGHTS,
-            device=YOLO_DEVICE,
-            conf=YOLO_CONF,
-            imgsz=YOLO_IMGSZ,
-            engine_path=YOLO_WEIGHTS,
-            classes=YOLO_WORLD_CLASSES,
-            max_size=YOLO_MAX_SIZE,
-            fallback_cpu=YOLO_FALLBACK_CPU,
-            clip_cpu=YOLO_CLIP_CPU,
-        )
-        ocr = self._init_ocr_backend()
-        player_locator = self._init_player_locator()
-        self.pipeline = PerceptionPipeline(detector=detector, ocr=ocr, text_regions=TEXT_REGIONS, player_locator=player_locator)
+        self.pipeline = None
+        self.pipeline_lock = threading.Lock()
         self.frame_id = 0
         self.client = mqtt.Client(client_id="perception_agent", protocol=mqtt.MQTTv311)
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
         self.lock = threading.Lock()
+
+    def _init_detector_backend(self):
+        try:
+            return build_detector_backend(
+                DETECTOR_BACKEND,
+                weights_path=YOLO_WEIGHTS,
+                device=YOLO_DEVICE,
+                conf=YOLO_CONF,
+                imgsz=YOLO_IMGSZ,
+                engine_path=YOLO_WEIGHTS,
+                classes=YOLO_WORLD_CLASSES,
+                max_size=YOLO_MAX_SIZE,
+                fallback_cpu=YOLO_FALLBACK_CPU,
+                clip_cpu=YOLO_CLIP_CPU,
+            )
+        except Exception as exc:
+            logger.error("Detector backend error: %s", exc)
+            if DEBUG:
+                logger.exception("Detector backend stack")
+            return _NullDetector()
 
     def _init_ocr_backend(self):
         languages, paddle_lang = OCR_LANGS or ["en"], OCR_PADDLE_LANG.strip() or (OCR_LANGS or ["en"])[0]
@@ -140,7 +151,18 @@ class PerceptionAgent:
             logger.error("OCR backend error: %s", exc)
             if DEBUG:
                 logger.exception("OCR backend stack")
-            return NullOcrBackend()
+        return NullOcrBackend()
+
+    def _ensure_pipeline(self):
+        if self.pipeline is not None:
+            return
+        with self.pipeline_lock:
+            if self.pipeline is not None:
+                return
+            detector = self._init_detector_backend()
+            ocr = self._init_ocr_backend()
+            player_locator = self._init_player_locator()
+            self.pipeline = PerceptionPipeline(detector=detector, ocr=ocr, text_regions=TEXT_REGIONS, player_locator=player_locator)
 
     def _init_player_locator(self) -> Optional[PlayerLocator]:
         if not PLAYER_LOCATOR_ENABLED: return None
@@ -186,6 +208,10 @@ class PerceptionAgent:
             self.frame_id += 1
             frame_id = self.frame_id
         try:
+            self._ensure_pipeline()
+            if self.pipeline is None:
+                logger.error("Perception pipeline not ready, dropping frame_id=%s", frame_id)
+                return
             observation = self.pipeline.build_observation(frame, frame_id=frame_id)
         except Exception:
             logger.exception("Detection pipeline failed for frame_id=%s", frame_id)
