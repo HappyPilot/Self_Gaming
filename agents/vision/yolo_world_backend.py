@@ -22,8 +22,9 @@ logger = logging.getLogger(__name__)
 @contextmanager
 def _clip_on_cpu():
     """Temporarily force CLIP text encoder to CPU to avoid GPU allocator crashes."""
-    import torch
-
+    if torch is None:
+        yield
+        return
     orig_is_available = torch.cuda.is_available
     try:
         torch.cuda.is_available = lambda: False  # type: ignore
