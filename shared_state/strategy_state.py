@@ -7,10 +7,15 @@ from multiprocessing.managers import SyncManager
 from typing import Any, Mapping
 
 STATE_KEYS = ("global_strategy", "targets", "cooldowns")
+_SERVER_STATE = {key: {} for key in STATE_KEYS}
 
 
 def _default_state() -> dict[str, dict[str, Any]]:
     return {key: {} for key in STATE_KEYS}
+
+
+def _get_state():
+    return _SERVER_STATE
 
 
 class StrategyStateManager(SyncManager):
@@ -18,7 +23,7 @@ class StrategyStateManager(SyncManager):
 
 
 def _register_server():
-    StrategyStateManager.register("get_state", callable=_default_state)
+    StrategyStateManager.register("get_state", callable=_get_state)
 
 
 def _register_client():
