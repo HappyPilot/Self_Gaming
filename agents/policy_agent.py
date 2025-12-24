@@ -638,7 +638,10 @@ class PolicyAgent:
         state = data or self.latest_state or {}
         if self.hot_reload_enabled and self.model is None and not self.model_load_attempted:
             self.model_load_attempted = True
-            self._initial_model_load()
+            try:
+                self._initial_model_load()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Policy lazy-load failed: %s", exc)
         self._update_scene_targets(state)
         if self.active_target and time.time() > self.active_target_expires:
             self.active_target = None

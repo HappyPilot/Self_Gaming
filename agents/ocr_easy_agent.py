@@ -146,8 +146,10 @@ class OcrEasyAgent:
         with self._backend_lock:
             if self._backend_initialized:
                 return
-            self._init_backend()
-            self._backend_initialized = True
+            try:
+                self._init_backend()
+            finally:
+                self._backend_initialized = True
 
     def _on_connect(self, client, userdata, flags, rc):
         if _as_int(rc) == 0:

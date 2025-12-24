@@ -150,7 +150,7 @@ class PerceptionAgent:
         except Exception as exc:
             logger.error("OCR backend error: %s", exc)
             if DEBUG:
-            logger.exception("OCR backend stack")
+                logger.exception("OCR backend stack")
         return NullOcrBackend()
 
     def _ensure_pipeline(self):

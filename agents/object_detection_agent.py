@@ -466,6 +466,7 @@ class ObjectDetectionAgent:
             if self.detector is not None:
                 return
             self.detector = build_detector()
+            logger.info("Detector initialized: backend=%s impl=%s", DETECTOR_BACKEND, type(self.detector).__name__)
             if hasattr(self.detector, "update_runtime"):
                 settings = getattr(self, "_pending_settings", MODE_SETTINGS.get(self.vision_mode, MODE_SETTINGS["medium"]))
                 self.detector.update_runtime(settings)

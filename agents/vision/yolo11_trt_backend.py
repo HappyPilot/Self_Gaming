@@ -1,9 +1,13 @@
 """TensorRT-backed YOLO11 detector backend."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Iterable, Optional
-import torch
 from ultralytics import YOLO
+try:
+    import torch
+except Exception:  # noqa: BLE001
+    torch = None
 
 from core.observations import DetectedObject
 from vision.perception import ObjectDetectorBackend
@@ -23,7 +27,8 @@ class Yolo11TensorRTBackend(ObjectDetectorBackend):
     def detect(self, frame, frame_id: Optional[int] = None) -> Iterable[DetectedObject]:
         if frame is None or frame.size == 0:
             return []
-        with torch.no_grad():
+        ctx = torch.no_grad() if torch is not None else nullcontext()
+        with ctx:
             results = self.model.predict(
                 source=frame,
                 conf=self.conf,

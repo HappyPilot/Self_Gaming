@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Iterable, List, Optional
 
 import cv2
 import numpy as np
-import torch
 from ultralytics import YOLOWorld
+try:
+    import torch
+except Exception:  # noqa: BLE001
+    torch = None
 
 from core.observations import DetectedObject
 from vision.perception import ObjectDetectorBackend
@@ -71,7 +74,8 @@ class YoloWorldBackend(ObjectDetectorBackend):
         )
 
     def _predict(self, frame: np.ndarray, device: str):
-        with torch.no_grad():
+        ctx = torch.no_grad() if torch is not None else nullcontext()
+        with ctx:
             return self.model.predict(
                 source=frame,
                 device=device,

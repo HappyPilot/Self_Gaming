@@ -1,11 +1,15 @@
 """Ultralytics YOLO11 backend that returns DetectedObject list."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Iterable, List, Optional
 
 import numpy as np
-import torch
 from ultralytics import YOLO
+try:
+    import torch
+except Exception:  # noqa: BLE001
+    torch = None
 
 from core.observations import DetectedObject
 from vision.perception import ObjectDetectorBackend
@@ -48,7 +52,8 @@ class Yolo11TorchBackend(ObjectDetectorBackend):
     def detect(self, frame: np.ndarray, frame_id: Optional[int] = None) -> Iterable[DetectedObject]:
         if frame is None or frame.size == 0:
             return []
-        with torch.no_grad():
+        ctx = torch.no_grad() if torch is not None else nullcontext()
+        with ctx:
             results = self.model.predict(
                 source=frame,
                 device=self.device,
