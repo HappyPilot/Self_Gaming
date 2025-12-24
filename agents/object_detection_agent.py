@@ -465,7 +465,11 @@ class ObjectDetectionAgent:
         with self.detector_lock:
             if self.detector is not None:
                 return
-            self.detector = build_detector()
+            try:
+                self.detector = build_detector()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Detector init failed, falling back to dummy: %s", exc)
+                self.detector = DummyDetector()
             logger.info("Detector initialized: backend=%s impl=%s", DETECTOR_BACKEND, type(self.detector).__name__)
             if hasattr(self.detector, "update_runtime"):
                 settings = getattr(self, "_pending_settings", MODE_SETTINGS.get(self.vision_mode, MODE_SETTINGS["medium"]))

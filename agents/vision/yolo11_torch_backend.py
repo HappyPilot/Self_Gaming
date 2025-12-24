@@ -5,7 +5,6 @@ from contextlib import nullcontext
 from typing import Iterable, List, Optional
 
 import numpy as np
-from ultralytics import YOLO
 try:
     import torch
 except Exception:  # noqa: BLE001
@@ -44,6 +43,10 @@ class Yolo11TorchBackend(ObjectDetectorBackend):
     """Torch-based YOLO11 detector that outputs normalized boxes."""
 
     def __init__(self, weights_path: str, device: str = "cuda:0", conf: float = 0.35, imgsz: int = 640):
+        try:
+            from ultralytics import YOLO
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("ultralytics is not installed. Install it to use yolo11_torch backend.") from exc
         self.model = YOLO(weights_path)
         self.device = device
         self.conf = conf

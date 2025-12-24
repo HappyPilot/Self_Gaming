@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from typing import Iterable, Optional
-from ultralytics import YOLO
 try:
     import torch
 except Exception:  # noqa: BLE001
@@ -20,6 +19,10 @@ class Yolo11TensorRTBackend(ObjectDetectorBackend):
     def __init__(self, engine_path: str, conf: float = 0.35, imgsz: int = 640):
         if not engine_path:
             raise ValueError("engine_path is required for TensorRT backend")
+        try:
+            from ultralytics import YOLO
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("ultralytics is not installed. Install it to use yolo11_trt backend.") from exc
         self.model = YOLO(engine_path)
         self.conf = conf
         self.imgsz = imgsz

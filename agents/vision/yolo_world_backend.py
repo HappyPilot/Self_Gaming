@@ -7,7 +7,6 @@ from typing import Iterable, List, Optional
 
 import cv2
 import numpy as np
-from ultralytics import YOLOWorld
 try:
     import torch
 except Exception:  # noqa: BLE001
@@ -47,6 +46,10 @@ class YoloWorldBackend(ObjectDetectorBackend):
         fallback_cpu: bool = False,
         clip_cpu: bool = True,
     ):
+        try:
+            from ultralytics import YOLOWorld
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("ultralytics is not installed. Install it to use yolo_world backend.") from exc
         self.model = YOLOWorld(weights_path)
         try:
             if clip_cpu:
