@@ -9,7 +9,10 @@ import threading
 import time
 
 import json
-import paho.mqtt.client as mqtt
+try:
+    import paho.mqtt.client as mqtt
+except Exception:  # noqa: BLE001
+    mqtt = None
 
 from shared_state.strategy_state import build_strategy_state_adapter
 from agents.reflex_policy import ReflexPolicyAdapter
@@ -31,14 +34,24 @@ class ReflexAgent:
     def __init__(self) -> None:
         self.adapter = build_strategy_state_adapter()
         self.policy = ReflexPolicyAdapter()
-        self.client = mqtt.Client(client_id="reflex_agent", protocol=mqtt.MQTTv311)
-        self.client.on_connect = self._on_connect
-        self.client.on_message = self._on_message
-        self.client.on_disconnect = self._on_disconnect
+        self.mqtt_available = mqtt is not None
+        self.client = None
+        if self.mqtt_available:
+            self.client = mqtt.Client(client_id="reflex_agent", protocol=mqtt.MQTTv311)
+            self.client.on_connect = self._on_connect
+            self.client.on_message = self._on_message
+            self.client.on_disconnect = self._on_disconnect
         self.latest_obs = None
 
     def run(self) -> None:
-        self.client.connect(MQTT_HOST, MQTT_PORT, 30)
+        if not self.mqtt_available or self.client is None:
+            logger.error("paho-mqtt not available; reflex_agent exiting")
+            return
+        try:
+            self.client.connect(MQTT_HOST, MQTT_PORT, 30)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to connect to MQTT: %s", exc)
+            return
         self.client.loop_start()
         last_log = 0.0
         while not stop_event.is_set():
@@ -75,13 +88,13 @@ class ReflexAgent:
         try:
             action = self.policy.predict(payload, strategy_state)
         except Exception as exc:  # noqa: BLE001
-            logger.error("Reflex policy error: %s", exc)
+            logger.exception("Reflex policy error: %s", exc)
             return
         if action:
             try:
                 client.publish(ACT_CMD_TOPIC, json.dumps(action))
             except Exception as exc:  # noqa: BLE001
-                logger.error("Failed to publish reflex action: %s", exc)
+                logger.exception("Failed to publish reflex action: %s", exc)
 
 
 def _handle_signal(signum, _frame):
