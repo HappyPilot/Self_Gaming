@@ -33,7 +33,7 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 - The agent is packaged in its own container (`local/object-detection-agent`). Drop TensorRT/Ultralytics weights under `/mnt/ssd/models/yolo/<checkpoint>` and point `OBJECT_MODEL_PATH` there.
 - Relevant environment switches (see `docker-compose.yml`):
   - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` - sampling rate + encoding coming from `vision_agent`.
-  - `OBJECT_DETECTOR_BACKEND` - `onnx`, `ultralytics` (`torch`/`trt` aliases), or `dummy` for smoke tests. `trt`/`tensorrt` expects `OBJECT_MODEL_PATH` to point to a `.engine` file.
+  - `OBJECT_DETECTOR_BACKEND` - `onnx`, `ultralytics` (`torch`/`trt` aliases), or `dummy` for smoke tests. `torch` expects `.pt` weights, `onnx` expects a `.onnx`, and `trt`/`tensorrt` expects a `.engine`.
   - `OBJECT_CONF_THRESHOLD`, `OBJECT_IOU_THRESHOLD`, `OBJECT_QUEUE` - runtime tuning knobs.
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.

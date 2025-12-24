@@ -313,13 +313,14 @@ def build_detector() -> BaseDetector:
         try:
             if DETECTOR_BACKEND in {"trt", "tensorrt"} and not MODEL_PATH.endswith(".engine"):
                 logger.warning(
-                    "DETECTOR_BACKEND=%s expects .engine model; OBJECT_MODEL_PATH=%s",
+                    "DETECTOR_BACKEND=%s selected but OBJECT_MODEL_PATH is not a .engine (%s). "
+                    "This backend is an alias routed to UltralyticsDetector; provide a TensorRT .engine for true TRT path.",
                     DETECTOR_BACKEND,
                     MODEL_PATH,
                 )
             detector = UltralyticsDetector(MODEL_PATH, DEVICE, CONF_THRESHOLD, IMG_SIZE)
             logger.info(
-                "Detector init: backend=%s impl=UltralyticsDetector model=%s device=%s imgsz=%s",
+                "Detector init ok: backend=%s impl=UltralyticsDetector model=%s device=%s imgsz=%s",
                 DETECTOR_BACKEND,
                 MODEL_PATH,
                 DEVICE,
