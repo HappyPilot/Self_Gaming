@@ -58,6 +58,8 @@ export STRATEGY_STATE_AUTHKEY=strategy
 
 If you use Docker Compose, enable the optional `strategy_state` service (profile `shared_state`). Use `STRATEGY_STATE_HOST=strategy_state` for bridged networking or `127.0.0.1` when running other services with host networking.
 
+Note: `reflex_agent` requires the `paho-mqtt` package (see policy-agent container or install locally).
+
 ## Object-Detection Agent
 
 - `object_detection_agent.py` subscribes to `vision/frame/preview` by default (set `VISION_FRAME_TOPIC=vision/frame/full` for full quality), runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
