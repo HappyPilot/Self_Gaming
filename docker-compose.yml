@@ -11,6 +11,27 @@ services:
     volumes:
     - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
     env_file: *id001
+  strategy_state:
+    container_name: strategy_state
+    image: python:3.11-slim
+    restart: unless-stopped
+    profiles:
+    - shared_state
+    working_dir: /app
+    entrypoint:
+    - python3
+    - -m
+    - shared_state.state_server
+    ports:
+    - "54001:54001"
+    volumes:
+    - ./shared_state:/app/shared_state
+    env_file: *id001
+    environment:
+    - PYTHONPATH=/app
+    - STRATEGY_STATE_HOST=0.0.0.0
+    - STRATEGY_STATE_PORT=54001
+    - STRATEGY_STATE_AUTHKEY=strategy
   vision:
     container_name: vision_agent
     build:

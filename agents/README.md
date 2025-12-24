@@ -28,6 +28,24 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 `policy_agent.py` now blends its heuristic actions with the teacher's recommendations. A linear annealing coefficient `teacher_alpha` (configurable via `TEACHER_ALPHA_START` and `TEACHER_ALPHA_DECAY_STEPS`) starts at 1.0, prioritising teacher advice, then decays to rely on the learned policy. The final action is emitted on both `control/keys` and `act/cmd`, preserving the previous behaviour.
 Set `POLICY_LAZY_LOAD=1` (default) to load policy weights on first observation instead of at startup (use `0` to preload). Use `POLICY_LAZY_RETRY_SEC` to retry lazy-load after a failure (default 120s).
 
+## Shared Strategy State (Optional)
+
+Run the shared-state server:
+
+```bash
+python -m shared_state.state_server
+```
+
+Then point agents to it:
+
+```bash
+export STRATEGY_STATE_HOST=127.0.0.1
+export STRATEGY_STATE_PORT=54001
+export STRATEGY_STATE_AUTHKEY=strategy
+```
+
+If using Docker Compose, enable the optional `strategy_state` service (profile `shared_state`). Use `STRATEGY_STATE_HOST=strategy_state` for bridged networking or `127.0.0.1` when running other services with host networking.
+
 ## Object-Detection Agent
 
 - `object_detection_agent.py` subscribes to `vision/frame/preview` by default (set `VISION_FRAME_TOPIC=vision/frame/full` for full quality), runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
