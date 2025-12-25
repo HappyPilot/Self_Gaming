@@ -114,6 +114,24 @@ Required: ok, timestamp, objects
 
 Note: object_detection_agent publishes pixel boxes in XYXY format.
 
+### vision/observation
+Required: ok, timestamp, frame_id
+Schema: `schemas/observation.schema.json`
+```json
+{
+  "ok": true,
+  "frame_id": 120,
+  "timestamp": 1712345678.1,
+  "yolo_objects": [
+    {"label": "enemy", "confidence": 0.82, "bbox": [0.12, 0.08, 0.26, 0.24], "extra": {}}
+  ],
+  "text_zones": {
+    "dialog": {"text": "Play", "confidence": 0.92, "bbox": [0.12, 0.18, 0.24, 0.28]}
+  },
+  "player_candidate": {"label": "player", "confidence": 0.5, "bbox": [0.4, 0.2, 0.52, 0.48]}
+}
+```
+
 ### ocr_easy/text
 Required: ok, text, results, backend
 ```json
@@ -147,6 +165,7 @@ Note: when scene/state is built from vision/observation (perception_agent), bbox
 
 ### act/cmd
 Required: action
+Schema: `schemas/action.schema.json`
 ```json
 {
   "action": "click",
