@@ -10,6 +10,7 @@ This repository hosts the collection of MQTT-driven agents that coordinate UI au
 - `docs/jetson_setup.md` - Jetson setup checklist (JetPack, MAXN, ZRAM, runtime)
 - `docs/onnx_export.md` - export YOLO weights to ONNX
 - `recording/README.md` - recorder session layout and QC metrics
+- `replay/README.md` - replay harness for recorded sessions
 - `config/README.md` - env profiles and local overrides
 - `docs/compose_config.yaml` - compose overview and wiring hints
 - `PROJECT_OVERVIEW.md` - high-level project summary
