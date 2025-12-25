@@ -48,6 +48,8 @@ Environment variables:
 - `ENV_STEP_TIMEOUT_SEC` (default: `1.0`)
 - `ENV_OBS_TIMEOUT_SEC` (default: `2.0`)
 - `ENV_HEALTH_STALE_SEC` (default: `5.0`)
+- `ENV_SCHEMA_VALIDATE` (default: `0`, enable payload validation)
+- `ENV_REWARD_SKEW_SEC` (default: `0.2`, reward timestamp tolerance)
 
 Replay integration
 ------------------

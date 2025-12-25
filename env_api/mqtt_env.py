@@ -37,6 +37,8 @@ REWARD_QUEUE_MAX = int(os.getenv("ENV_REWARD_QUEUE_MAX", "200"))
 STEP_TIMEOUT_SEC = float(os.getenv("ENV_STEP_TIMEOUT_SEC", "1.0"))
 OBS_TIMEOUT_SEC = float(os.getenv("ENV_OBS_TIMEOUT_SEC", "2.0"))
 HEALTH_STALE_SEC = float(os.getenv("ENV_HEALTH_STALE_SEC", "5.0"))
+SCHEMA_VALIDATE = os.getenv("ENV_SCHEMA_VALIDATE", "0") == "1"
+REWARD_SKEW_SEC = float(os.getenv("ENV_REWARD_SKEW_SEC", "0.2"))
 
 _SCHEMA_BASE = Path(__file__).resolve().parents[1] / "schemas"
 _OBS_SCHEMA = None
@@ -73,7 +75,7 @@ def _coerce_action(action: Dict[str, Any] | Action) -> Dict[str, Any]:
     return dict(action)
 
 def _validate_payload(schema: Optional[dict], payload: Dict[str, Any], label: str) -> None:
-    if jsonschema is None or schema is None:
+    if not SCHEMA_VALIDATE or jsonschema is None or schema is None:
         return
     try:
         jsonschema.validate(payload, schema)
@@ -170,8 +172,10 @@ class MqttEnvAdapter(EnvAdapter):
         return None
 
     def _reward_after(self, after_ts: float) -> Optional[float]:
-        if self._latest_reward and self._latest_reward[1] >= after_ts:
-            return self._latest_reward[0]
+        if self._latest_reward:
+            reward_ts = self._latest_reward[1]
+            if reward_ts >= (after_ts - REWARD_SKEW_SEC):
+                return self._latest_reward[0]
         return None
 
     def reset(self) -> Observation:
@@ -184,11 +188,11 @@ class MqttEnvAdapter(EnvAdapter):
         action_payload = _coerce_action(action)
         action_ts = float(action_payload.get("timestamp", time.time()))
         _validate_payload(_ACTION_SCHEMA, action_payload, "action")
+        before_ts = self._last_obs_ts
         try:
             self.client.publish(ACTION_TOPIC, json.dumps(action_payload))
         except Exception:
             return StepResult(None, None, False, info={"publish_failed": True}, health=self.health_check())
-        before_ts = self._last_obs_ts
         obs = self._wait_for_obs(before_ts, STEP_TIMEOUT_SEC)
         if obs is not None:
             self._latest_obs = obs
@@ -197,10 +201,13 @@ class MqttEnvAdapter(EnvAdapter):
         info = {"action_ts": action_ts}
         done = False
         if obs is not None:
-            if isinstance(obs.payload.get("done"), bool):
-                done = bool(obs.payload.get("done"))
-            elif "terminal" in obs.payload:
-                done = bool(obs.payload.get("terminal"))
+            done_val = obs.payload.get("done", obs.payload.get("terminal"))
+            if isinstance(done_val, bool):
+                done = done_val
+            elif isinstance(done_val, (int, float)):
+                done = bool(done_val)
+            elif isinstance(done_val, str):
+                done = done_val.strip().lower() in {"1", "true", "yes", "y"}
         if obs is None:
             info["timeout"] = True
         return StepResult(obs, reward, done, info=info, health=self.health_check())
