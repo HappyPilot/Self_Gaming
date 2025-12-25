@@ -70,9 +70,14 @@ def _build_sensor_topics() -> set[str]:
     if REWARD_TOPIC:
         defaults.append(REWARD_TOPIC)
     raw = os.getenv("RECORDER_SENSOR_TOPICS")
-    if raw:
-        return _parse_topics(raw)
-    return set(defaults)
+    topics = _parse_topics(raw) if raw else set(defaults)
+    if RECORDER_FRAME_TOPIC in topics:
+        topics.discard(RECORDER_FRAME_TOPIC)
+        logger.warning(
+            "RECORDER_SENSOR_TOPICS includes frame topic %s; ignoring to avoid large payloads",
+            RECORDER_FRAME_TOPIC,
+        )
+    return topics
 
 SENSOR_TOPICS = _build_sensor_topics()
 
@@ -379,8 +384,6 @@ class RecorderAgent:
         topics = {(SCENE_TOPIC, 0), (ACT_TOPIC, 0), (SNAPSHOT_TOPIC, 0), (RECORDER_FRAME_TOPIC, 0)}
         for topic in SENSOR_TOPICS:
             topics.add((topic, 0))
-        if TEACHER_TOPIC: topics.add((TEACHER_TOPIC, 0))
-        if REWARD_TOPIC: topics.add((REWARD_TOPIC, 0))
         if ACT_ALIAS and ACT_ALIAS != ACT_TOPIC: topics.add((ACT_ALIAS, 0))
         
         if _as_int(rc) == 0:
@@ -398,7 +401,7 @@ class RecorderAgent:
 
         if msg.topic == RECORDER_FRAME_TOPIC and isinstance(data, dict):
             self.session.record_frame(data)
-        if msg.topic in SENSOR_TOPICS and isinstance(data, dict):
+        if msg.topic in SENSOR_TOPICS and msg.topic != RECORDER_FRAME_TOPIC and isinstance(data, dict):
             ts = float(data.get("timestamp", time.time()))
             self.session.record_sensor(msg.topic, data, ts)
 
