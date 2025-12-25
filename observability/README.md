@@ -32,4 +32,4 @@ Example:
 PROMETHEUS_CONFIG=prometheus.full.yml docker compose -f docker-compose.observability.yml --profile infra_metrics --profile gpu_metrics up -d
 ```
 
-Grafana defaults to `admin/admin` and is available on port 3000.
+Grafana defaults to `admin/admin` and is available on port 3000. For external access, change the password and/or remove the 3000 port mapping.
