@@ -52,8 +52,9 @@ def _init_metrics() -> None:
     global LATENCY_HIST, LATENCY_VIOLATIONS, CONTROL_VALUE, CONTROL_FAILS, EXPORTER_ERRORS, LAST_SEEN
     LATENCY_HIST = Histogram(
         "self_gaming_latency_ms",
-        "Latency in milliseconds",
+        "Latency in milliseconds (ms)",
         ["stage", "agent"],
+        buckets=(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000),
     )
     LATENCY_VIOLATIONS = Counter(
         "self_gaming_latency_violations_total",
