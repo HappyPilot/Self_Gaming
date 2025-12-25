@@ -12,6 +12,7 @@ This repository hosts the collection of MQTT-driven agents that coordinate UI au
 - `recording/README.md` - recorder session layout and QC metrics
 - `replay/README.md` - replay harness for recorded sessions
 - `env_api/README.md` - universal env API (observation/action/step contract)
+- `world_state/README.md` - lightweight world-state adapter
 - `config/README.md` - env profiles and local overrides
 - `docs/compose_config.yaml` - compose overview and wiring hints
 - `PROJECT_OVERVIEW.md` - high-level project summary
