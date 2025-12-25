@@ -16,27 +16,53 @@ except ImportError:
 
 logger = logging.getLogger("tactical_llm")
 
-_DEFAULT_ENDPOINT = os.getenv("TACTICAL_LLM_ENDPOINT") or os.getenv(
-    "LLM_ENDPOINT", "http://127.0.0.1:8000/v1/chat/completions"
-)
-_DEFAULT_MODEL = os.getenv("TACTICAL_LLM_MODEL") or os.getenv("LLM_MODEL", "llama")
-_DEFAULT_TIMEOUT = float(os.getenv("TACTICAL_LLM_TIMEOUT_SEC", "8.0"))
-_DEFAULT_TEMPERATURE = float(os.getenv("TACTICAL_LLM_TEMPERATURE", "0.2"))
-_DEFAULT_BACKEND = os.getenv("TACTICAL_LLM_BACKEND", "remote_http").strip().lower()
-_DEFAULT_MODE = os.getenv("TACTICAL_DEFAULT_MODE", "scan")
-_DEFAULT_API_KEY = os.getenv("TACTICAL_LLM_API_KEY", os.getenv("LLM_API_KEY", ""))
 
-_SYSTEM_PROMPT = os.getenv(
-    "TACTICAL_LLM_SYSTEM_PROMPT",
-    "You are a tactical planner. Return JSON only with keys: global_strategy, targets, cooldowns.",
-)
+def _default_endpoint() -> str:
+    return os.getenv("TACTICAL_LLM_ENDPOINT") or os.getenv(
+        "LLM_ENDPOINT", "http://127.0.0.1:8000/v1/chat/completions"
+    )
+
+
+def _default_model() -> str:
+    return os.getenv("TACTICAL_LLM_MODEL") or os.getenv("LLM_MODEL", "llama")
+
+
+def _default_timeout() -> float:
+    return float(os.getenv("TACTICAL_LLM_TIMEOUT_SEC", "8.0"))
+
+
+def _default_temperature() -> float:
+    return float(os.getenv("TACTICAL_LLM_TEMPERATURE", "0.2"))
+
+
+def _default_backend() -> str:
+    return os.getenv("TACTICAL_LLM_BACKEND", "remote_http").strip().lower()
+
+
+def _default_mode() -> str:
+    return os.getenv("TACTICAL_DEFAULT_MODE", "scan")
+
+
+def _default_api_key() -> str:
+    return os.getenv("TACTICAL_LLM_API_KEY", os.getenv("LLM_API_KEY", ""))
+
+
+def _system_prompt() -> str:
+    return os.getenv(
+        "TACTICAL_LLM_SYSTEM_PROMPT",
+        "You are a tactical planner. Return JSON only with keys: global_strategy, targets, cooldowns.",
+    )
 
 
 class TacticalLLMAdapter:
     """Selects an LLM backend and returns strategy updates."""
 
-    def __init__(self, backend: Optional["TacticalLLMBackend"] = None) -> None:
-        self.backend = backend or _build_backend(_DEFAULT_BACKEND)
+    def __init__(
+        self,
+        backend: Optional["TacticalLLMBackend"] = None,
+        backend_kind: Optional[str] = None,
+    ) -> None:
+        self.backend = backend or _build_backend(backend_kind or _default_backend())
 
     def plan(self, summary: Any, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Return a strategy_update dict for shared state."""
@@ -60,19 +86,19 @@ class RemoteHTTPBackend(TacticalLLMBackend):
 
     def __init__(
         self,
-        endpoint: str,
-        model: str = _DEFAULT_MODEL,
-        timeout_sec: float = _DEFAULT_TIMEOUT,
-        api_key: str = _DEFAULT_API_KEY,
-        temperature: float = _DEFAULT_TEMPERATURE,
-        system_prompt: str = _SYSTEM_PROMPT,
+        endpoint: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout_sec: Optional[float] = None,
+        api_key: Optional[str] = None,
+        temperature: Optional[float] = None,
+        system_prompt: Optional[str] = None,
     ) -> None:
-        self.endpoint = endpoint
-        self.model = model
-        self.timeout_sec = timeout_sec
-        self.api_key = api_key
-        self.temperature = temperature
-        self.system_prompt = system_prompt
+        self.endpoint = endpoint or _default_endpoint()
+        self.model = model or _default_model()
+        self.timeout_sec = _default_timeout() if timeout_sec is None else float(timeout_sec)
+        self.api_key = _default_api_key() if api_key is None else api_key
+        self.temperature = _default_temperature() if temperature is None else float(temperature)
+        self.system_prompt = system_prompt or _system_prompt()
 
     def plan(self, summary: Any, context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         payload = _build_request(summary, context, self.model, self.temperature, self.system_prompt)
@@ -84,24 +110,24 @@ class TrtLLMBackend(RemoteHTTPBackend):
     """TensorRT-LLM backend alias (HTTP endpoint)."""
 
     def __init__(self) -> None:
-        endpoint = os.getenv("TACTICAL_TRT_LLM_ENDPOINT", _DEFAULT_ENDPOINT)
-        model = os.getenv("TACTICAL_TRT_LLM_MODEL", _DEFAULT_MODEL)
-        timeout_sec = float(os.getenv("TACTICAL_TRT_LLM_TIMEOUT_SEC", str(_DEFAULT_TIMEOUT)))
-        api_key = os.getenv("TACTICAL_TRT_LLM_API_KEY", _DEFAULT_API_KEY)
-        temperature = float(os.getenv("TACTICAL_TRT_LLM_TEMPERATURE", str(_DEFAULT_TEMPERATURE)))
+        endpoint = os.getenv("TACTICAL_TRT_LLM_ENDPOINT", _default_endpoint())
+        model = os.getenv("TACTICAL_TRT_LLM_MODEL", _default_model())
+        timeout_sec = float(os.getenv("TACTICAL_TRT_LLM_TIMEOUT_SEC", str(_default_timeout())))
+        api_key = os.getenv("TACTICAL_TRT_LLM_API_KEY", _default_api_key())
+        temperature = float(os.getenv("TACTICAL_TRT_LLM_TEMPERATURE", str(_default_temperature())))
         super().__init__(
             endpoint=endpoint,
             model=model,
             timeout_sec=timeout_sec,
             api_key=api_key,
             temperature=temperature,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=_system_prompt(),
         )
 
 
 def _build_backend(kind: str) -> TacticalLLMBackend:
     if kind == "remote_http":
-        return RemoteHTTPBackend(endpoint=_DEFAULT_ENDPOINT)
+        return RemoteHTTPBackend()
     if kind == "trt_llm":
         return TrtLLMBackend()
     raise ValueError(f"Unknown tactical LLM backend: {kind}")
@@ -225,15 +251,15 @@ def _normalize_update(update: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     now = time.time()
     if not isinstance(update, dict):
         return {
-            "global_strategy": {"mode": _DEFAULT_MODE, "ts": now},
+            "global_strategy": {"mode": _default_mode(), "ts": now},
             "targets": {},
             "cooldowns": {},
         }
     normalized = dict(update)
     global_strategy = update.get("global_strategy")
     if not isinstance(global_strategy, dict):
-        global_strategy = {"mode": global_strategy or _DEFAULT_MODE}
-    global_strategy.setdefault("mode", _DEFAULT_MODE)
+        global_strategy = {"mode": global_strategy or _default_mode()}
+    global_strategy.setdefault("mode", _default_mode())
     global_strategy.setdefault("ts", now)
     normalized["global_strategy"] = global_strategy
     if not isinstance(normalized.get("targets"), dict):
