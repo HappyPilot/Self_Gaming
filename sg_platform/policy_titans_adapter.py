@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -41,6 +42,7 @@ class TitansPolicyAdapter:
         self._mem_state = None
         self._latent_projector: Optional[torch.nn.Module] = None
         self._latent_in_dim: Optional[int] = None
+        self._lock = threading.Lock()
 
         self._move_to_device()
         self._maybe_load_memory()
@@ -56,21 +58,23 @@ class TitansPolicyAdapter:
             return _fallback_chunk(self.action_space_dim)
         tokens = latent_tensor.unsqueeze(1)
 
-        try:
-            output = self.memory(tokens, state=self._mem_state)
-        except TypeError:
-            output = self.memory(tokens)
+        with self._lock:
+            with torch.inference_mode():
+                try:
+                    output = self.memory(tokens, state=self._mem_state)
+                except TypeError:
+                    output = self.memory(tokens)
 
-        retrieved, new_state = _split_memory_output(output)
-        if new_state is not None:
-            self._mem_state = new_state
+                retrieved, new_state = _split_memory_output(output)
+                if new_state is not None:
+                    self._mem_state = new_state
 
-        features = _select_features(retrieved)
-        if features is None:
-            return _fallback_chunk(self.action_space_dim)
+                features = _select_features(retrieved)
+                if features is None:
+                    return _fallback_chunk(self.action_space_dim)
 
-        logits = self.action_head(features)
-        action_vector = logits.squeeze(0).float().detach().cpu().tolist()
+                logits = self.action_head(features)
+                action_vector = logits.squeeze(0).float().detach().cpu().tolist()
         return {
             "actions": [{"vector": action_vector}],
             "horizon": 1,
@@ -101,6 +105,10 @@ class TitansPolicyAdapter:
         if self.use_fp16:
             self.memory = _half_module(self.memory)
             self.action_head = _half_module(self.action_head)
+        self.memory.eval()
+        self.action_head.eval()
+        _freeze_module(self.memory)
+        _freeze_module(self.action_head)
 
     def _maybe_load_memory(self) -> None:
         load_flag = os.getenv("TITANS_LOAD_MEMORY", "0") != "0"
@@ -151,6 +159,8 @@ class TitansPolicyAdapter:
             self._latent_projector = torch.nn.Linear(self._latent_in_dim, self.dim).to(self.device)
             if self.use_fp16:
                 self._latent_projector = self._latent_projector.half()
+            self._latent_projector.eval()
+            _freeze_module(self._latent_projector)
         projected = self._latent_projector(vector.unsqueeze(0))
         return projected.squeeze(0)
 
@@ -186,6 +196,12 @@ def _half_module(module: Any) -> Any:
     if hasattr(module, "half"):
         return module.half()
     return module
+
+
+def _freeze_module(module: Any) -> None:
+    if hasattr(module, "parameters"):
+        for param in module.parameters():
+            param.requires_grad_(False)
 
 
 def _split_memory_output(output: Any) -> Tuple[Optional[torch.Tensor], Optional[Any]]:
