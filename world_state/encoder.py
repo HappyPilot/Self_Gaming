@@ -8,7 +8,7 @@ import numpy as np
 
 try:
     import cv2
-except Exception:  # noqa: BLE001
+except ImportError:
     cv2 = None
 
 
@@ -50,6 +50,8 @@ class FrameEncoder:
             return None
         array = np.frombuffer(data, dtype=np.uint8)
         frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
+        if frame is None:
+            return None
         return self.encode_frame(frame)
 
     def _project(self, vector: np.ndarray) -> Optional[np.ndarray]:
@@ -57,7 +59,7 @@ class FrameEncoder:
             return None
         if self.latent_dim >= vector.size:
             return vector
-        if self._proj is None or self._proj.shape[0] != vector.size:
+        if self._proj is None or self._proj.shape != (vector.size, self.latent_dim):
             scale = 1.0 / max(1.0, vector.size) ** 0.5
             self._proj = self._rng.normal(scale=scale, size=(vector.size, self.latent_dim)).astype(np.float32)
         return vector @ self._proj
