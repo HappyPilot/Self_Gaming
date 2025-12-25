@@ -2,7 +2,6 @@ services:
   mq:
     container_name: mq
     image: eclipse-mosquitto:2
-    network_mode: bridge
     restart: unless-stopped
     ports:
       - "127.0.0.1:1883:1883"

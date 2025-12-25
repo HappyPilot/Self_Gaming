@@ -1,7 +1,7 @@
 services:
   mq:
     ports:
-      - "8883:8883"
+      - "127.0.0.1:8883:8883"
     volumes:
       - ./mosquitto/tls.conf:/mosquitto/config/conf.d/tls.conf:ro
       - ./mosquitto/certs:/mosquitto/config/certs:ro
