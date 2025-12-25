@@ -9,7 +9,7 @@ services:
     network_mode: host
     restart: on-failure
     volumes:
-    - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    - ./mosquitto:/mosquitto/config:ro
     env_file: *id001
   strategy_state:
     container_name: strategy_state

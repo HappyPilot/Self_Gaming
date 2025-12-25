@@ -2,15 +2,13 @@ services:
   mq:
     container_name: mq
     image: eclipse-mosquitto:2
+    network_mode: bridge
     restart: unless-stopped
     ports:
-      - "1883:1883"
+      - "127.0.0.1:1883:1883"
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./mosquitto/passwords:/mosquitto/config/passwords:ro
-    networks:
-      - mqtt_internal
-
-networks:
-  mqtt_internal:
-    internal: true
+      - ./mosquitto:/mosquitto/config:ro
+    command:
+      - mosquitto
+      - -c
+      - /mosquitto/config/mosquitto.secure.conf
