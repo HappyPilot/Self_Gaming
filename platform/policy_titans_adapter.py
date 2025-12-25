@@ -1,0 +1,214 @@
+"""Experimental Titans policy adapter with live memory."""
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+try:
+    import torch
+except ImportError as exc:  # pragma: no cover
+    raise RuntimeError("torch is required for TitansPolicyAdapter") from exc
+
+try:
+    from titans_pytorch import NeuralMemory
+except ImportError as exc:  # pragma: no cover
+    raise RuntimeError("titans-pytorch is required for TitansPolicyAdapter") from exc
+
+logger = logging.getLogger("policy_titans")
+
+
+class TitansPolicyAdapter:
+    """Policy adapter that uses Titans neural memory for action chunks."""
+
+    def __init__(
+        self,
+        action_space_dim: int,
+        device: Optional[str] = None,
+        dim: Optional[int] = None,
+        chunk_size: Optional[int] = None,
+    ) -> None:
+        self.action_space_dim = int(action_space_dim)
+        self.dim = int(dim or os.getenv("TITANS_DIM", "256"))
+        self.chunk_size = int(chunk_size or os.getenv("TITANS_CHUNK", "32"))
+        self.device = torch.device(device or os.getenv("TITANS_DEVICE", "cuda" if torch.cuda.is_available() else "cpu"))
+        self.use_fp16 = self.device.type == "cuda"
+
+        self.memory = NeuralMemory(dim=self.dim, chunk_size=self.chunk_size)
+        self.action_head = torch.nn.Linear(self.dim, self.action_space_dim)
+        self._mem_state = None
+        self._latent_projector: Optional[torch.nn.Module] = None
+        self._latent_in_dim: Optional[int] = None
+
+        self._move_to_device()
+        self._maybe_load_memory()
+
+    def predict_chunk(self, observation: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
+        latent = _extract_latent(observation, state)
+        if latent is None:
+            logger.warning("TitansPolicyAdapter: missing latent input")
+            return _fallback_chunk(self.action_space_dim)
+
+        latent_tensor = self._prepare_latent(latent)
+        if latent_tensor is None:
+            return _fallback_chunk(self.action_space_dim)
+        tokens = latent_tensor.unsqueeze(1)
+
+        try:
+            output = self.memory(tokens, state=self._mem_state)
+        except TypeError:
+            output = self.memory(tokens)
+
+        retrieved, new_state = _split_memory_output(output)
+        if new_state is not None:
+            self._mem_state = new_state
+
+        features = _select_features(retrieved)
+        if features is None:
+            return _fallback_chunk(self.action_space_dim)
+
+        logits = self.action_head(features)
+        action_vector = logits.squeeze(0).float().detach().cpu().tolist()
+        return {
+            "actions": [{"vector": action_vector}],
+            "horizon": 1,
+            "meta": {
+                "backend": "titans",
+                "dim": self.dim,
+                "chunk_size": self.chunk_size,
+                "device": str(self.device),
+                "fp16": self.use_fp16,
+            },
+        }
+
+    def save_memory(self) -> Optional[Path]:
+        path_str = os.getenv("TITANS_MEM_PATH", "titans_memory.pth")
+        if not path_str:
+            return None
+        path = Path(path_str)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"mem_state": self._mem_state}
+        torch.save(payload, path)
+        logger.info("Saved Titans memory to %s", path)
+        return path
+
+    def _move_to_device(self) -> None:
+        self.memory = _move_module(self.memory, self.device)
+        self.action_head = _move_module(self.action_head, self.device)
+        if self.use_fp16:
+            self.memory = _half_module(self.memory)
+            self.action_head = _half_module(self.action_head)
+
+    def _maybe_load_memory(self) -> None:
+        load_flag = os.getenv("TITANS_LOAD_MEMORY", "0") != "0"
+        path_str = os.getenv("TITANS_MEM_PATH", "titans_memory.pth")
+        if not load_flag:
+            return
+        path = Path(path_str)
+        if not path.exists():
+            logger.warning("Titans memory file not found: %s", path)
+            return
+        try:
+            payload = torch.load(path, map_location=self.device)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load Titans memory: %s", exc)
+            return
+        if isinstance(payload, dict) and "mem_state" in payload:
+            self._mem_state = payload["mem_state"]
+        else:
+            self._mem_state = payload
+        logger.info("Loaded Titans memory from %s", path)
+
+    def _prepare_latent(self, latent: Any) -> Optional[torch.Tensor]:
+        tensor = _to_tensor(latent)
+        if tensor is None:
+            return None
+        vector = tensor.reshape(-1)
+        if vector.numel() == 0:
+            return None
+        if self._latent_in_dim is None:
+            self._latent_in_dim = int(vector.numel())
+        if vector.numel() != self.dim:
+            vector = self._project_latent(vector)
+        vector = vector.unsqueeze(0)
+        if self.use_fp16:
+            vector = vector.half()
+        return vector.to(self.device)
+
+    def _project_latent(self, vector: torch.Tensor) -> torch.Tensor:
+        if vector.numel() == self.dim:
+            return vector
+        if self._latent_projector is None or self._latent_in_dim != int(vector.numel()):
+            self._latent_in_dim = int(vector.numel())
+            self._latent_projector = torch.nn.Linear(self._latent_in_dim, self.dim).to(self.device)
+            if self.use_fp16:
+                self._latent_projector = self._latent_projector.half()
+        projected = self._latent_projector(vector.unsqueeze(0))
+        return projected.squeeze(0)
+
+
+def _extract_latent(observation: Dict[str, Any], state: Dict[str, Any]) -> Optional[Any]:
+    if isinstance(state, dict):
+        for key in ("latent_state", "latent"):
+            if key in state:
+                return state.get(key)
+    if isinstance(observation, dict):
+        return observation.get("latent")
+    return None
+
+
+def _to_tensor(value: Any) -> Optional[torch.Tensor]:
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        return value.float()
+    try:
+        return torch.as_tensor(value, dtype=torch.float32)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _move_module(module: Any, device: torch.device) -> Any:
+    if hasattr(module, "to"):
+        return module.to(device)
+    return module
+
+
+def _half_module(module: Any) -> Any:
+    if hasattr(module, "half"):
+        return module.half()
+    return module
+
+
+def _split_memory_output(output: Any) -> Tuple[Optional[torch.Tensor], Optional[Any]]:
+    if isinstance(output, tuple):
+        if len(output) >= 2:
+            return output[0], output[1]
+        if len(output) == 1:
+            return output[0], None
+    if isinstance(output, dict):
+        return output.get("retrieved"), output.get("state")
+    if isinstance(output, torch.Tensor):
+        return output, None
+    return None, None
+
+
+def _select_features(retrieved: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+    if retrieved is None:
+        return None
+    if retrieved.ndim == 3:
+        return retrieved[:, -1, :]
+    if retrieved.ndim == 2:
+        return retrieved
+    if retrieved.ndim == 1:
+        return retrieved.unsqueeze(0)
+    return None
+
+
+def _fallback_chunk(action_space_dim: int) -> Dict[str, Any]:
+    return {
+        "actions": [{"vector": [0.0] * int(action_space_dim)}],
+        "horizon": 1,
+        "meta": {"backend": "titans", "fallback": True},
+    }

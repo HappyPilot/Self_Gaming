@@ -8,6 +8,7 @@ RUN set -eux; \
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir --ignore-installed \
       paho-mqtt requests flask \
+      titans-pytorch \
       transformers==4.38.2 timm==0.9.16 opencv-python-headless==4.9.0.80 huggingface-hub==0.24.6
 
 RUN find /usr/lib/aarch64-linux-gnu/nvidia/weston -type f -size 0 -delete || true
