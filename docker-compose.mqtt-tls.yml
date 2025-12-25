@@ -1,0 +1,7 @@
+services:
+  mq:
+    ports:
+      - "8883:8883"
+    volumes:
+      - ./mosquitto/conf.d:/mosquitto/config/conf.d:ro
+      - ./mosquitto/certs:/mosquitto/config/certs:ro

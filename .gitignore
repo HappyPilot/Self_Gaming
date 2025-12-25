@@ -39,3 +39,8 @@ models/
 
 # Docker
 *.pid
+
+# Mosquitto secrets
+mosquitto/passwords
+mosquitto/certs/*.key
+mosquitto/certs/*.crt

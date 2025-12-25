@@ -107,3 +107,28 @@ def _configure_logging() -> None:
 
 
 _configure_logging()
+
+
+def _configure_mqtt_auth() -> None:
+    user = os.getenv("MQTT_USERNAME")
+    if not user:
+        return
+    try:
+        import paho.mqtt.client as mqtt
+    except Exception:
+        return
+    password = os.getenv("MQTT_PASSWORD")
+    original_client = mqtt.Client
+
+    def _client(*args, **kwargs):
+        client = original_client(*args, **kwargs)
+        try:
+            client.username_pw_set(user, password or None)
+        except Exception:
+            pass
+        return client
+
+    mqtt.Client = _client  # type: ignore[assignment]
+
+
+_configure_mqtt_auth()
