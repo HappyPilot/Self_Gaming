@@ -52,8 +52,10 @@ class FrameEncoder:
         frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
         return self.encode_frame(frame)
 
-    def _project(self, vector: np.ndarray) -> np.ndarray:
-        if self.latent_dim <= 0 or self.latent_dim >= vector.size:
+    def _project(self, vector: np.ndarray) -> Optional[np.ndarray]:
+        if self.latent_dim <= 0:
+            return None
+        if self.latent_dim >= vector.size:
             return vector
         if self._proj is None or self._proj.shape[0] != vector.size:
             scale = 1.0 / max(1.0, vector.size) ** 0.5
@@ -64,9 +66,9 @@ class FrameEncoder:
         if cv2 is not None:
             resized = cv2.resize(frame, (size, size), interpolation=cv2.INTER_AREA)
         else:
-            step_y = max(1, frame.shape[0] // size)
-            step_x = max(1, frame.shape[1] // size)
-            resized = frame[::step_y, ::step_x]
+            ys = np.linspace(0, frame.shape[0] - 1, num=size, dtype=int)
+            xs = np.linspace(0, frame.shape[1] - 1, num=size, dtype=int)
+            resized = frame[np.ix_(ys, xs)]
         if resized.ndim == 3:
             resized = resized.mean(axis=2)
         return resized

@@ -1,19 +1,12 @@
 import unittest
 
-try:
-    import numpy as np
-except ImportError:  # pragma: no cover
-    np = None
+import numpy as np
 
 from world_state.adapter import WorldStateAdapter
 from world_state.encoder import FrameEncoder
 
 
 class WorldStateAdapterTest(unittest.TestCase):
-    def setUp(self):
-        if np is None:
-            self.skipTest("numpy not installed")
-
     def test_encoder_output_dim(self):
         encoder = FrameEncoder(frame_size=8, latent_dim=16, seed=1)
         frame = np.zeros((32, 32, 3), dtype=np.uint8)

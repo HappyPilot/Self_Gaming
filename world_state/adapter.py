@@ -8,7 +8,7 @@ import numpy as np
 
 try:
     from utils.frame_transport import get_frame_bytes
-except Exception:  # noqa: BLE001
+except ImportError:
     from agents.utils.frame_transport import get_frame_bytes
 from world_state.encoder import FrameEncoder
 
@@ -41,9 +41,14 @@ class WorldStateAdapter:
         text_zones = obs.get("text_zones") or {}
         text = [zone.get("text") for zone in text_zones.values() if isinstance(zone, dict) and zone.get("text")]
         player = obs.get("player_candidate") or obs.get("player")
+        frame_id = obs.get("frame_id")
+        try:
+            frame_id = int(frame_id) if frame_id is not None else None
+        except (TypeError, ValueError):
+            frame_id = None
         state = {
             "timestamp": float(timestamp or obs.get("timestamp") or time.time()),
-            "frame_id": obs.get("frame_id"),
+            "frame_id": frame_id,
             "latent": latent.tolist() if isinstance(latent, np.ndarray) else None,
             "objects": objects,
             "object_count": len(objects) if isinstance(objects, list) else 0,
