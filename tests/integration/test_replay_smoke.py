@@ -16,6 +16,7 @@ class TestReplaySmoke(unittest.TestCase):
             meta = {"frame_topic": "vision/frame/preview"}
             (session_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
+            # Minimal JPEG (SOI/EOI only) for smoke coverage; dimensions will parse as 0.
             frame_path = frames_dir / "1700000000000_000001.jpg"
             frame_path.write_bytes(b"\xff\xd8\xff\xd9")
 

@@ -267,6 +267,7 @@ class ReplayRunner:
             logger.debug("Failed to parse JPEG dimensions for %s", path)
             width = height = 0
         variant = _variant_for_topic(topic)
+        # Keep keys aligned with docs/mqtt/topics.md and utils.frame_transport.get_frame_bytes.
         payload = {
             "ok": True,
             "timestamp": ts,
