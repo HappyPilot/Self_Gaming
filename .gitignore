@@ -36,6 +36,8 @@ models/
 *.trt
 *.plan
 *.onnx.cache
+mlruns/
+mlflow/
 
 # Docker
 *.pid
