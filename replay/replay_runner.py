@@ -72,6 +72,66 @@ def _parse_frame_timestamp(path: Path) -> float:
             return time.time()
 
 
+_JPEG_SOF_MARKERS = {
+    0xC0,
+    0xC1,
+    0xC2,
+    0xC3,
+    0xC5,
+    0xC6,
+    0xC7,
+    0xC9,
+    0xCA,
+    0xCB,
+    0xCD,
+    0xCE,
+    0xCF,
+}
+
+
+def _jpeg_dimensions(data: bytes) -> tuple[Optional[int], Optional[int]]:
+    if len(data) < 4 or data[0] != 0xFF or data[1] != 0xD8:
+        return None, None
+    i = 2
+    length = len(data)
+    while i < length:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        while i < length and data[i] == 0xFF:
+            i += 1
+        if i >= length:
+            break
+        marker = data[i]
+        i += 1
+        if marker in (0xD8, 0xD9):
+            continue
+        if i + 1 >= length:
+            break
+        segment_length = (data[i] << 8) | data[i + 1]
+        if segment_length < 2:
+            break
+        if i + segment_length > length:
+            break
+        segment_start = i + 2
+        if marker in _JPEG_SOF_MARKERS:
+            if segment_start + 4 >= length:
+                break
+            height = (data[segment_start + 1] << 8) | data[segment_start + 2]
+            width = (data[segment_start + 3] << 8) | data[segment_start + 4]
+            return width, height
+        i += segment_length
+    return None, None
+
+
+def _variant_for_topic(topic: str) -> str:
+    if topic.endswith("/full"):
+        return "full"
+    if topic.endswith("/preview"):
+        return "preview"
+    return "replay"
+
+
 @dataclass(frozen=True)
 class ReplayEvent:
     ts: float
@@ -202,10 +262,17 @@ class ReplayRunner:
         except OSError as exc:
             logger.warning("Failed to read frame %s: %s", path, exc)
             return False
+        width, height = _jpeg_dimensions(data)
+        if width is None or height is None:
+            logger.debug("Failed to parse JPEG dimensions for %s", path)
+            width = height = 0
+        variant = _variant_for_topic(topic)
         payload = {
             "ok": True,
             "timestamp": ts,
-            "variant": "replay",
+            "width": width,
+            "height": height,
+            "variant": variant,
             "image_b64": base64.b64encode(data).decode("ascii"),
         }
         try:
@@ -269,13 +336,15 @@ class ReplayRunner:
                 if sleep_for > 0:
                     time.sleep(sleep_for)
                 if event.kind == "frame":
-                    stats.frames_published += 1
-                    if not self.dry_run:
-                        self._publish_frame(event.topic, event.ts, event.payload)  # type: ignore[arg-type]
+                    if self.dry_run:
+                        stats.frames_published += 1
+                    elif self._publish_frame(event.topic, event.ts, event.payload):  # type: ignore[arg-type]
+                        stats.frames_published += 1
                 elif event.kind == "sensor":
-                    stats.sensors_published += 1
-                    if not self.dry_run:
-                        self._publish_sensor(event.topic, event.payload)
+                    if self.dry_run:
+                        stats.sensors_published += 1
+                    elif self._publish_sensor(event.topic, event.payload):
+                        stats.sensors_published += 1
         finally:
             if not self.dry_run:
                 self._disconnect()
