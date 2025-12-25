@@ -34,6 +34,7 @@ class TitansPolicyAdapter:
         self.chunk_size = int(chunk_size or os.getenv("TITANS_CHUNK", "32"))
         self.device = torch.device(device or os.getenv("TITANS_DEVICE", "cuda" if torch.cuda.is_available() else "cpu"))
         self.use_fp16 = self.device.type == "cuda"
+        self.allow_projector = os.getenv("TITANS_ALLOW_PROJECTOR", "0") != "0"
 
         self.memory = NeuralMemory(dim=self.dim, chunk_size=self.chunk_size)
         self.action_head = torch.nn.Linear(self.dim, self.action_space_dim)
@@ -75,6 +76,7 @@ class TitansPolicyAdapter:
             "horizon": 1,
             "meta": {
                 "backend": "titans",
+                "action_format": "vector",
                 "dim": self.dim,
                 "chunk_size": self.chunk_size,
                 "device": str(self.device),
@@ -127,14 +129,19 @@ class TitansPolicyAdapter:
         vector = tensor.reshape(-1)
         if vector.numel() == 0:
             return None
-        if self._latent_in_dim is None:
-            self._latent_in_dim = int(vector.numel())
-        if vector.numel() != self.dim:
-            vector = self._project_latent(vector)
-        vector = vector.unsqueeze(0)
+        vector = vector.to(self.device)
         if self.use_fp16:
             vector = vector.half()
-        return vector.to(self.device)
+        if vector.numel() != self.dim:
+            if not self.allow_projector:
+                logger.warning(
+                    "TitansPolicyAdapter: latent dim %s != %s (set TITANS_ALLOW_PROJECTOR=1 to enable projection)",
+                    vector.numel(),
+                    self.dim,
+                )
+                return None
+            vector = self._project_latent(vector)
+        return vector.unsqueeze(0)
 
     def _project_latent(self, vector: torch.Tensor) -> torch.Tensor:
         if vector.numel() == self.dim:
