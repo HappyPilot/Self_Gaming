@@ -5,10 +5,14 @@ import os
 import signal
 import threading
 import time
+import uuid
 from collections import deque
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
+
+from utils.frame_transport import get_frame_bytes
+from utils.latency import emit_control_metric
 
 # --- Constants ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
@@ -20,6 +24,11 @@ TEACHER_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action")
 REWARD_TOPIC = os.getenv("REWARD_TOPIC", "train/reward")
 SNAPSHOT_TOPIC = os.getenv("VISION_SNAPSHOT_TOPIC", "vision/snapshot")
 FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
+OBJECT_TOPIC = os.getenv("OBJECT_TOPIC", "vision/objects")
+OCR_TEXT_TOPIC = os.getenv("OCR_TEXT_TOPIC", "ocr/text")
+OCR_EASY_TOPIC = os.getenv("OCR_EASY_TOPIC", "ocr_easy/text")
+SIMPLE_OCR_TOPIC = os.getenv("SIMPLE_OCR_TOPIC", "simple_ocr/text")
+PERCEPTION_TOPIC = os.getenv("PERCEPTION_TOPIC", "vision/observation")
 REPLAY_TOPIC = os.getenv("REPLAY_STORE_TOPIC", "replay/store")
 MEM_STORE_TOPIC = os.getenv("MEM_STORE_TOPIC", "mem/store")
 MEM_SUMMARY_KEY = os.getenv("MEM_EPISODE_KEY", "episodes")
@@ -31,6 +40,13 @@ CRITICAL_DELTAS = {"hero_dead", "hero_resurrected"}
 CRITICAL_TAG_HINTS = {"critical_dialog", "boss_phase", "hp_low"}
 CRITICAL_SCOPE_DEFAULT = os.getenv("CRITICAL_SCOPE_DEFAULT", "critical_dialog:death")
 ACTION_CONTEXT_WINDOW_SEC = float(os.getenv("RECORDER_CONTEXT_WINDOW", "2.0"))
+RECORDER_SESSION_ENABLE = os.getenv("RECORDER_SESSION_ENABLE", "1") == "1"
+RECORDER_DATASET_DIR = Path(os.getenv("RECORDER_DATASET_DIR", "/mnt/ssd/datasets"))
+RECORDER_FRAME_TOPIC = os.getenv("RECORDER_FRAME_TOPIC") or FRAME_TOPIC
+RECORDER_SESSION_ID = os.getenv("RECORDER_SESSION_ID", "")
+RECORDER_GAME_ID = os.getenv("RECORDER_GAME_ID") or os.getenv("GAME_ID", "default")
+RECORDER_GAME_ID = RECORDER_GAME_ID.strip() or "default"
+RECORDER_EXPECT_FPS = float(os.getenv("RECORDER_EXPECT_FPS", "0"))
 
 # --- Setup ---
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -44,6 +60,187 @@ def _as_int(code) -> int:
         return int(code)
     except (TypeError, ValueError): return 0
 
+def _parse_topics(value: str) -> set[str]:
+    return {item.strip() for item in value.split(",") if item.strip()}
+
+def _build_sensor_topics() -> set[str]:
+    defaults = [SCENE_TOPIC, OBJECT_TOPIC, OCR_TEXT_TOPIC, OCR_EASY_TOPIC, SIMPLE_OCR_TOPIC, PERCEPTION_TOPIC]
+    if TEACHER_TOPIC:
+        defaults.append(TEACHER_TOPIC)
+    if REWARD_TOPIC:
+        defaults.append(REWARD_TOPIC)
+    raw = os.getenv("RECORDER_SENSOR_TOPICS")
+    if raw:
+        return _parse_topics(raw)
+    return set(defaults)
+
+SENSOR_TOPICS = _build_sensor_topics()
+
+
+class RecorderQC:
+    def __init__(self, expected_fps: float) -> None:
+        self.expected_fps = expected_fps
+        self.expected_period = 1.0 / expected_fps if expected_fps > 0 else 0.0
+        self.frames_total = 0
+        self.frames_dropped = 0
+        self.last_frame_ts = None
+        self.action_total = 0
+        self.last_action_ts = None
+        self.action_lag_ms = deque(maxlen=5000)
+        self.move_sum_sq = 0.0
+        self.move_count = 0
+        self.button_count = 0
+
+    def record_frame(self, ts: float) -> None:
+        self.frames_total += 1
+        if self.last_frame_ts is not None and self.expected_period > 0:
+            gap = ts - self.last_frame_ts
+            if gap > self.expected_period * 1.5:
+                dropped = max(0, int(gap / self.expected_period) - 1)
+                self.frames_dropped += dropped
+        self.last_frame_ts = ts
+
+    def record_action(self, ts: float, action: dict | None) -> None:
+        self.action_total += 1
+        self.last_action_ts = ts
+        if self.last_frame_ts is not None:
+            lag_ms = max(0.0, (ts - self.last_frame_ts) * 1000.0)
+            self.action_lag_ms.append(lag_ms)
+        if isinstance(action, dict):
+            dx = action.get("dx")
+            dy = action.get("dy")
+            if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
+                self.move_sum_sq += float(dx) ** 2 + float(dy) ** 2
+                self.move_count += 1
+            label = str(action.get("label") or action.get("action") or "").lower()
+            if label.startswith("key_") or label in {"key_press", "click_primary", "click_secondary", "mouse_click"}:
+                self.button_count += 1
+
+    def summary(self, start_ts: float, end_ts: float) -> dict:
+        duration = max(0.001, end_ts - start_ts)
+        dropped_pct = None
+        if self.expected_period > 0 and self.frames_total > 0:
+            dropped_pct = round((self.frames_dropped / float(self.frames_total)) * 100.0, 2)
+        lag_mean = None
+        lag_p95 = None
+        lag_max = None
+        if self.action_lag_ms:
+            lag_values = sorted(self.action_lag_ms)
+            lag_mean = round(sum(lag_values) / float(len(lag_values)), 3)
+            lag_max = round(max(lag_values), 3)
+            idx = int(0.95 * (len(lag_values) - 1))
+            lag_p95 = round(lag_values[idx], 3)
+        jitter_rms = None
+        if self.move_count > 0:
+            jitter_rms = round((self.move_sum_sq / float(self.move_count)) ** 0.5, 3)
+        button_rate = round(self.button_count / duration, 3) if self.button_count > 0 else 0.0
+        return {
+            "duration_sec": round(duration, 3),
+            "frames_total": self.frames_total,
+            "frames_dropped": self.frames_dropped,
+            "dropped_frames_pct": dropped_pct,
+            "input_lag_ms_mean": lag_mean,
+            "input_lag_ms_p95": lag_p95,
+            "input_lag_ms_max": lag_max,
+            "stick_jitter_rms": jitter_rms,
+            "button_spam_rate_hz": button_rate,
+        }
+
+
+class RecordingSession:
+    def __init__(self) -> None:
+        self.enabled = RECORDER_SESSION_ENABLE
+        self.session_id = None
+        self.start_ts = time.time()
+        self.frames_written = 0
+        self.actions_written = 0
+        self.sensors_written = 0
+        self.qc = RecorderQC(RECORDER_EXPECT_FPS)
+        if not self.enabled:
+            self.base_dir = None
+            return
+        session_id = RECORDER_SESSION_ID or f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        self.session_id = session_id
+        self.base_dir = RECORDER_DATASET_DIR / RECORDER_GAME_ID / session_id
+        self.frames_dir = self.base_dir / "frames"
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.frames_dir.mkdir(parents=True, exist_ok=True)
+        self.actions_fp = (self.base_dir / "actions.jsonl").open("a", encoding="utf-8", buffering=1)
+        self.sensors_fp = (self.base_dir / "sensors.jsonl").open("a", encoding="utf-8", buffering=1)
+        meta = {
+            "session_id": session_id,
+            "game_id": RECORDER_GAME_ID,
+            "started_at": self.start_ts,
+            "frame_topic": RECORDER_FRAME_TOPIC,
+            "sensor_topics": sorted(SENSOR_TOPICS),
+            "action_topics": [ACT_TOPIC] + ([ACT_ALIAS] if ACT_ALIAS else []),
+            "profile": os.getenv("SG_PROFILE"),
+            "expected_fps": RECORDER_EXPECT_FPS,
+        }
+        (self.base_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    def _write_jsonl(self, fp, payload: dict) -> None:
+        fp.write(json.dumps(payload) + "\n")
+
+    def record_frame(self, payload: dict | None) -> None:
+        if not self.enabled or payload is None:
+            return
+        data = get_frame_bytes(payload)
+        if not data:
+            return
+        ts = float(payload.get("timestamp", time.time()))
+        filename = f"{int(ts * 1000)}_{self.frames_written:06d}.jpg"
+        try:
+            (self.frames_dir / filename).write_bytes(data)
+            self.frames_written += 1
+            self.qc.record_frame(ts)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to write frame: %s", exc)
+
+    def record_action(self, action: dict | None, ts: float, topic: str) -> None:
+        if not self.enabled:
+            return
+        payload = {"timestamp": ts, "topic": topic, "action": action}
+        try:
+            self._write_jsonl(self.actions_fp, payload)
+            self.actions_written += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to write action: %s", exc)
+        self.qc.record_action(ts, action)
+
+    def record_sensor(self, topic: str, payload: dict | None, ts: float) -> None:
+        if not self.enabled:
+            return
+        data = {"timestamp": ts, "topic": topic, "payload": payload}
+        try:
+            self._write_jsonl(self.sensors_fp, data)
+            self.sensors_written += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to write sensor: %s", exc)
+
+    def close(self) -> dict | None:
+        if not self.enabled or self.base_dir is None:
+            self.enabled = False
+            return None
+        self.enabled = False
+        end_ts = time.time()
+        qc = self.qc.summary(self.start_ts, end_ts)
+        qc.update({
+            "frames_written": self.frames_written,
+            "actions_written": self.actions_written,
+            "sensors_written": self.sensors_written,
+        })
+        try:
+            (self.base_dir / "qc.json").write_text(json.dumps(qc, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to write qc.json: %s", exc)
+        try:
+            self.actions_fp.close()
+            self.sensors_fp.close()
+        except Exception:
+            pass
+        return qc
+
 class RecorderAgent:
     def __init__(self):
         self.client = mqtt.Client(client_id="recorder_agent", protocol=mqtt.MQTTv311)
@@ -55,6 +252,7 @@ class RecorderAgent:
         self.last_teacher_action = {"source": None, "action": None, "timestamp": 0.0}
         self.last_reward = {"value": 0.0, "timestamp": 0.0}
         self.last_snapshot = None
+        self.session = RecordingSession()
 
     def _classify_delta(self, before: dict | None, after: dict | None) -> str:
         if not isinstance(before, dict) or not isinstance(after, dict): return "unknown"
@@ -178,7 +376,9 @@ class RecorderAgent:
         self.client.publish(MEM_STORE_TOPIC, json.dumps(payload))
 
     def _on_connect(self, client, userdata, flags, rc):
-        topics = {(SCENE_TOPIC, 0), (ACT_TOPIC, 0), (SNAPSHOT_TOPIC, 0), (FRAME_TOPIC, 0)}
+        topics = {(SCENE_TOPIC, 0), (ACT_TOPIC, 0), (SNAPSHOT_TOPIC, 0), (RECORDER_FRAME_TOPIC, 0)}
+        for topic in SENSOR_TOPICS:
+            topics.add((topic, 0))
         if TEACHER_TOPIC: topics.add((TEACHER_TOPIC, 0))
         if REWARD_TOPIC: topics.add((REWARD_TOPIC, 0))
         if ACT_ALIAS and ACT_ALIAS != ACT_TOPIC: topics.add((ACT_ALIAS, 0))
@@ -196,6 +396,12 @@ class RecorderAgent:
             data = json.loads(msg.payload.decode("utf-8", "ignore"))
         except Exception: data = {"raw": msg.payload}
 
+        if msg.topic == RECORDER_FRAME_TOPIC and isinstance(data, dict):
+            self.session.record_frame(data)
+        if msg.topic in SENSOR_TOPICS and isinstance(data, dict):
+            ts = float(data.get("timestamp", time.time()))
+            self.session.record_sensor(msg.topic, data, ts)
+
         if msg.topic == SCENE_TOPIC and data.get("ok"):
             self.scene_cache.append((time.time(), data))
         elif msg.topic in (SNAPSHOT_TOPIC, FRAME_TOPIC) and data.get("ok"):
@@ -212,8 +418,9 @@ class RecorderAgent:
             except (TypeError, ValueError): val = 0.0
             self.last_reward = {"value": val, "timestamp": time.time(), "details": data}
         elif msg.topic in (ACT_TOPIC, ACT_ALIAS):
-            if not self.scene_cache: return
             now = time.time()
+            self.session.record_action(data if isinstance(data, dict) else None, now, msg.topic)
+            if not self.scene_cache: return
             ts, scene_after = self.scene_cache[-1]
             scene_before = self.scene_cache[-2][1] if len(self.scene_cache) > 1 else scene_after
             
@@ -239,10 +446,22 @@ class RecorderAgent:
             self._maybe_store_critical_episode(record, episode_path)
             self._prune_if_needed()
 
+    def _publish_qc_metrics(self, qc: dict | None) -> None:
+        if not qc:
+            return
+        tags = {"agent": "recorder_agent", "game_id": RECORDER_GAME_ID}
+        if self.session.session_id:
+            tags["session_id"] = self.session.session_id
+        for key, value in qc.items():
+            if isinstance(value, (int, float)):
+                emit_control_metric(self.client, f"recorder.{key}", value, tags=tags)
+
     def run(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
         self.client.loop_start()
         stop_event.wait()
+        qc = self.session.close()
+        self._publish_qc_metrics(qc)
         self.client.loop_stop()
         self.client.disconnect()
         logger.info("Recorder agent shut down")
