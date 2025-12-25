@@ -1,0 +1,13 @@
+services:
+  mq:
+    container_name: mq
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1883:1883"
+    volumes:
+      - ./mosquitto:/mosquitto/config:ro
+    command:
+      - mosquitto
+      - -c
+      - /mosquitto/config/mosquitto.secure.conf
