@@ -16,6 +16,9 @@ Interface
 - `health_check()` -> `dict`
 - `close()`
 
+`StepResult.done` is `False` unless the observation payload includes a
+`done` (or `terminal`) flag.
+
 MQTT adapter
 ------------
 
@@ -38,6 +41,7 @@ PY
 
 Environment variables:
 
+- `ENV_MQTT_CLIENT_ID` (default: env_adapter_<pid>_<suffix>)
 - `ENV_OBS_TOPIC` (default: `vision/observation`)
 - `ENV_ACTION_TOPIC` (default: `act/cmd`)
 - `ENV_REWARD_TOPIC` (default: `train/reward`)

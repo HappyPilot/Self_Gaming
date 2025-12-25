@@ -39,7 +39,8 @@ class InMemoryEnvAdapter(EnvAdapter):
 
     def get_observation(self, timeout_sec: Optional[float] = None) -> Optional[Observation]:
         try:
-            return self._obs_queue.get(timeout=timeout_sec or 0.0)
+            timeout = 0.1 if timeout_sec is None else timeout_sec
+            return self._obs_queue.get(timeout=timeout)
         except queue.Empty:
             return None
 

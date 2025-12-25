@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import time
+import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 try:
@@ -12,7 +15,14 @@ try:
 except Exception:  # noqa: BLE001
     mqtt = None
 
+try:
+    import jsonschema
+except Exception:  # noqa: BLE001
+    jsonschema = None
+
 from env_api.adapter import Action, EnvAdapter, Observation, StepResult
+
+logger = logging.getLogger("mqtt_env_adapter")
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
@@ -27,6 +37,17 @@ REWARD_QUEUE_MAX = int(os.getenv("ENV_REWARD_QUEUE_MAX", "200"))
 STEP_TIMEOUT_SEC = float(os.getenv("ENV_STEP_TIMEOUT_SEC", "1.0"))
 OBS_TIMEOUT_SEC = float(os.getenv("ENV_OBS_TIMEOUT_SEC", "2.0"))
 HEALTH_STALE_SEC = float(os.getenv("ENV_HEALTH_STALE_SEC", "5.0"))
+
+_SCHEMA_BASE = Path(__file__).resolve().parents[1] / "schemas"
+_OBS_SCHEMA = None
+_ACTION_SCHEMA = None
+if jsonschema is not None:
+    try:
+        _OBS_SCHEMA = json.loads((_SCHEMA_BASE / "observation.schema.json").read_text(encoding="utf-8"))
+        _ACTION_SCHEMA = json.loads((_SCHEMA_BASE / "action.schema.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        _OBS_SCHEMA = None
+        _ACTION_SCHEMA = None
 
 
 def _queue_put(q: queue.Queue, item: object) -> None:
@@ -51,6 +72,27 @@ def _coerce_action(action: Dict[str, Any] | Action) -> Dict[str, Any]:
         return payload
     return dict(action)
 
+def _validate_payload(schema: Optional[dict], payload: Dict[str, Any], label: str) -> None:
+    if jsonschema is None or schema is None:
+        return
+    try:
+        jsonschema.validate(payload, schema)
+    except jsonschema.ValidationError as exc:
+        logger.warning("Schema validation failed for %s: %s", label, exc)
+
+def _default_client_id() -> str:
+    return f"env_adapter_{os.getpid()}_{uuid.uuid4().hex[:6]}"
+
+def _extract_reward(payload: Dict[str, Any]) -> Optional[float]:
+    value = payload.get("reward")
+    if value is None:
+        value = payload.get("value")
+    if value is None:
+        value = payload.get("reward_value")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 class MqttEnvAdapter(EnvAdapter):
     """EnvAdapter that uses MQTT topics for observation and actions."""
@@ -64,7 +106,8 @@ class MqttEnvAdapter(EnvAdapter):
         self._latest_reward: Optional[tuple[float, float]] = None
         self._last_obs_ts: Optional[float] = None
         self._connected = False
-        self.client = mqtt.Client(client_id="env_adapter", protocol=mqtt.MQTTv311)
+        client_id = os.getenv("ENV_MQTT_CLIENT_ID") or _default_client_id()
+        self.client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
@@ -91,6 +134,7 @@ class MqttEnvAdapter(EnvAdapter):
             frame_id = int(frame_id) if frame_id is not None else None
         except (TypeError, ValueError):
             frame_id = None
+        _validate_payload(_OBS_SCHEMA, payload, "observation")
         return Observation(timestamp=ts, frame_id=frame_id, payload=payload, topic=topic)
 
     def _on_message(self, _client, _userdata, msg):
@@ -106,10 +150,8 @@ class MqttEnvAdapter(EnvAdapter):
             self._last_obs_ts = obs.timestamp
             _queue_put(self._obs_queue, obs)
         elif msg.topic == REWARD_TOPIC:
-            value = payload.get("reward")
-            try:
-                reward = float(value)
-            except (TypeError, ValueError):
+            reward = _extract_reward(payload)
+            if reward is None:
                 return
             ts = float(payload.get("timestamp", time.time()))
             self._latest_reward = (reward, ts)
@@ -141,16 +183,27 @@ class MqttEnvAdapter(EnvAdapter):
     def step(self, action: Dict[str, Any] | Action) -> StepResult:
         action_payload = _coerce_action(action)
         action_ts = float(action_payload.get("timestamp", time.time()))
+        _validate_payload(_ACTION_SCHEMA, action_payload, "action")
         try:
             self.client.publish(ACTION_TOPIC, json.dumps(action_payload))
         except Exception:
             return StepResult(None, None, False, info={"publish_failed": True}, health=self.health_check())
-        obs = self._wait_for_obs(self._last_obs_ts, STEP_TIMEOUT_SEC)
+        before_ts = self._last_obs_ts
+        obs = self._wait_for_obs(before_ts, STEP_TIMEOUT_SEC)
+        if obs is not None:
+            self._latest_obs = obs
+            self._last_obs_ts = obs.timestamp
         reward = self._reward_after(action_ts)
         info = {"action_ts": action_ts}
+        done = False
+        if obs is not None:
+            if isinstance(obs.payload.get("done"), bool):
+                done = bool(obs.payload.get("done"))
+            elif "terminal" in obs.payload:
+                done = bool(obs.payload.get("terminal"))
         if obs is None:
             info["timeout"] = True
-        return StepResult(obs, reward, False, info=info, health=self.health_check())
+        return StepResult(obs, reward, done, info=info, health=self.health_check())
 
     def get_observation(self, timeout_sec: Optional[float] = None) -> Optional[Observation]:
         timeout = OBS_TIMEOUT_SEC if timeout_sec is None else timeout_sec
