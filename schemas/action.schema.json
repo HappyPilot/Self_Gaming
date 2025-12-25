@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/HappyPilot/Self_Gaming/main/schemas/action.schema.json",
+  "title": "ActionCommand",
+  "type": "object",
+  "required": ["action"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "action": { "type": "string" },
+    "label": { "type": "string" },
+    "timestamp": { "type": "number" },
+    "source": { "type": "string" },
+    "dx": { "type": "number" },
+    "dy": { "type": "number" },
+    "target_norm": { "$ref": "#/$defs/vec2_norm" },
+    "target_px": { "$ref": "#/$defs/vec2_px" },
+    "button": { "type": "string" },
+    "key": { "type": "string" },
+    "policy_action": { "type": ["string", "null"] },
+    "teacher_action": { "type": ["string", "null"] },
+    "teacher_alpha": { "type": "number" },
+    "task_id": { "type": ["string", "integer"] },
+    "goal_id": { "type": ["string", "integer"] },
+    "confidence": { "type": "number" }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "vec2_norm": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "type": "number", "minimum": 0, "maximum": 1 }
+    },
+    "vec2_px": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "type": "number" }
+    }
+  }
+}

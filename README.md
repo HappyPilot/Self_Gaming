@@ -124,6 +124,7 @@ The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specif
 Unit tests cover the teacher prompt pipeline, the policy annealing logic, the object-detection helpers, and the reward calculator:
 
 ```bash
+python3 -m pip install -r requirements-dev.txt
 python3 -m unittest \
   tests/test_teacher_agent.py \
   tests/test_policy_agent.py \
