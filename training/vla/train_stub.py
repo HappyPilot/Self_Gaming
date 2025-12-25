@@ -23,49 +23,13 @@ except ImportError:  # pragma: no cover
     mlflow = None
 
 from training.vla.model import ActionChunkMLP
-from training.vla.utils import iter_jsonl
+from training.vla.utils import encode_action, iter_jsonl
 from world_state.encoder import FrameEncoder
 
 logging.basicConfig(level=os.getenv("VLA_TRAIN_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("vla_train_stub")
 
 DEFAULT_ACTION_DIM = 4
-
-
-def _encode_action(payload: Dict[str, Any], action_dim: int) -> List[float]:
-    dx = float(payload.get("dx", 0.0) or 0.0)
-    dy = float(payload.get("dy", 0.0) or 0.0)
-    click = _has_click(payload)
-    key = payload.get("key") or payload.get("keys")
-    vector = [dx, dy, 1.0 if click else 0.0, 1.0 if key else 0.0]
-    if action_dim <= 0:
-        return []
-    if action_dim == len(vector):
-        return vector
-    if action_dim < len(vector):
-        return vector[:action_dim]
-    return vector + [0.0] * (action_dim - len(vector))
-
-
-def _has_click(payload: Dict[str, Any]) -> bool:
-    if "click" in payload:
-        value = payload.get("click")
-        if isinstance(value, bool):
-            return value
-        return value is not None
-    if "button" in payload:
-        value = payload.get("button")
-        if isinstance(value, bool):
-            return value
-        return value is not None
-    if "buttons" in payload:
-        value = payload.get("buttons")
-        if isinstance(value, (list, tuple)):
-            return len(value) > 0
-        if isinstance(value, bool):
-            return value
-        return value is not None
-    return False
 
 
 def _build_action_chunk(actions: List[Dict[str, Any]], chunk_size: int, action_dim: int) -> List[float]:
@@ -81,7 +45,7 @@ def _build_action_chunk(actions: List[Dict[str, Any]], chunk_size: int, action_d
             payload = entry.get("action") if isinstance(entry.get("action"), dict) else entry
             if not isinstance(payload, dict):
                 payload = {}
-            chunk.extend(_encode_action(payload, action_dim))
+            chunk.extend(encode_action(payload, action_dim))
         else:
             chunk.extend([0.0] * action_dim)
     return chunk
