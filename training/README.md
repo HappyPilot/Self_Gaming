@@ -25,3 +25,9 @@ Environment variables:
 - `MLFLOW_TRACKING_URI` (default: http://127.0.0.1:5001)
 - `MLFLOW_EXPERIMENT` (default: self_gaming)
 - `MLFLOW_RUN_NAME` (optional)
+
+VLA training stub
+-----------------
+
+See `training/vla/README.md` for the imitation baseline skeleton that
+prepares datasets from recorder sessions and logs runs to MLflow.
