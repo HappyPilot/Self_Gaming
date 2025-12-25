@@ -9,6 +9,7 @@ This repository hosts the collection of MQTT-driven agents that coordinate UI au
 - `docs/mqtt/topics.md` - MQTT topic map and payload examples
 - `docs/jetson_setup.md` - Jetson setup checklist (JetPack, MAXN, ZRAM, runtime)
 - `docs/onnx_export.md` - export YOLO weights to ONNX
+- `recording/README.md` - recorder session layout and QC metrics
 - `config/README.md` - env profiles and local overrides
 - `docs/compose_config.yaml` - compose overview and wiring hints
 - `PROJECT_OVERVIEW.md` - high-level project summary
@@ -107,7 +108,7 @@ The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specif
 
 ## Training Pipeline Updates
 
-- `recorder_agent.py` records scene text, YOLO objects, teacher suggestions, and rewards for every `(state, action)` pair in `/mnt/ssd/datasets/episodes`.
+- `recorder_agent.py` writes session datasets under `RECORDER_DATASET_DIR/<game>/<session_id>/` (frames, actions.jsonl, sensors.jsonl, meta.json, qc.json; see `recording/README.md`) and keeps legacy `sample_*.json` files in `RECORDER_DIR`.
 - `teach_agent.py` includes the distillation schedule plus the reward topic when it emits `train/jobs`.
 - `train_manager_agent.py` consumes the richer samples, applies a KL distillation loss against the teacher actions, and adds a reward-weighted behaviour-cloning/RL loss (tunable via `TEACHER_KL_WEIGHT`, `REWARD_WEIGHT`).
 
