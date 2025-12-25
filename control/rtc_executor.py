@@ -116,8 +116,6 @@ class RTCExecutor:
                 has_current = self._current is not None
             if queue_size > 0:
                 continue
-            if not has_current:
-                pass
             try:
                 actions = self.chunk_provider()
             except Exception:
@@ -176,6 +174,7 @@ class RTCExecutor:
         blended = self._blend_actions(last_action, first_action, self.overlap_steps)
         if not blended:
             return next_chunk
+        # Keep the original first action after the blended ramp.
         merged = blended + list(next_chunk.actions)
         return ActionChunk(actions=merged, chunk_id=next_chunk.chunk_id, created_ts=next_chunk.created_ts)
 
@@ -197,6 +196,7 @@ class RTCExecutor:
             dx = last_vec[0] + (first_vec[0] - last_vec[0]) * alpha
             dy = last_vec[1] + (first_vec[1] - last_vec[1]) * alpha
             payload = dict(first_action)
+            payload.pop("timestamp", None)
             payload["dx"] = float(dx)
             payload["dy"] = float(dy)
             blended.append(payload)
@@ -204,8 +204,10 @@ class RTCExecutor:
 
     def _gap_fill(self, last_action: Optional[Dict[str, object]]) -> Optional[Dict[str, object]]:
         mode = (self.gap_fill_mode or "zero_move").lower()
-        if mode == "hold_last" and last_action is not None:
-            return dict(last_action)
+        if mode == "hold_last":
+            if last_action is not None and self._action_vector(last_action) is not None:
+                return dict(last_action)
+            mode = "zero_move"
         if mode == "wait":
             return {"action": "wait"}
         if mode == "noop":
@@ -234,7 +236,12 @@ class RTCExecutor:
 
     def _record_ready_ratio(self) -> None:
         with self._lock:
+            remaining = None
+            if self._current is not None:
+                remaining = len(self._current.actions) - self._current_idx
             ready = len(self._chunk_queue) > 0
+        if remaining is not None and remaining > self.prefetch_lead:
+            return
         self._ready_window.append(1 if ready else 0)
         self._tick_count += 1
         if self._tick_count % self.sample_every != 0:
