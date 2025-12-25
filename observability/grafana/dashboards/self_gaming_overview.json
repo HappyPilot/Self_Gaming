@@ -1,0 +1,81 @@
+{
+  "title": "Self Gaming Overview",
+  "uid": "self-gaming-overview",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Latency p50/p95 by stage",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(self_gaming_latency_ms_bucket[5m])) by (le, stage))",
+          "legendFormat": "p50 {{stage}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(self_gaming_latency_ms_bucket[5m])) by (le, stage))",
+          "legendFormat": "p95 {{stage}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency SLA violations (rate)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum(rate(self_gaming_latency_violations_total[5m])) by (stage, agent)",
+          "legendFormat": "{{stage}} {{agent}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Control metrics",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "self_gaming_control_metric_value",
+          "legendFormat": "{{metric}} {{agent}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "MQTT last seen (seconds ago)",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "time() - self_gaming_mqtt_last_seen_seconds",
+          "legendFormat": "{{topic}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "System memory (node exporter)",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "node_memory_MemAvailable_bytes",
+          "legendFormat": "mem_available"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "GPU util (dcgm exporter)",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "avg(DCGM_FI_DEV_GPU_UTIL) by (gpu)",
+          "legendFormat": "gpu {{gpu}}"
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-15m", "to": "now" }
+}

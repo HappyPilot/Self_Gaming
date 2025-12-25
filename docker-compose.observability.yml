@@ -1,0 +1,74 @@
+services:
+  metrics_exporter:
+    container_name: metrics_exporter
+    build:
+      context: .
+      dockerfile: observability/Dockerfile
+    image: local/metrics-exporter:latest
+    restart: unless-stopped
+    environment:
+      - MQTT_HOST=${MQTT_HOST:-mq}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - LATENCY_TOPIC=${LATENCY_TOPIC:-metrics/latency}
+      - CONTROL_METRIC_TOPIC=${CONTROL_METRIC_TOPIC:-metrics/control}
+      - EXPORTER_PORT=9108
+    ports:
+      - "9108:9108"
+
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    volumes:
+      - ./observability/${PROMETHEUS_CONFIG:-prometheus.yml}:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - PROMETHEUS_URL=http://prometheus:9090
+    volumes:
+      - ./observability/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
+  node_exporter:
+    container_name: node_exporter
+    image: prom/node-exporter:v1.8.1
+    restart: unless-stopped
+    profiles:
+      - infra_metrics
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+
+  dcgm_exporter:
+    container_name: dcgm_exporter
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-2.6.7-ubuntu20.04
+    restart: unless-stopped
+    profiles:
+      - gpu_metrics
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    ports:
+      - "9400:9400"
+
+volumes:
+  grafana_data:
