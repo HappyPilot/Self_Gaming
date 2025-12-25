@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from training.vla.utils import iter_jsonl, write_jsonl
+from training.vla.utils import iter_jsonl
 
 
 def _parse_frame_ts(path: Path) -> Optional[float]:
@@ -174,24 +174,29 @@ def main() -> None:
     output_path = Path(args.output)
     sensor_topics = [topic.strip() for topic in args.sensor_topics.split(",") if topic.strip()]
 
-    all_samples: List[Dict] = []
-    for session_dir, _game_id in _list_sessions(dataset_dir, args.game_id):
-        samples = build_samples(
-            session_dir=session_dir,
-            horizon_sec=args.horizon_sec,
-            sensor_window_sec=args.sensor_window_sec,
-            sensor_topics=sensor_topics or None,
-        )
-        all_samples.extend(samples)
-        if args.max_samples and len(all_samples) >= args.max_samples:
-            all_samples = all_samples[: args.max_samples]
-            break
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
+    with output_path.open("w", encoding="utf-8") as handle:
+        for session_dir, _game_id in _list_sessions(dataset_dir, args.game_id):
+            samples = build_samples(
+                session_dir=session_dir,
+                horizon_sec=args.horizon_sec,
+                sensor_window_sec=args.sensor_window_sec,
+                sensor_topics=sensor_topics or None,
+            )
+            for sample in samples:
+                handle.write(json.dumps(sample, ensure_ascii=True))
+                handle.write("\n")
+                total += 1
+                if args.max_samples and total >= args.max_samples:
+                    break
+            if args.max_samples and total >= args.max_samples:
+                break
 
-    if not all_samples:
+    if total == 0:
         raise SystemExit("No samples found. Check dataset-dir, game-id, or recorder output.")
 
-    write_jsonl(output_path, all_samples)
-    print(f"Wrote {len(all_samples)} samples to {output_path}")
+    print(f"Wrote {total} samples to {output_path}")
 
 
 if __name__ == "__main__":

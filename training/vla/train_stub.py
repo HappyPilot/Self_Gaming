@@ -32,12 +32,40 @@ logger = logging.getLogger("vla_train_stub")
 DEFAULT_ACTION_DIM = 4
 
 
-def _encode_action(payload: Dict[str, Any]) -> List[float]:
+def _encode_action(payload: Dict[str, Any], action_dim: int) -> List[float]:
     dx = float(payload.get("dx", 0.0) or 0.0)
     dy = float(payload.get("dy", 0.0) or 0.0)
-    click = payload.get("button") or payload.get("buttons") or payload.get("click")
+    click = _has_click(payload)
     key = payload.get("key") or payload.get("keys")
-    return [dx, dy, 1.0 if click else 0.0, 1.0 if key else 0.0]
+    vector = [dx, dy, 1.0 if click else 0.0, 1.0 if key else 0.0]
+    if action_dim <= 0:
+        return []
+    if action_dim == len(vector):
+        return vector
+    if action_dim < len(vector):
+        return vector[:action_dim]
+    return vector + [0.0] * (action_dim - len(vector))
+
+
+def _has_click(payload: Dict[str, Any]) -> bool:
+    if "click" in payload:
+        value = payload.get("click")
+        if isinstance(value, bool):
+            return value
+        return value is not None
+    if "button" in payload:
+        value = payload.get("button")
+        if isinstance(value, bool):
+            return value
+        return value is not None
+    if "buttons" in payload:
+        value = payload.get("buttons")
+        if isinstance(value, (list, tuple)):
+            return len(value) > 0
+        if isinstance(value, bool):
+            return value
+        return value is not None
+    return False
 
 
 def _build_action_chunk(actions: List[Dict[str, Any]], chunk_size: int, action_dim: int) -> List[float]:
@@ -53,7 +81,7 @@ def _build_action_chunk(actions: List[Dict[str, Any]], chunk_size: int, action_d
             payload = entry.get("action") if isinstance(entry.get("action"), dict) else entry
             if not isinstance(payload, dict):
                 payload = {}
-            chunk.extend(_encode_action(payload))
+            chunk.extend(_encode_action(payload, action_dim))
         else:
             chunk.extend([0.0] * action_dim)
     return chunk
@@ -236,6 +264,7 @@ def main() -> None:
 
         if args.export_onnx or args.onnx_path:
             onnx_path = Path(args.onnx_path) if args.onnx_path else output_dir / "vla_stub.onnx"
+            model.eval()
             _export_onnx(model, onnx_path, input_dim=x.shape[1])
             _log_artifact(onnx_path)
             logger.info("Exported ONNX: %s", onnx_path)
