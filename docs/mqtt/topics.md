@@ -131,6 +131,7 @@ Schema: `schemas/observation.schema.json`
   "player_candidate": {"label": "player", "confidence": 0.5, "bbox": [0.4, 0.2, 0.52, 0.48]}
 }
 ```
+Note: bbox values are normalized XYXY in [0, 1].
 
 ### ocr_easy/text
 Required: ok, text, results, backend

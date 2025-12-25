@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/schemas/observation.schema.json",
+  "$id": "https://raw.githubusercontent.com/HappyPilot/Self_Gaming/main/schemas/observation.schema.json",
   "title": "GameObservation",
   "type": "object",
   "required": ["ok", "timestamp", "frame_id"],
