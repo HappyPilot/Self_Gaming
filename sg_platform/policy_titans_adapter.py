@@ -59,7 +59,7 @@ class TitansPolicyAdapter:
         tokens = latent_tensor.unsqueeze(1)
 
         with self._lock:
-            with torch.inference_mode():
+            with torch.enable_grad():
                 try:
                     output = self.memory(tokens, state=self._mem_state)
                 except TypeError:
@@ -73,8 +73,9 @@ class TitansPolicyAdapter:
                 if features is None:
                     return _fallback_chunk(self.action_space_dim)
 
+            with torch.inference_mode():
                 logits = self.action_head(features)
-                action_vector = logits.squeeze(0).float().detach().cpu().tolist()
+                action_vector = logits.squeeze(0).float().cpu().tolist()
         return {
             "actions": [{"vector": action_vector}],
             "horizon": 1,
@@ -94,7 +95,7 @@ class TitansPolicyAdapter:
             return None
         path = Path(path_str)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"mem_state": self._mem_state}
+        payload = {"mem_state": self._mem_state, "dim": self.dim, "chunk_size": self.chunk_size}
         torch.save(payload, path)
         logger.info("Saved Titans memory to %s", path)
         return path
@@ -107,7 +108,6 @@ class TitansPolicyAdapter:
             self.action_head = _half_module(self.action_head)
         self.memory.eval()
         self.action_head.eval()
-        _freeze_module(self.memory)
         _freeze_module(self.action_head)
 
     def _maybe_load_memory(self) -> None:
@@ -125,6 +125,14 @@ class TitansPolicyAdapter:
             logger.warning("Failed to load Titans memory: %s", exc)
             return
         if isinstance(payload, dict) and "mem_state" in payload:
+            payload_dim = payload.get("dim")
+            payload_chunk = payload.get("chunk_size")
+            if payload_dim and int(payload_dim) != self.dim:
+                logger.warning("Titans memory dim mismatch: %s != %s", payload_dim, self.dim)
+                return
+            if payload_chunk and int(payload_chunk) != self.chunk_size:
+                logger.warning("Titans memory chunk mismatch: %s != %s", payload_chunk, self.chunk_size)
+                return
             self._mem_state = payload["mem_state"]
         else:
             self._mem_state = payload
