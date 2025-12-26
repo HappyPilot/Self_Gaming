@@ -91,6 +91,7 @@ class TitansPolicyAdapter:
                 "chunk_size": self.chunk_size,
                 "device": str(self.device),
                 "fp16": self.use_fp16,
+                "titans_version": _get_titans_version(),
             },
         }
 
@@ -150,6 +151,8 @@ class TitansPolicyAdapter:
                 projector_in_dim = int(payload.get("projector_in_dim"))
                 self._latent_in_dim = projector_in_dim
                 self._latent_projector = torch.nn.Linear(projector_in_dim, self.dim).to(self.device)
+                if self.use_fp16:
+                    self._latent_projector = self._latent_projector.half()
                 self._latent_projector.load_state_dict(payload["projector_state"])
                 self._latent_projector.eval()
                 _freeze_module(self._latent_projector)
