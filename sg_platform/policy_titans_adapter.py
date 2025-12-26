@@ -73,7 +73,12 @@ class TitansPolicyAdapter:
                 if features is None:
                     return _fallback_chunk(self.action_space_dim)
 
-            with torch.inference_mode():
+            features = features.detach()
+            if self.use_fp16:
+                features = features.half()
+            else:
+                features = features.float()
+            with torch.no_grad():
                 logits = self.action_head(features)
                 action_vector = logits.squeeze(0).float().cpu().tolist()
         return {
@@ -95,7 +100,15 @@ class TitansPolicyAdapter:
             return None
         path = Path(path_str)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"mem_state": self._mem_state, "dim": self.dim, "chunk_size": self.chunk_size}
+        payload = {
+            "mem_state": self._mem_state,
+            "dim": self.dim,
+            "chunk_size": self.chunk_size,
+            "titans_version": _get_titans_version(),
+        }
+        if self.allow_projector and self._latent_projector is not None:
+            payload["projector_state"] = self._latent_projector.state_dict()
+            payload["projector_in_dim"] = self._latent_in_dim
         torch.save(payload, path)
         logger.info("Saved Titans memory to %s", path)
         return path
@@ -104,7 +117,6 @@ class TitansPolicyAdapter:
         self.memory = _move_module(self.memory, self.device)
         self.action_head = _move_module(self.action_head, self.device)
         if self.use_fp16:
-            self.memory = _half_module(self.memory)
             self.action_head = _half_module(self.action_head)
         self.memory.eval()
         self.action_head.eval()
@@ -134,6 +146,13 @@ class TitansPolicyAdapter:
                 logger.warning("Titans memory chunk mismatch: %s != %s", payload_chunk, self.chunk_size)
                 return
             self._mem_state = payload["mem_state"]
+            if self.allow_projector and payload.get("projector_state") and payload.get("projector_in_dim"):
+                projector_in_dim = int(payload.get("projector_in_dim"))
+                self._latent_in_dim = projector_in_dim
+                self._latent_projector = torch.nn.Linear(projector_in_dim, self.dim).to(self.device)
+                self._latent_projector.load_state_dict(payload["projector_state"])
+                self._latent_projector.eval()
+                _freeze_module(self._latent_projector)
         else:
             self._mem_state = payload
         logger.info("Loaded Titans memory from %s", path)
@@ -204,6 +223,23 @@ def _half_module(module: Any) -> Any:
     if hasattr(module, "half"):
         return module.half()
     return module
+
+
+def _get_titans_version() -> str:
+    try:
+        import titans_pytorch
+
+        version = getattr(titans_pytorch, "__version__", None)
+        if version:
+            return str(version)
+    except Exception:
+        pass
+    try:
+        import importlib.metadata as metadata
+
+        return metadata.version("titans-pytorch")
+    except Exception:
+        return "unknown"
 
 
 def _freeze_module(module: Any) -> None:
