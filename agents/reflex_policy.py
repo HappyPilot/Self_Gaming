@@ -24,7 +24,7 @@ class ReflexPolicyAdapter(PolicyAdapter):
         requested_backend = os.getenv("POLICY_ADAPTER_BACKEND", "reflex").strip().lower() or "reflex"
         action_space_dim = int(os.getenv("POLICY_ACTION_DIM", "2"))
         self.adapter = create_policy_adapter(action_space_dim=action_space_dim, backend=requested_backend)
-        selected_backend = "titans" if self.adapter is not None else "reflex/fallback"
+        selected_backend = requested_backend if self.adapter is not None else "reflex/fallback"
         adapter_name = self.adapter.__class__.__name__ if self.adapter is not None else "none"
         logger.info(
             "PolicyAdapter requested_backend=%s selected_backend=%s adapter=%s",
