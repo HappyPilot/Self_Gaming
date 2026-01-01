@@ -43,6 +43,9 @@ services:
     privileged: true
     restart: unless-stopped
     working_dir: /app/agents
+    entrypoint:
+    - python3
+    - /app/agents/vision_agent.py
     volumes:
     - ./agents:/app/agents
     - ./sg_platform:/app/sg_platform
@@ -147,6 +150,9 @@ services:
     network_mode: host
     restart: unless-stopped
     working_dir: /app/agents
+    entrypoint:
+    - python3
+    - /app/agents/policy_agent.py
     volumes:
     - ./agents:/app/agents
     - ./sg_platform:/app/sg_platform
@@ -266,6 +272,9 @@ services:
     - /dev/video0:/dev/video0
     restart: unless-stopped
     working_dir: /app/agents
+    entrypoint:
+    - python3
+    - /app/agents/ocr_agent.py
     volumes:
     - ./agents:/app/agents
     - ./sg_platform:/app/sg_platform
@@ -299,6 +308,9 @@ services:
     network_mode: host
     restart: unless-stopped
     working_dir: /app/agents
+    entrypoint:
+    - python3
+    - /app/agents/ocr_easy_agent.py
     volumes:
     - ./agents:/app/agents
     - ./sg_platform:/app/sg_platform
@@ -595,6 +607,9 @@ services:
     network_mode: host
     restart: unless-stopped
     working_dir: /app/agents
+    entrypoint:
+    - python3
+    - /app/agents/recorder_agent.py
     volumes:
     - ./agents:/app/agents
     - ./sg_platform:/app/sg_platform
@@ -623,6 +638,9 @@ services:
     network_mode: host
     restart: unless-stopped
     working_dir: /app/agents
+    entrypoint:
+    - python3
+    - /app/agents/mem_agent.py
     volumes:
     - ./agents:/app/agents
     - ./sg_platform:/app/sg_platform
@@ -645,6 +663,9 @@ services:
     network_mode: host
     restart: unless-stopped
     working_dir: /app/agents
+    entrypoint:
+    - python3
+    - /app/agents/budget_agent.py
     volumes:
     - ./agents:/app/agents
     - ./sg_platform:/app/sg_platform
@@ -1125,6 +1146,7 @@ services:
     volumes:
     - /run/udev:/run/udev:ro
     - ./agents:/app/agents
+    - ./agents/deepstream_mqtt.py:/app/deepstream_mqtt.py
     - ./sg_platform:/app/sg_platform
     - ./docker/deepstream:/app/docker/deepstream
     - /mnt/ssd/models:/mnt/ssd/models
