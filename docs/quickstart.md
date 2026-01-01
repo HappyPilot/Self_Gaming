@@ -63,7 +63,7 @@ docker build -f docker/policy/Dockerfile -t sg-policy:no-titans .
 Jetson compose build (ensures WITH_TITANS is passed as a build arg):
 
 ```bash
-docker compose --env-file config/jetson.env build policy
+WITH_TITANS=1 docker compose --env-file config/jetson.env build policy
 docker compose --env-file config/jetson.env up -d
 ```
 

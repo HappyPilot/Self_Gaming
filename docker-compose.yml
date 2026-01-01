@@ -42,9 +42,10 @@ services:
     network_mode: host
     privileged: true
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd:/data
     env_file: *id001
     environment:
@@ -80,12 +81,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/debug_stream_agent.py
+    - /app/agents/debug_stream_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -101,12 +103,13 @@ services:
     image: local/vision-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/cursor_tracker_agent.py
+    - /app/agents/cursor_tracker_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - PYTHONPATH=/app
@@ -143,9 +146,9 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
     - ./sg_platform:/app/sg_platform
     - /mnt/ssd:/data
     env_file: *id001
@@ -194,12 +197,13 @@ services:
     image: local/vision-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/game_onboarding_agent.py
+    - /app/agents/game_onboarding_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -225,12 +229,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/policy_brain.py
+    - /app/agents/policy_brain.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -260,9 +265,10 @@ services:
     devices:
     - /dev/video0:/dev/video0
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -292,9 +298,10 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -336,12 +343,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/ui_region_agent.py
+    - /app/agents/ui_region_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -365,13 +373,14 @@ services:
     image: local/simple-ocr-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/simple_ocr_agent.py
+    - /app/agents/simple_ocr_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -398,12 +407,13 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/zeroshot_detector.py
+    - /app/agents/zeroshot_detector.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - ./docker/deepstream:/app/docker/deepstream
     - /mnt/ssd/models:/mnt/ssd/models
     env_file: *id001
@@ -429,13 +439,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/scene_agent.py
+    - /app/agents/scene_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -458,13 +469,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/teach_agent.py
+    - /app/agents/teach_agent.py
     environment:
     - PYTHONUNBUFFERED=1
     - TEACH_LOG_LEVEL=DEBUG
@@ -482,15 +494,16 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd/datasets:/mnt/ssd/datasets
     - /mnt/ssd/models:/mnt/ssd/models
     env_file: *id001
     entrypoint:
     - python3
-    - /app/train_manager_agent.py
+    - /app/agents/train_manager_agent.py
     environment:
     - PYTHONUNBUFFERED=1
     - TRAIN_LOG_LEVEL=DEBUG
@@ -510,13 +523,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/eval_agent.py
+    - /app/agents/eval_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -531,13 +545,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/act_agent.py
+    - /app/agents/act_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -554,13 +569,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/codex_proxy_agent.py
+    - /app/agents/codex_proxy_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -578,9 +594,10 @@ services:
     image: local/recorder-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd/datasets:/mnt/ssd/datasets
     env_file: *id001
     environment:
@@ -605,9 +622,10 @@ services:
     image: local/mem-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd:/mnt/ssd
     env_file: *id001
     environment:
@@ -626,9 +644,10 @@ services:
     image: local/budget-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -643,13 +662,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/demonstrator_agent.py
+    - /app/agents/demonstrator_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -666,14 +686,15 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd/datasets:/mnt/ssd/datasets
     env_file: *id001
     entrypoint:
     - python3
-    - /app/auto_train_agent.py
+    - /app/agents/auto_train_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -695,13 +716,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/teacher_agent.py
+    - /app/agents/teacher_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -721,13 +743,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/reward_manager.py
+    - /app/agents/reward_manager.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -742,16 +765,17 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd/datasets:/mnt/ssd/datasets
     - /mnt/ssd/memory:/mnt/ssd/memory
     - /mnt/ssd/logs:/mnt/ssd/logs
     env_file: *id001
     entrypoint:
     - python3
-    - /app/progress_agent.py
+    - /app/agents/progress_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -771,13 +795,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/log_monitor_agent.py
+    - /app/agents/log_monitor_agent.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -793,13 +818,14 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     entrypoint:
     - python3
-    - /app/http_act_bridge.py
+    - /app/agents/http_act_bridge.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -812,18 +838,19 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     profiles:
     - hid
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     devices:
     - /dev/hidg0:/dev/hidg0
     - /dev/hidg1:/dev/hidg1
     entrypoint:
     - python3
-    - /app/hid_bridge.py
+    - /app/agents/hid_bridge.py
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
@@ -871,12 +898,13 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/perception_agent.py
+    - /app/agents/perception_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /home/dima/multiagent:/workspace
     - /mnt/ssd/models:/mnt/ssd/models
     env_file: *id001
@@ -916,12 +944,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/vision_hint_client.py
+    - /app/agents/vision_hint_client.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -940,12 +969,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/sim_core_agent.py
+    - /app/agents/sim_core_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -962,12 +992,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/goap_agent.py
+    - /app/agents/goap_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd/memory:/mnt/ssd/memory
     - /mnt/ssd/datasets:/mnt/ssd/datasets
     env_file: *id001
@@ -987,12 +1018,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/research_agent.py
+    - /app/agents/research_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd/research:/mnt/ssd/research
     env_file: *id001
     environment:
@@ -1010,12 +1042,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/thermal_monitor.py
+    - /app/agents/thermal_monitor.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -1028,12 +1061,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/world_model_agent.py
+    - /app/agents/world_model_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd/datasets:/mnt/ssd/datasets
     - /mnt/ssd/models:/mnt/ssd/models
     env_file: *id001
@@ -1052,12 +1086,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/vision_controller_agent.py
+    - /app/agents/vision_controller_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - AGENT_NAME=vision_controller
@@ -1086,10 +1121,11 @@ services:
     - /dev/video1:/dev/video1
     - /dev/v4l:/dev/v4l
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     volumes:
     - /run/udev:/run/udev:ro
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - ./docker/deepstream:/app/docker/deepstream
     - /mnt/ssd/models:/mnt/ssd/models
     env_file: *id001
@@ -1113,12 +1149,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/tools/snapshot_logger.py
+    - /app/agents/tools/snapshot_logger.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd/logs:/mnt/ssd/logs
     env_file: *id001
     environment:
@@ -1134,12 +1171,13 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
-    working_dir: /app
+    working_dir: /app/agents
     entrypoint:
     - python3
-    - /app/system_health_agent.py
+    - /app/agents/system_health_agent.py
     volumes:
-    - ./agents:/app
+    - ./agents:/app/agents
+    - ./sg_platform:/app/sg_platform
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
