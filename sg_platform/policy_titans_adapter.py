@@ -14,8 +14,8 @@ except ImportError as exc:  # pragma: no cover
 
 try:
     from titans_pytorch import NeuralMemory
-except ImportError as exc:  # pragma: no cover
-    raise RuntimeError("titans-pytorch is required for TitansPolicyAdapter") from exc
+except ImportError:  # pragma: no cover
+    NeuralMemory = None
 
 logger = logging.getLogger("policy_titans")
 
@@ -30,6 +30,8 @@ class TitansPolicyAdapter:
         dim: Optional[int] = None,
         chunk_size: Optional[int] = None,
     ) -> None:
+        if NeuralMemory is None:  # pragma: no cover
+            raise RuntimeError("titans-pytorch is required for TitansPolicyAdapter")
         self.action_space_dim = int(action_space_dim)
         self.dim = int(dim or os.getenv("TITANS_DIM", "256"))
         self.chunk_size = int(chunk_size or os.getenv("TITANS_CHUNK", "32"))
@@ -39,6 +41,9 @@ class TitansPolicyAdapter:
 
         self.memory = NeuralMemory(dim=self.dim, chunk_size=self.chunk_size)
         self.action_head = torch.nn.Linear(self.dim, self.action_space_dim)
+        torch.nn.init.zeros_(self.action_head.weight)
+        if self.action_head.bias is not None:
+            torch.nn.init.zeros_(self.action_head.bias)
         self._mem_state = None
         self._latent_projector: Optional[torch.nn.Module] = None
         self._latent_in_dim: Optional[int] = None
@@ -59,7 +64,8 @@ class TitansPolicyAdapter:
         tokens = latent_tensor.unsqueeze(1)
 
         with self._lock:
-            with torch.enable_grad():
+            inference_guard = torch.inference_mode if hasattr(torch, "inference_mode") else torch.no_grad
+            with inference_guard():
                 try:
                     output = self.memory(tokens, state=self._mem_state)
                 except TypeError:
@@ -73,12 +79,10 @@ class TitansPolicyAdapter:
                 if features is None:
                     return _fallback_chunk(self.action_space_dim)
 
-            features = features.detach()
-            if self.use_fp16:
-                features = features.half()
-            else:
-                features = features.float()
-            with torch.no_grad():
+                if self.use_fp16:
+                    features = features.half()
+                else:
+                    features = features.float()
                 logits = self.action_head(features)
                 action_vector = logits.squeeze(0).float().cpu().tolist()
         return {
@@ -121,6 +125,7 @@ class TitansPolicyAdapter:
             self.action_head = _half_module(self.action_head)
         self.memory.eval()
         self.action_head.eval()
+        _freeze_module(self.memory)
         _freeze_module(self.action_head)
 
     def _maybe_load_memory(self) -> None:
@@ -151,8 +156,6 @@ class TitansPolicyAdapter:
                 projector_in_dim = int(payload.get("projector_in_dim"))
                 self._latent_in_dim = projector_in_dim
                 self._latent_projector = torch.nn.Linear(projector_in_dim, self.dim).to(self.device)
-                if self.use_fp16:
-                    self._latent_projector = self._latent_projector.half()
                 self._latent_projector.load_state_dict(payload["projector_state"])
                 self._latent_projector.eval()
                 _freeze_module(self._latent_projector)
@@ -168,8 +171,6 @@ class TitansPolicyAdapter:
         if vector.numel() == 0:
             return None
         vector = vector.to(self.device)
-        if self.use_fp16:
-            vector = vector.half()
         if vector.numel() != self.dim:
             if not self.allow_projector:
                 logger.warning(
@@ -187,12 +188,20 @@ class TitansPolicyAdapter:
         if self._latent_projector is None or self._latent_in_dim != int(vector.numel()):
             self._latent_in_dim = int(vector.numel())
             self._latent_projector = torch.nn.Linear(self._latent_in_dim, self.dim).to(self.device)
-            if self.use_fp16:
-                self._latent_projector = self._latent_projector.half()
             self._latent_projector.eval()
             _freeze_module(self._latent_projector)
-        projected = self._latent_projector(vector.unsqueeze(0))
-        return projected.squeeze(0)
+        proj_input = vector
+        try:
+            proj_dtype = next(self._latent_projector.parameters()).dtype
+            if proj_input.dtype != proj_dtype:
+                proj_input = proj_input.to(dtype=proj_dtype)
+        except StopIteration:
+            pass
+        projected = self._latent_projector(proj_input.unsqueeze(0))
+        projected = projected.squeeze(0)
+        if projected.dtype != torch.float32:
+            projected = projected.float()
+        return projected
 
 
 def _extract_latent(observation: Dict[str, Any], state: Dict[str, Any]) -> Optional[Any]:
