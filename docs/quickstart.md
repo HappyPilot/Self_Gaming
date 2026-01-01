@@ -60,6 +60,16 @@ Default build (no Titans):
 docker build -f docker/policy/Dockerfile -t sg-policy:no-titans .
 ```
 
+Jetson compose build (ensures WITH_TITANS is passed as a build arg):
+
+```bash
+WITH_TITANS=1 docker compose --env-file config/jetson.env build policy
+docker compose --env-file config/jetson.env up -d
+```
+
+Note: `env_file` controls runtime env for containers. Build args come from your shell or `--env-file`, so set
+`WITH_TITANS=1` explicitly (or export it) when building the policy image.
+
 Titans environment variables:
 - `TITANS_DIM` - default 256
 - `TITANS_CHUNK` - default 32

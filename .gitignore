@@ -46,3 +46,6 @@ mlflow/
 mosquitto/passwords
 mosquitto/certs/*.key
 mosquitto/certs/*.crt
+
+# Local control profiles
+agents/data/control_profiles.json

@@ -137,12 +137,16 @@ services:
     build:
       context: .
       dockerfile: docker/policy/Dockerfile
+      args:
+        - WITH_TITANS=${WITH_TITANS:-0}
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
     working_dir: /app
     volumes:
     - ./agents:/app
+    - ./sg_platform:/app/sg_platform
+    - /mnt/ssd:/data
     env_file: *id001
     environment:
     - PYTHONUNBUFFERED=1
