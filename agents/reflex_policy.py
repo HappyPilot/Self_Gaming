@@ -21,10 +21,17 @@ class ReflexPolicyAdapter(PolicyAdapter):
     """Simple reflex policy placeholder that emits no-op actions."""
 
     def __init__(self) -> None:
-        backend = os.getenv("POLICY_ADAPTER_BACKEND", "reflex").strip().lower() or "reflex"
+        requested_backend = os.getenv("POLICY_ADAPTER_BACKEND", "reflex").strip().lower() or "reflex"
         action_space_dim = int(os.getenv("POLICY_ACTION_DIM", "2"))
-        self.adapter = create_policy_adapter(action_space_dim=action_space_dim, backend=backend)
-        logger.info("PolicyAdapter backend=%s", backend)
+        self.adapter = create_policy_adapter(action_space_dim=action_space_dim, backend=requested_backend)
+        selected_backend = "titans" if self.adapter is not None else "reflex/fallback"
+        adapter_name = self.adapter.__class__.__name__ if self.adapter is not None else "none"
+        logger.info(
+            "PolicyAdapter requested_backend=%s selected_backend=%s adapter=%s",
+            requested_backend,
+            selected_backend,
+            adapter_name,
+        )
 
     def predict(self, observation: Dict[str, Any], strategy_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if self.adapter is None:
