@@ -11,14 +11,15 @@ logger = logging.getLogger("policy_adapter_factory")
 def create_policy_adapter(
     action_space_dim: int,
     device: Optional[str] = None,
+    backend: Optional[str] = None,
     **kwargs: Any,
 ) -> Optional[object]:
-    backend = os.getenv("POLICY_ADAPTER_BACKEND", "reflex").strip().lower()
-    if not backend:
-        backend = "reflex"
-    if backend == "reflex":
+    backend_value = (backend or os.getenv("POLICY_ADAPTER_BACKEND", "reflex")).strip().lower()
+    if not backend_value:
+        backend_value = "reflex"
+    if backend_value == "reflex":
         return None
-    if backend == "titans":
+    if backend_value == "titans":
         try:
             from sg_platform.policy_titans_adapter import TitansPolicyAdapter
 
@@ -26,5 +27,5 @@ def create_policy_adapter(
         except Exception as exc:  # noqa: BLE001
             logger.warning("Titans backend unavailable, falling back to reflex: %s", exc)
             return None
-    logger.warning("Unknown policy adapter backend %s; falling back to reflex", backend)
+    logger.warning("Unknown policy adapter backend %s; falling back to reflex", backend_value)
     return None

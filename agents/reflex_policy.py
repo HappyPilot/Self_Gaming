@@ -23,7 +23,7 @@ class ReflexPolicyAdapter(PolicyAdapter):
     def __init__(self) -> None:
         backend = os.getenv("POLICY_ADAPTER_BACKEND", "reflex").strip().lower() or "reflex"
         action_space_dim = int(os.getenv("POLICY_ACTION_DIM", "2"))
-        self.adapter = create_policy_adapter(action_space_dim=action_space_dim)
+        self.adapter = create_policy_adapter(action_space_dim=action_space_dim, backend=backend)
         logger.info("PolicyAdapter backend=%s", backend)
 
     def predict(self, observation: Dict[str, Any], strategy_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -36,6 +36,7 @@ class ReflexPolicyAdapter(PolicyAdapter):
             if isinstance(chunk, dict):
                 actions = chunk.get("actions")
                 if isinstance(actions, list) and actions:
+                    # Reflex agent expects a single action dict; unwrap the first chunk entry.
                     action = actions[0]
                     if isinstance(action, dict):
                         return action
