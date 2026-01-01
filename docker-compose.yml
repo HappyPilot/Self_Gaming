@@ -146,6 +146,7 @@ services:
     working_dir: /app
     volumes:
     - ./agents:/app
+    - ./sg_platform:/app/sg_platform
     - /mnt/ssd:/data
     env_file: *id001
     environment:

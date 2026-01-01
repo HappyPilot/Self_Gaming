@@ -1,0 +1,18 @@
+{
+  example_game: {
+    game_id: example_game,
+    source: manual,
+    profile_version: 1,
+    mouse_mode: click_to_move,
+    allow_mouse_move: true,
+    allow_primary: true,
+    allow_secondary: false,
+    allowed_keys: [],
+    forbidden_keys: [],
+    max_actions_per_window: 6,
+    window_sec: 10.0,
+    notes: [
+      Example profile
+    ]
+  }
+}
