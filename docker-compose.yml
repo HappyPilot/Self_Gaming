@@ -137,6 +137,8 @@ services:
     build:
       context: .
       dockerfile: docker/policy/Dockerfile
+      args:
+        - WITH_TITANS=${WITH_TITANS:-0}
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
