@@ -45,3 +45,25 @@ Environment overrides (add to your shell or compose override):
 For FRAME_TRANSPORT=shm, containers must share an IPC namespace and have enough /dev/shm:
 - set `ipc: host` (or `ipc: "service:mq"`) on vision and every consumer in the pipeline (same IPC namespace, or you will see "SHM segment not found")
 - set `shm_size: 1g` (or similar) to avoid random SHM failures
+
+### Optional: enable Titans policy adapter
+
+Titans support is optional. Build the policy image with Titans enabled:
+
+```bash
+docker build -f docker/policy/Dockerfile --build-arg WITH_TITANS=1 -t sg-policy:with-titans .
+```
+
+Default build (no Titans):
+
+```bash
+docker build -f docker/policy/Dockerfile -t sg-policy:no-titans .
+```
+
+Titans environment variables:
+- `TITANS_DIM` - default 256
+- `TITANS_CHUNK` - default 32
+- `TITANS_ALLOW_PROJECTOR` - default 0
+- `TITANS_LOAD_MEMORY` - default 0
+- `TITANS_MEM_PATH` - default `titans_memory.pth`
+- `TITANS_DEVICE` - default auto cuda/cpu
