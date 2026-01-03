@@ -34,6 +34,7 @@ FRAME_TOPIC = os.getenv("VL_JEPA_FRAME_TOPIC") or os.getenv("VISION_FRAME_TOPIC"
 EMBED_TOPIC = os.getenv("VISION_EMBEDDINGS_TOPIC", "vision/embeddings")
 BACKEND = os.getenv("VL_JEPA_BACKEND", "dummy").strip().lower()
 MODEL_PATH = os.getenv("VL_JEPA_MODEL_PATH", "")
+ENGINE_PATH = os.getenv("VL_JEPA_ENGINE_PATH", "")
 DEVICE_RAW = os.getenv("VL_JEPA_DEVICE", "auto")
 INPUT_SIZE = int(os.getenv("VL_JEPA_INPUT_SIZE", "224"))
 EMBED_DIM = int(os.getenv("VL_JEPA_EMBED_DIM", "512"))
@@ -127,6 +128,88 @@ class TorchScriptEncoder(BaseEncoder):
         arr = np.transpose(arr, (2, 0, 1))
         tensor = torch.from_numpy(arr).unsqueeze(0)
         return tensor.to(self.device)
+
+
+class TensorRTEncoder(BaseEncoder):
+    backend = "tensorrt"
+
+    def __init__(self, engine_path: str, input_size: int, mean: Sequence[float], std: Sequence[float]):
+        if not engine_path:
+            raise ValueError("VL_JEPA_ENGINE_PATH must be set for tensorrt backend")
+        if not os.path.exists(engine_path):
+            raise FileNotFoundError(f"VL_JEPA_ENGINE_PATH not found: {engine_path}")
+
+        try:
+            import pycuda.autoinit  # noqa: F401
+            import pycuda.driver as cuda
+            import tensorrt as trt
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"TensorRT/pycuda import failed: {exc}") from exc
+
+        self.cuda = cuda
+        self.trt = trt
+        self.input_size = max(1, input_size)
+        self._mean = np.array(mean, dtype=np.float32).reshape(1, 1, 3)
+        self._std = np.array(std, dtype=np.float32).reshape(1, 1, 3)
+
+        self.logger = trt.Logger(trt.Logger.WARNING)
+        with open(engine_path, "rb") as f, trt.Runtime(self.logger) as runtime:
+            self.engine = runtime.deserialize_cuda_engine(f.read())
+        if self.engine is None:
+            raise RuntimeError(f"Failed to load engine from {engine_path}")
+        self.context = self.engine.create_execution_context()
+
+        self.input_idx = next(
+            (i for i in range(self.engine.num_bindings) if self.engine.binding_is_input(i)),
+            None,
+        )
+        self.output_idx = next(
+            (i for i in range(self.engine.num_bindings) if not self.engine.binding_is_input(i)),
+            None,
+        )
+        if self.input_idx is None or self.output_idx is None:
+            raise RuntimeError("Failed to resolve TRT input/output bindings")
+
+        try:
+            self.context.set_binding_shape(self.input_idx, (1, 3, self.input_size, self.input_size))
+        except Exception:
+            pass
+
+        input_shape = self.context.get_binding_shape(self.input_idx)
+        output_shape = self.context.get_binding_shape(self.output_idx)
+        self.input_dtype = trt.nptype(self.engine.get_binding_dtype(self.input_idx))
+        self.output_dtype = trt.nptype(self.engine.get_binding_dtype(self.output_idx))
+
+        self.d_input = cuda.mem_alloc(trt.volume(input_shape) * np.dtype(self.input_dtype).itemsize)
+        self.h_output = cuda.pagelocked_empty(trt.volume(output_shape), dtype=self.output_dtype)
+        self.d_output = cuda.mem_alloc(self.h_output.nbytes)
+        self.bindings = [0] * self.engine.num_bindings
+        self.bindings[self.input_idx] = int(self.d_input)
+        self.bindings[self.output_idx] = int(self.d_output)
+        self.stream = cuda.Stream()
+        logger.info("TensorRT engine loaded: %s input=%s output=%s", engine_path, input_shape, output_shape)
+
+    def _prepare_tensor(self, image: Image.Image) -> np.ndarray:
+        resized = image.resize((self.input_size, self.input_size), resample=Image.BILINEAR)
+        arr = np.asarray(resized, dtype=np.float32) / 255.0
+        arr = (arr - self._mean) / self._std
+        arr = np.transpose(arr, (2, 0, 1))[None, ...].copy(order="C")
+        if self.input_dtype != np.float32:
+            arr = arr.astype(self.input_dtype)
+        return arr
+
+    def encode(self, image: Image.Image) -> Optional[np.ndarray]:
+        try:
+            inp = self._prepare_tensor(image)
+            self.cuda.memcpy_htod_async(self.d_input, inp, self.stream)
+            self.context.execute_async_v2(self.bindings, self.stream.handle)
+            self.cuda.memcpy_dtoh_async(self.h_output, self.d_output, self.stream)
+            self.stream.synchronize()
+            output = np.array(self.h_output, copy=True).reshape(-1)
+            return output.astype(np.float32)
+        except Exception:  # noqa: BLE001
+            logger.exception("TensorRT inference failed")
+            return None
 
 
 def _extract_embedding(output) -> Optional[np.ndarray]:
@@ -225,6 +308,11 @@ class VlJepaAgent:
                         encoder = TorchScriptEncoder(MODEL_PATH, device, INPUT_SIZE, mean, std, FP16)
                     except Exception as exc:  # noqa: BLE001
                         logger.error("TorchScript init failed: %s", exc)
+            elif BACKEND in {"tensorrt", "trt"}:
+                try:
+                    encoder = TensorRTEncoder(ENGINE_PATH, INPUT_SIZE, mean, std)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("TensorRT init failed: %s", exc)
             elif BACKEND not in {"dummy", ""}:
                 logger.warning("Unknown VL_JEPA_BACKEND=%s; falling back to dummy", BACKEND)
             if encoder is None:
