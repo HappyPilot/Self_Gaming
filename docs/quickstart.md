@@ -49,7 +49,8 @@ For FRAME_TRANSPORT=shm, containers must share an IPC namespace and have enough 
 ### Jetson camera ownership
 
 When DeepStream is enabled on Jetson, `perception_ds` should own `/dev/video0` via `DS_V4L2_DEVICE`.
-Set `CAPTURE_BACKEND=dummy` in `config/jetson.env` so `vision` does not open the camera.
+Set `CAPTURE_BACKEND=dummy` in `config/jetson.env` so `vision` does not open the camera, and keep
+`VIDEO_DEVICE` parked on `/dev/video1` to prevent other consumers from grabbing `/dev/video0`.
 Verify ownership with: `sudo fuser -v /dev/video0`
 
 ### Optional: enable Titans policy adapter
