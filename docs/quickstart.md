@@ -77,3 +77,16 @@ Titans environment variables:
 - `TITANS_LOAD_MEMORY` - default 0
 - `TITANS_MEM_PATH` - default `titans_memory.pth`
 - `TITANS_DEVICE` - default auto cuda/cpu
+- `TITANS_UPDATE_INTERVAL` - default 1 (update memory every N ticks)
+
+Operational notes:
+- Titans backend is experimental.
+- On Jetson 8 GB keep `TITANS_DIM=256` unless you have measurements.
+- If behavior drifts or degrades, remove the memory file at `TITANS_MEM_PATH`.
+
+Sanity checks:
+```bash
+WITH_TITANS=1 docker compose --env-file config/jetson.env build policy
+docker compose --env-file config/jetson.env up -d
+python3 -m unittest tests/test_policy_titans_adapter.py
+```
