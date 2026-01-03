@@ -15,11 +15,18 @@ RUN rm -rf /usr/lib/python3.10/dist-packages/cv2 /usr/local/lib/python3.10/dist-
 RUN pip3 install --no-cache-dir \
         "numpy<2" \
         paho-mqtt \
-        easyocr==1.7.1 \
         opencv-python \
         onnxruntime==1.16.3 \
         rapidocr-onnxruntime==1.3.5 \
-    && pip3 uninstall -y opencv-python-headless || true
+        scipy \
+        Pillow \
+        scikit-image \
+        python-bidi \
+        PyYAML \
+        Shapely \
+        pyclipper \
+        ninja \
+    && pip3 install --no-cache-dir --no-deps easyocr==1.7.1
 
 RUN find /usr/lib/aarch64-linux-gnu/nvidia/weston -type f -size 0 -delete || true
 
