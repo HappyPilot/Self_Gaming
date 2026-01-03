@@ -10,6 +10,8 @@ RUN set -eux; \
     apt-get purge -y python3-blinker python3-typing-extensions python3-pyparsing || true; \
     rm -rf /var/lib/apt/lists/*
 
+RUN rm -rf /usr/lib/python3.10/dist-packages/cv2 /usr/local/lib/python3.10/dist-packages/cv2 || true
+
 RUN pip3 install --no-cache-dir \
         "numpy<2" \
         paho-mqtt \
