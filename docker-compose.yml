@@ -1081,8 +1081,7 @@ services:
     network_mode: host
     privileged: true
     devices:
-    - ${DS_V4L2_DEVICE:-/dev/video1}:${DS_V4L2_DEVICE:-/dev/video1}
-    - /dev/video1:/dev/video1
+    - ${DS_V4L2_DEVICE:-/dev/video0}:${DS_V4L2_DEVICE:-/dev/video0}
     - /dev/v4l:/dev/v4l
     restart: unless-stopped
     working_dir: /app
@@ -1099,7 +1098,7 @@ services:
     - HEARTBEAT_INTERVAL=5.0
     - CONF_THRESHOLD=0.05
     - DS_SOURCE=v4l2
-    - DS_V4L2_DEVICE=${DS_V4L2_DEVICE:-/dev/video1}
+    - DS_V4L2_DEVICE=${DS_V4L2_DEVICE:-/dev/video0}
     - DS_V4L2_WIDTH=${DS_V4L2_WIDTH:-0}
     - DS_V4L2_HEIGHT=${DS_V4L2_HEIGHT:-0}
     - DS_V4L2_FPS=${DS_V4L2_FPS:-0}
