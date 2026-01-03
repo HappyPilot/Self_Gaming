@@ -88,11 +88,23 @@ Titans environment variables:
 Operational notes:
 - Titans backend is experimental.
 - On Jetson 8 GB keep `TITANS_DIM=256` unless you have measurements.
+- When `TITANS_UPDATE_INTERVAL>1`, the first tick may return a fallback until the buffer is filled.
 - If behavior drifts or degrades, remove the memory file at `TITANS_MEM_PATH`.
 
 Sanity checks:
+
+A) Docker sanity (policy image + container):
+
 ```bash
 WITH_TITANS=1 docker compose --env-file config/jetson.env build policy
 docker compose --env-file config/jetson.env up -d
-python3 -m unittest tests/test_policy_titans_adapter.py
 ```
+
+B) Local sanity (host unittest after install):
+
+```bash
+python3 -m pip install -r requirements-titans.txt
+python3 tests/test_policy_titans_adapter.py
+```
+
+Note: `unittest` runs on the host and requires torch installed.
