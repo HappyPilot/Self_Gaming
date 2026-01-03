@@ -56,7 +56,9 @@ class TitansPolicyAdapterTest(unittest.TestCase):
         actions = chunk.get("actions")
         self.assertIsInstance(actions, list)
         self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], dict)
         vector = actions[0].get("vector")
+        self.assertIsInstance(vector, list)
         self.assertEqual(len(vector), expected_dim)
 
 
