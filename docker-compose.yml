@@ -870,7 +870,6 @@ services:
       context: .
       dockerfile: docker/vl_jepa/Dockerfile
     image: local/vl-jepa-agent:latest
-    runtime: nvidia
     network_mode: host
     restart: unless-stopped
     working_dir: /app

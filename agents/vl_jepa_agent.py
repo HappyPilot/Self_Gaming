@@ -209,10 +209,13 @@ class VlJepaAgent:
             std = _parse_float_list(STD_STR, [0.229, 0.224, 0.225], 3)
             encoder = None
             if BACKEND == "torchscript":
-                try:
-                    encoder = TorchScriptEncoder(MODEL_PATH, device, INPUT_SIZE, mean, std, FP16)
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("TorchScript init failed: %s", exc)
+                if torch is None:
+                    logger.warning("VL_JEPA_BACKEND=torchscript but torch is unavailable; falling back to dummy.")
+                else:
+                    try:
+                        encoder = TorchScriptEncoder(MODEL_PATH, device, INPUT_SIZE, mean, std, FP16)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("TorchScript init failed: %s", exc)
             elif BACKEND not in {"dummy", ""}:
                 logger.warning("Unknown VL_JEPA_BACKEND=%s; falling back to dummy", BACKEND)
             if encoder is None:

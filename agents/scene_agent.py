@@ -203,6 +203,7 @@ class SceneAgent:
         )
 
     def _on_message(self, client, userdata, msg):
+        publish_now = True
         try:
             data = json.loads(msg.payload.decode("utf-8", "ignore"))
         except Exception: data = {"raw": msg.payload}
@@ -243,12 +244,18 @@ class SceneAgent:
             raw = data.get("text") if isinstance(data, dict) else data
             self.state["simple_text"] = (str(raw) if raw is not None else "").strip()
         elif msg.topic == VISION_EMBEDDINGS_TOPIC:
+            publish_now = False
             if isinstance(data, dict):
                 embedding = data.get("embedding") or data.get("embeddings")
                 if isinstance(embedding, list):
                     self.state["embeddings"] = embedding
                     self.state["embeddings_ts"] = float(data.get("timestamp") or time.time())
-        self._maybe_publish(client)
+                else:
+                    logger.debug("Embeddings payload ignored: expected list, got %s", type(embedding).__name__)
+            else:
+                logger.debug("Embeddings payload ignored: expected dict, got %s", type(data).__name__)
+        if publish_now:
+            self._maybe_publish(client)
 
     def run(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
