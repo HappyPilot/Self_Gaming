@@ -4,6 +4,8 @@ FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
         procps \
         v4l-utils \
         gstreamer1.0-tools \
