@@ -70,6 +70,12 @@ docker compose --env-file config/jetson.env up -d
 Note: `env_file` controls runtime env for containers. Build args come from your shell or `--env-file`, so set
 `WITH_TITANS=1` explicitly (or export it) when building the policy image.
 
+Local install (requires torch already installed):
+
+```bash
+python3 -m pip install -r requirements-titans.txt
+```
+
 Titans environment variables:
 - `TITANS_DIM` - default 256
 - `TITANS_CHUNK` - default 32
@@ -77,3 +83,28 @@ Titans environment variables:
 - `TITANS_LOAD_MEMORY` - default 0
 - `TITANS_MEM_PATH` - default `titans_memory.pth`
 - `TITANS_DEVICE` - default auto cuda/cpu
+- `TITANS_UPDATE_INTERVAL` - default 1 (update memory every N ticks)
+
+Operational notes:
+- Titans backend is experimental.
+- On Jetson 8 GB keep `TITANS_DIM=256` unless you have measurements.
+- When `TITANS_UPDATE_INTERVAL>1`, the first tick may return a fallback until the buffer is filled.
+- If behavior drifts or degrades, remove the memory file at `TITANS_MEM_PATH`.
+
+Sanity checks:
+
+A) Docker sanity (policy image + container):
+
+```bash
+WITH_TITANS=1 docker compose --env-file config/jetson.env build policy
+docker compose --env-file config/jetson.env up -d
+```
+
+B) Local sanity (host unittest after install):
+
+```bash
+python3 -m pip install -r requirements-titans.txt
+python3 tests/test_policy_titans_adapter.py
+```
+
+Note: `unittest` runs on the host and requires torch installed.

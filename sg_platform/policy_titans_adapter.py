@@ -47,6 +47,9 @@ class TitansPolicyAdapter:
         self._mem_state = None
         self._latent_projector: Optional[torch.nn.Module] = None
         self._latent_in_dim: Optional[int] = None
+        self.update_interval = max(1, int(os.getenv("TITANS_UPDATE_INTERVAL", "1")))
+        self._latent_buffer = []
+        self._last_features: Optional[torch.Tensor] = None
         self._lock = threading.Lock()
 
         self._move_to_device()
@@ -64,6 +67,32 @@ class TitansPolicyAdapter:
         tokens = latent_tensor.unsqueeze(1)
 
         with self._lock:
+            if self.update_interval > 1:
+                self._latent_buffer.append(latent_tensor)
+                if len(self._latent_buffer) < self.update_interval:
+                    features = self._last_features
+                    if features is None:
+                        return _fallback_chunk(self.action_space_dim)
+                    inference_guard = torch.inference_mode if hasattr(torch, "inference_mode") else torch.no_grad
+                    with inference_guard():
+                        action_vector = self._action_vector_from_features(features)
+                    return {
+                        "actions": [{"vector": action_vector}],
+                        "horizon": 1,
+                        "meta": {
+                            "backend": "titans",
+                            "action_format": "vector",
+                            "dim": self.dim,
+                            "chunk_size": self.chunk_size,
+                            "device": str(self.device),
+                            "fp16": self.use_fp16,
+                            "titans_version": _get_titans_version(),
+                            "update_interval": self.update_interval,
+                        },
+                    }
+                tokens = torch.cat(self._latent_buffer, dim=0).unsqueeze(0)
+                self._latent_buffer.clear()
+
             inference_guard = torch.inference_mode if hasattr(torch, "inference_mode") else torch.no_grad
             with inference_guard():
                 try:
@@ -79,12 +108,8 @@ class TitansPolicyAdapter:
                 if features is None:
                     return _fallback_chunk(self.action_space_dim)
 
-                if self.use_fp16:
-                    features = features.half()
-                else:
-                    features = features.float()
-                logits = self.action_head(features)
-                action_vector = logits.squeeze(0).float().cpu().tolist()
+                self._last_features = features
+                action_vector = self._action_vector_from_features(features)
         return {
             "actions": [{"vector": action_vector}],
             "horizon": 1,
@@ -96,6 +121,7 @@ class TitansPolicyAdapter:
                 "device": str(self.device),
                 "fp16": self.use_fp16,
                 "titans_version": _get_titans_version(),
+                "update_interval": self.update_interval,
             },
         }
 
@@ -202,6 +228,14 @@ class TitansPolicyAdapter:
         if projected.dtype != torch.float32:
             projected = projected.float()
         return projected
+
+    def _action_vector_from_features(self, features: torch.Tensor) -> list[float]:
+        if self.use_fp16:
+            features = features.half()
+        else:
+            features = features.float()
+        logits = self.action_head(features)
+        return logits.squeeze(0).float().cpu().tolist()
 
 
 def _extract_latent(observation: Dict[str, Any], state: Dict[str, Any]) -> Optional[Any]:
