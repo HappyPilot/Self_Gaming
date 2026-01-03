@@ -46,6 +46,13 @@ For FRAME_TRANSPORT=shm, containers must share an IPC namespace and have enough 
 - set `ipc: host` (or `ipc: "service:mq"`) on vision and every consumer in the pipeline (same IPC namespace, or you will see "SHM segment not found")
 - set `shm_size: 1g` (or similar) to avoid random SHM failures
 
+### Jetson camera ownership
+
+On Jetson, the vision service should own `/dev/video0` (`VIDEO_DEVICE`), while `perception_ds` should use
+`DS_V4L2_DEVICE` (default `/dev/video1`) to avoid contention.
+Verify ownership with:
+`sudo fuser -v /dev/video0`
+
 ### Optional: enable Titans policy adapter
 
 Titans support is optional. Build the policy image with Titans enabled:
