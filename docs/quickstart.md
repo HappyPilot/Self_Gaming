@@ -70,6 +70,12 @@ docker compose --env-file config/jetson.env up -d
 Note: `env_file` controls runtime env for containers. Build args come from your shell or `--env-file`, so set
 `WITH_TITANS=1` explicitly (or export it) when building the policy image.
 
+Local install (requires torch already installed):
+
+```bash
+python3 -m pip install -r requirements-titans.txt
+```
+
 Titans environment variables:
 - `TITANS_DIM` - default 256
 - `TITANS_CHUNK` - default 32
