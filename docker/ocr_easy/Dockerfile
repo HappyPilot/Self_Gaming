@@ -6,6 +6,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         procps \
+        libgl1 \
         python3-numpy; \
     apt-get purge -y python3-blinker python3-typing-extensions python3-pyparsing || true; \
     rm -rf /var/lib/apt/lists/*
