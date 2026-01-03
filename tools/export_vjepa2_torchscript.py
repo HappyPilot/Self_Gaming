@@ -120,13 +120,17 @@ def export_torchscript(
 
     device = _resolve_device(device)
     logger.info("Loading model %s (device=%s)", model_id, device)
-    processor = AutoImageProcessor.from_pretrained(model_id, trust_remote_code=True)
+    processor = None
+    try:
+        processor = AutoImageProcessor.from_pretrained(model_id, trust_remote_code=True)
+    except Exception as exc:
+        logger.warning("Image processor not found for %s (%s); using default mean/std.", model_id, exc)
     model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
     model.eval()
     model.to(device)
 
-    mean = getattr(processor, "image_mean", [0.485, 0.456, 0.406])
-    std = getattr(processor, "image_std", [0.229, 0.224, 0.225])
+    mean = getattr(processor, "image_mean", [0.485, 0.456, 0.406]) if processor else [0.485, 0.456, 0.406]
+    std = getattr(processor, "image_std", [0.229, 0.224, 0.225]) if processor else [0.229, 0.224, 0.225]
 
     wrapper = EncoderWrapper(model, input_size, mean, std, pooling)
     wrapper.eval().to(device)
