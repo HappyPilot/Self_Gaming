@@ -24,6 +24,7 @@ OCR_EASY_TOPIC = os.getenv("OCR_EASY_TOPIC", "ocr_easy/text")
 SIMPLE_OCR_TOPIC = os.getenv("SIMPLE_OCR_TOPIC", "simple_ocr/text")
 SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 WINDOW_SEC = float(os.getenv("SCENE_WINDOW_SEC", "2.0"))
+EMBED_PUBLISH_INTERVAL = float(os.getenv("SCENE_EMBED_PUBLISH_INTERVAL", "1.0"))
 NORMALIZE_TEXT = os.getenv("SCENE_NORMALIZE_TEXT", "1") != "0"
 TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
@@ -59,6 +60,7 @@ class SceneAgent:
             "objects": [], "objects_ts": 0.0, "text_zones": {}, "observation": {}, "observation_ts": 0.0,
             "embeddings": [], "embeddings_ts": 0.0,
         }
+        self._last_embed_publish_ts = 0.0
         self._symbolic_candidate_since = 0.0
 
     def _symbolic_text_only(self, entries):
@@ -250,6 +252,10 @@ class SceneAgent:
                 if isinstance(embedding, list):
                     self.state["embeddings"] = embedding
                     self.state["embeddings_ts"] = float(data.get("timestamp") or time.time())
+                    now = time.time()
+                    if now - self._last_embed_publish_ts >= EMBED_PUBLISH_INTERVAL:
+                        self._last_embed_publish_ts = now
+                        publish_now = True
                 else:
                     logger.debug("Embeddings payload ignored: expected list, got %s", type(embedding).__name__)
             else:

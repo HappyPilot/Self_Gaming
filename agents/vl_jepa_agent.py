@@ -42,6 +42,8 @@ FRAME_QUEUE_MAX = int(os.getenv("VL_JEPA_QUEUE", "2"))
 FP16 = os.getenv("VL_JEPA_FP16", "0") not in {"0", "false", "False"}
 MEAN_STR = os.getenv("VL_JEPA_MEAN", "")
 STD_STR = os.getenv("VL_JEPA_STD", "")
+MAX_EMBED_DIM = int(os.getenv("VL_JEPA_MAX_EMBED_DIM", "4096"))
+MAX_PAYLOAD_BYTES = int(os.getenv("VL_JEPA_MAX_PAYLOAD_BYTES", "262144"))
 SLA_STAGE_EMBED_MS = get_sla_ms("SLA_STAGE_EMBED_MS")
 
 
@@ -254,6 +256,9 @@ class VlJepaAgent:
             if embedding is None:
                 continue
             embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
+            if MAX_EMBED_DIM and len(embedding_list) > MAX_EMBED_DIM:
+                logger.warning("Embedding dim too large (%s > %s); dropping payload.", len(embedding_list), MAX_EMBED_DIM)
+                continue
             if EMBED_DIM and len(embedding_list) != EMBED_DIM:
                 logger.warning("Embedding dim mismatch: got=%s expected=%s", len(embedding_list), EMBED_DIM)
             out_payload = {
@@ -266,7 +271,11 @@ class VlJepaAgent:
                 "backend": self.encoder.backend if self.encoder else "unknown",
                 "model_path": MODEL_PATH,
             }
-            self.client.publish(EMBED_TOPIC, json.dumps(out_payload))
+            payload_json = json.dumps(out_payload)
+            if MAX_PAYLOAD_BYTES and len(payload_json) > MAX_PAYLOAD_BYTES:
+                logger.warning("Embedding payload too large (%s bytes > %s); dropping.", len(payload_json), MAX_PAYLOAD_BYTES)
+                continue
+            self.client.publish(EMBED_TOPIC, payload_json)
 
 
 def _decode_image(data: bytes) -> Optional[Image.Image]:
