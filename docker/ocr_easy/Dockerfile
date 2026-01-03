@@ -15,7 +15,7 @@ RUN pip3 install --no-cache-dir \
         paho-mqtt \
         easyocr==1.7.1 \
         opencv-python-headless \
-        onnxruntime-gpu==1.16.3 \
+        onnxruntime==1.16.3 \
         rapidocr-onnxruntime==1.3.5
 
 RUN find /usr/lib/aarch64-linux-gnu/nvidia/weston -type f -size 0 -delete || true
