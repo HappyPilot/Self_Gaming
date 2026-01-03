@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Scene agent that fuses raw perception topics into a high-level scene."""
 import json
+import logging
 import os
 import signal
 import threading
@@ -11,6 +12,8 @@ from typing import Dict
 import paho.mqtt.client as mqtt
 
 from utils.latency import emit_latency, get_sla_ms
+
+logger = logging.getLogger("scene_agent")
 # --- Constants ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
