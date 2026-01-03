@@ -14,7 +14,7 @@ RUN pip3 install --no-cache-dir \
         "numpy<2" \
         paho-mqtt \
         easyocr==1.7.1 \
-        opencv-python-headless \
+        opencv-python \
         onnxruntime==1.16.3 \
         rapidocr-onnxruntime==1.3.5
 
