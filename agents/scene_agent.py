@@ -16,6 +16,7 @@ MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 VISION_MEAN_TOPIC = os.getenv("VISION_MEAN_TOPIC", "vision/mean")
 VISION_SNAPSHOT_TOPIC = os.getenv("VISION_SNAPSHOT_TOPIC", "vision/snapshot")
+VISION_EMBEDDINGS_TOPIC = os.getenv("VISION_EMBEDDINGS_TOPIC", "vision/embeddings")
 OBJECT_TOPIC = os.getenv("VISION_OBJECT_TOPIC", "vision/objects")
 OBSERVATION_TOPIC = os.getenv("VISION_OBSERVATION_TOPIC", "")
 OCR_TEXT_TOPIC = os.getenv("OCR_TEXT_TOPIC", "ocr/text")
@@ -56,6 +57,7 @@ class SceneAgent:
         self.state = {
             "mean": deque(maxlen=10), "easy_text": "", "simple_text": "", "snapshot_ts": 0.0,
             "objects": [], "objects_ts": 0.0, "text_zones": {}, "observation": {}, "observation_ts": 0.0,
+            "embeddings": [], "embeddings_ts": 0.0,
         }
         self._symbolic_candidate_since = 0.0
 
@@ -144,6 +146,7 @@ class SceneAgent:
                       (OCR_EASY_TOPIC, 0), (SIMPLE_OCR_TOPIC, 0)]
             if OBJECT_TOPIC: topics.append((OBJECT_TOPIC, 0))
             if OBSERVATION_TOPIC: topics.append((OBSERVATION_TOPIC, 0))
+            if VISION_EMBEDDINGS_TOPIC: topics.append((VISION_EMBEDDINGS_TOPIC, 0))
             client.subscribe(topics)
             client.publish(SCENE_TOPIC, json.dumps({"ok": True, "event": "scene_agent_ready"}))
         else:
@@ -167,7 +170,8 @@ class SceneAgent:
         resources = self._extract_resources(text_zones) or self._extract_resources({"aggregate": {"text": "\n".join(text_payload)}})
         payload = {"ok": True, "event": "scene_update", "mean": self.state["mean"][-1], "trend": list(self.state["mean"]),
                    "text": text_payload, "objects": objects, "objects_ts": self.state.get("objects_ts", 0.0),
-                   "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now}
+                   "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now,
+                   "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0)}
         if isinstance(player_entry, dict) and player_entry.get("bbox"):
             bbox = player_entry["bbox"]
             payload["player_center"] = [round((bbox[0] + bbox[2]) / 2.0, 4), round((bbox[1] + bbox[3]) / 2.0, 4)]
@@ -238,6 +242,12 @@ class SceneAgent:
         elif msg.topic == SIMPLE_OCR_TOPIC:
             raw = data.get("text") if isinstance(data, dict) else data
             self.state["simple_text"] = (str(raw) if raw is not None else "").strip()
+        elif msg.topic == VISION_EMBEDDINGS_TOPIC:
+            if isinstance(data, dict):
+                embedding = data.get("embedding") or data.get("embeddings")
+                if isinstance(embedding, list):
+                    self.state["embeddings"] = embedding
+                    self.state["embeddings_ts"] = float(data.get("timestamp") or time.time())
         self._maybe_publish(client)
 
     def run(self):

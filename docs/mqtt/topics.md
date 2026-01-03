@@ -25,6 +25,7 @@ All payloads are JSON.
   - vision/snapshot: on-demand snapshot payload (base64)
   - vision/objects: object detections from object_detection_agent
   - vision/observation: fused perception payload from perception_agent
+  - vision/embeddings: visual embeddings from vl_jepa_agent
   - vision/config: runtime config (vision mode, etc)
   - vision/status: vision mode status updates
 - ocr/
@@ -132,6 +133,19 @@ Schema: `schemas/observation.schema.json`
 }
 ```
 Note: bbox values are normalized XYXY in [0, 1].
+
+### vision/embeddings
+Required: ok, timestamp, embedding, dim
+```json
+{
+  "ok": true,
+  "timestamp": 1712345678.1,
+  "frame_ts": 1712345677.9,
+  "embedding": [0.01, -0.02, 0.03],
+  "dim": 512,
+  "backend": "torchscript"
+}
+```
 
 ### ocr_easy/text
 Required: ok, text, results, backend
