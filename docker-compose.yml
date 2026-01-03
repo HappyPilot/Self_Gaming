@@ -854,7 +854,7 @@ services:
     - OBJECT_TOPIC=vision/objects
     - OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx
     - OBJECT_DEVICE=cpu
-    - OBJECT_IMAGE_SIZE=320
+    - OBJECT_IMAGE_SIZE=416
     - OBJECT_CLASS_PATH=/mnt/ssd/models/yolo/classes_generic.txt
     - OBJECT_CONF_THRESHOLD=0.25
     - OBJECT_IOU_THRESHOLD=0.45
