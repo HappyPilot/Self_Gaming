@@ -96,23 +96,28 @@ class EncoderWrapper(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.to(self.mean.dtype)
-        if x.ndim == 4:
-            x = x.unsqueeze(1).repeat(1, self.frames, 1, 1, 1)
-        if x.ndim != 5:
-            raise RuntimeError(f"Expected 4D or 5D input, got shape {tuple(x.shape)}")
-        bsz, frames, channels, height, width = x.shape
-        x = x.view(bsz * frames, channels, height, width)
-        x = F.interpolate(x, size=(self.input_size, self.input_size), mode="bilinear", align_corners=False)
-        x = x.view(bsz, frames, channels, self.input_size, self.input_size)
-        mean = self.mean.unsqueeze(1)
-        std = self.std.unsqueeze(1)
-        x = (x - mean) / std
         if self._use_pixel_values_videos:
+            if x.ndim == 4:
+                x = x.unsqueeze(1).repeat(1, self.frames, 1, 1, 1)
+            if x.ndim != 5:
+                raise RuntimeError(f"Expected 4D or 5D input, got shape {tuple(x.shape)}")
+            bsz, frames, channels, height, width = x.shape
+            x = x.view(bsz * frames, channels, height, width)
+            x = F.interpolate(x, size=(self.input_size, self.input_size), mode="bilinear", align_corners=False)
+            x = x.view(bsz, frames, channels, self.input_size, self.input_size)
+            mean = self.mean.unsqueeze(1)
+            std = self.std.unsqueeze(1)
+            x = (x - mean) / std
             outputs = self.model(pixel_values_videos=x)
-        elif self._use_pixel_values:
-            outputs = self.model(pixel_values=x)
         else:
-            outputs = self.model(x)
+            if x.ndim != 4:
+                raise RuntimeError(f"Expected 4D input, got shape {tuple(x.shape)}")
+            x = F.interpolate(x, size=(self.input_size, self.input_size), mode="bilinear", align_corners=False)
+            x = (x - self.mean) / self.std
+            if self._use_pixel_values:
+                outputs = self.model(pixel_values=x)
+            else:
+                outputs = self.model(x)
         return _extract_embedding(outputs, self.pooling)
 
 
