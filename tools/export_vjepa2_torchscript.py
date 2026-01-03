@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 try:
-    from transformers import AutoImageProcessor, AutoModel
+    from transformers import AutoConfig, AutoImageProcessor, AutoModel, CLIPVisionModel
 except Exception as exc:  # pragma: no cover - manual script
     raise SystemExit(
         "Failed to import transformers. Install first: pip install transformers -- reason: %s" % exc
@@ -145,7 +145,11 @@ def export_torchscript(
         processor = AutoImageProcessor.from_pretrained(model_id, trust_remote_code=True)
     except Exception as exc:
         logger.warning("Image processor not found for %s (%s); using default mean/std.", model_id, exc)
-    model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    if getattr(config, "model_type", "") == "clip":
+        model = CLIPVisionModel.from_pretrained(model_id)
+    else:
+        model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
     model.eval()
     model.to(device)
 
