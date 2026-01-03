@@ -16,7 +16,8 @@ RUN pip3 install --no-cache-dir \
         easyocr==1.7.1 \
         opencv-python \
         onnxruntime==1.16.3 \
-        rapidocr-onnxruntime==1.3.5
+        rapidocr-onnxruntime==1.3.5 \
+    && pip3 uninstall -y opencv-python-headless || true
 
 RUN find /usr/lib/aarch64-linux-gnu/nvidia/weston -type f -size 0 -delete || true
 
