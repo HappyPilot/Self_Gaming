@@ -198,7 +198,14 @@ class VlJepaAgent:
         try:
             self.frame_queue.put_nowait(msg.payload)
         except queue.Full:
-            logger.warning("Frame queue full, dropping frame.")
+            try:
+                _ = self.frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.frame_queue.put_nowait(msg.payload)
+            except queue.Full:
+                logger.warning("Frame queue full, dropping frame.")
 
     def _ensure_encoder(self):
         if self.encoder is not None:
