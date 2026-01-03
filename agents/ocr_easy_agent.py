@@ -10,6 +10,13 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+os.environ.setdefault("PYTORCH_JIT", "0")
+
 import numpy as np
 import paho.mqtt.client as mqtt
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
@@ -21,10 +28,22 @@ try:
     import cv2
 except ImportError:
     cv2 = None
+if cv2 is not None:
+    try:
+        cv2.setNumThreads(1)
+        cv2.ocl.setUseOpenCL(False)
+    except Exception:
+        pass
 try:
     import torch
 except Exception:  # noqa: BLE001
     torch = None
+if torch is not None:
+    try:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("OCR_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -47,6 +66,7 @@ AUTO_TIMEOUT = float(os.getenv("OCR_AUTO_TIMEOUT", "2.0"))
 DEBUG_SAVE = os.getenv("OCR_DEBUG_SAVE", "0") == "1"
 DEBUG_DIR = Path(os.getenv("OCR_DEBUG_DIR", "/tmp/ocr_debug"))
 FORCE_CPU = os.getenv("OCR_FORCE_CPU", "0") == "1"
+OCR_USE_GPU = os.getenv("OCR_USE_GPU", "1").lower() not in {"0", "false", "no"}
 SCALE_FACTOR = float(os.getenv("OCR_SCALE_FACTOR", "1.0"))  # keep <=1.0 to downscale
 TARGET_WIDTH = float(os.getenv("OCR_MAX_BASE_WIDTH", "640"))  # max side for radar mode
 GAMMA = float(os.getenv("OCR_GAMMA", "1.3"))
@@ -105,11 +125,12 @@ class OcrEasyAgent:
         self.ready = False
         self._backend_lock = threading.Lock()
         self._backend_initialized = False
+        self._ocr_lock = threading.Lock()
 
     def _init_backend(self):
         try:
             import torch
-            self.gpu = torch.cuda.is_available() and not FORCE_CPU
+            self.gpu = torch.cuda.is_available() and not FORCE_CPU and OCR_USE_GPU
         except Exception:
             self.gpu = False
 
@@ -263,7 +284,8 @@ class OcrEasyAgent:
         
         if self.backend == "paddle":
             if self.rapidocr_reader is None: return []
-            raw_res, _ = self.rapidocr_reader(self._convert_to_color(arr))
+            with self._ocr_lock:
+                raw_res, _ = self.rapidocr_reader(self._convert_to_color(arr))
             if raw_res:
                 for entry in raw_res:
                     # RapidOCR: [ [[x1,y1], [x2,y2], ...], text, conf ]
@@ -283,11 +305,12 @@ class OcrEasyAgent:
         elif self.backend == "easyocr":
             if self.reader is None: return []
             # EasyOCR: [ ([[x1,y1], ...], text, conf), ... ]
-            if torch is not None:
-                with torch.no_grad():
+            with self._ocr_lock:
+                if torch is not None:
+                    with torch.no_grad():
+                        raw_res = self.reader.readtext(arr)
+                else:
                     raw_res = self.reader.readtext(arr)
-            else:
-                raw_res = self.reader.readtext(arr)
             for poly, text, conf in raw_res:
                 xs = [p[0] for p in poly]
                 ys = [p[1] for p in poly]
