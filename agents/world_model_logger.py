@@ -178,6 +178,8 @@ class WorldModelLogger:
             self.pending_action = None
             return
         if action_ts < self.last_embedding["timestamp"]:
+            logger.debug("Dropping action older than last embedding.")
+            self.pending_action = None
             return
         if action_ts > current["timestamp"]:
             return
