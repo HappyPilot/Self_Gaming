@@ -337,6 +337,7 @@ class VlJepaAgent:
             if image is None:
                 continue
             self._ensure_encoder()
+            frame_ts = payload.get("frame_ts") or payload.get("timestamp")
             embed_start = time.perf_counter()
             embedding = self.encoder.encode(image) if self.encoder else None
             embed_ms = (time.perf_counter() - embed_start) * 1000.0
@@ -345,7 +346,7 @@ class VlJepaAgent:
                 "embed",
                 embed_ms,
                 sla_ms=SLA_STAGE_EMBED_MS,
-                tags={"frame_ts": payload.get("timestamp")},
+                tags={"frame_ts": frame_ts},
                 agent="vl_jepa_agent",
             )
             if embedding is None:
@@ -359,7 +360,7 @@ class VlJepaAgent:
             out_payload = {
                 "ok": True,
                 "timestamp": time.time(),
-                "frame_ts": payload.get("timestamp", time.time()),
+                "frame_ts": frame_ts or time.time(),
                 "frame_id": payload.get("frame_id"),
                 "embedding": embedding_list,
                 "dim": len(embedding_list),

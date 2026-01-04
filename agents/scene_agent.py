@@ -254,7 +254,7 @@ class SceneAgent:
                 embedding = data.get("embedding") or data.get("embeddings")
                 if isinstance(embedding, list):
                     self.state["embeddings"] = embedding
-                    self.state["embeddings_ts"] = float(data.get("timestamp") or time.time())
+                    self.state["embeddings_ts"] = float(data.get("frame_ts") or data.get("timestamp") or time.time())
                     now = time.time()
                     if now - self._last_embed_publish_ts >= EMBED_PUBLISH_INTERVAL:
                         self._last_embed_publish_ts = now
