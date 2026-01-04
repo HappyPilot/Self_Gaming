@@ -18,6 +18,7 @@ from PIL import Image
 
 from utils.frame_transport import get_frame_bytes
 from utils.latency import emit_latency, get_sla_ms
+from utils.trt_runner import TensorRTRunner
 
 try:
     import torch
@@ -138,56 +139,15 @@ class TensorRTEncoder(BaseEncoder):
             raise ValueError("VL_JEPA_ENGINE_PATH must be set for tensorrt backend")
         if not os.path.exists(engine_path):
             raise FileNotFoundError(f"VL_JEPA_ENGINE_PATH not found: {engine_path}")
-
-        try:
-            import pycuda.autoinit  # noqa: F401
-            import pycuda.driver as cuda
-            import tensorrt as trt
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"TensorRT/pycuda import failed: {exc}") from exc
-
-        self.cuda = cuda
-        self.trt = trt
         self.input_size = max(1, input_size)
         self._mean = np.array(mean, dtype=np.float32).reshape(1, 1, 3)
         self._std = np.array(std, dtype=np.float32).reshape(1, 1, 3)
-
-        self.logger = trt.Logger(trt.Logger.WARNING)
-        with open(engine_path, "rb") as f, trt.Runtime(self.logger) as runtime:
-            self.engine = runtime.deserialize_cuda_engine(f.read())
-        if self.engine is None:
-            raise RuntimeError(f"Failed to load engine from {engine_path}")
-        self.context = self.engine.create_execution_context()
-
-        self.input_idx = next(
-            (i for i in range(self.engine.num_bindings) if self.engine.binding_is_input(i)),
-            None,
+        self.runner = TensorRTRunner(
+            engine_path,
+            input_shape=(1, 3, self.input_size, self.input_size),
+            logger=logger,
         )
-        self.output_idx = next(
-            (i for i in range(self.engine.num_bindings) if not self.engine.binding_is_input(i)),
-            None,
-        )
-        if self.input_idx is None or self.output_idx is None:
-            raise RuntimeError("Failed to resolve TRT input/output bindings")
-
-        try:
-            self.context.set_binding_shape(self.input_idx, (1, 3, self.input_size, self.input_size))
-        except Exception:
-            pass
-
-        input_shape = self.context.get_binding_shape(self.input_idx)
-        output_shape = self.context.get_binding_shape(self.output_idx)
-        self.input_dtype = trt.nptype(self.engine.get_binding_dtype(self.input_idx))
-        self.output_dtype = trt.nptype(self.engine.get_binding_dtype(self.output_idx))
-
-        self.d_input = cuda.mem_alloc(trt.volume(input_shape) * np.dtype(self.input_dtype).itemsize)
-        self.h_output = cuda.pagelocked_empty(trt.volume(output_shape), dtype=self.output_dtype)
-        self.d_output = cuda.mem_alloc(self.h_output.nbytes)
-        self.bindings = [0] * self.engine.num_bindings
-        self.bindings[self.input_idx] = int(self.d_input)
-        self.bindings[self.output_idx] = int(self.d_output)
-        self.stream = cuda.Stream()
-        logger.info("TensorRT engine loaded: %s input=%s output=%s", engine_path, input_shape, output_shape)
+        self.input_dtype = self.runner.input_dtype
 
     def _prepare_tensor(self, image: Image.Image) -> np.ndarray:
         resized = image.resize((self.input_size, self.input_size), resample=Image.BILINEAR)
@@ -201,12 +161,7 @@ class TensorRTEncoder(BaseEncoder):
     def encode(self, image: Image.Image) -> Optional[np.ndarray]:
         try:
             inp = self._prepare_tensor(image)
-            self.cuda.memcpy_htod_async(self.d_input, inp, self.stream)
-            self.context.execute_async_v2(self.bindings, self.stream.handle)
-            self.cuda.memcpy_dtoh_async(self.h_output, self.d_output, self.stream)
-            self.stream.synchronize()
-            output = np.array(self.h_output, copy=True).reshape(-1)
-            return output.astype(np.float32)
+            return self.runner.infer(inp)
         except Exception:  # noqa: BLE001
             logger.exception("TensorRT inference failed")
             return None
