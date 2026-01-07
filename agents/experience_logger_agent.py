@@ -29,7 +29,7 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 
 SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 ACTION_TOPIC = os.getenv("EXP_ACTION_TOPIC", os.getenv("ACT_CMD_TOPIC", "act/cmd"))
-ACTION_ALIAS = os.getenv("ACT_CMD_ALIAS", "act/request")
+ACTION_ALIAS = os.getenv("EXP_ACTION_ALIAS_TOPIC", "").strip()
 REWARD_TOPIC = os.getenv("EXP_REWARD_TOPIC", os.getenv("REWARD_TOPIC", "train/reward"))
 
 EXP_LOG_ENABLED = os.getenv("EXP_LOG_ENABLED", "1") not in {"0", "false", "False"}
@@ -38,6 +38,7 @@ EXP_LOG_FORMAT = os.getenv("EXP_LOG_FORMAT", "jsonl").strip().lower()
 EXP_LOG_MAX_MB = float(os.getenv("EXP_LOG_MAX_MB", "200"))
 EXP_LOG_FLUSH_SEC = float(os.getenv("EXP_LOG_FLUSH_SEC", "2"))
 EXP_MATCH_WINDOW_MS = int(os.getenv("EXP_MATCH_WINDOW_MS", "500"))
+EXP_MAX_WAIT_MS = int(os.getenv("EXP_MAX_WAIT_MS", "2000"))
 EXP_STORE_EMB_BYTES = os.getenv("EXP_STORE_EMB_BYTES", "0") not in {"0", "false", "False"}
 EXP_LOG_COMPRESS = os.getenv("EXP_LOG_COMPRESS", os.getenv("EXPERIENCE_COMPRESS", "0")) not in {"0", "false", "False"}
 EXP_LOG_MAX_RECORDS = int(os.getenv("EXP_LOG_MAX_RECORDS", "0"))
@@ -294,6 +295,14 @@ class ExperienceLogger:
         if action_ts < emb_t["emb_ts"]:
             self.pending_action = None
             return
+        if current["emb_ts"] <= action_ts:
+            return
+        if EXP_MAX_WAIT_MS > 0:
+            max_wait = EXP_MAX_WAIT_MS / 1000.0
+            if (current["emb_ts"] - action_ts) > max_wait:
+                logger.debug("Next embedding exceeded max wait; dropping action.")
+                self.pending_action = None
+                return
         if EXP_MATCH_WINDOW_MS > 0:
             window = EXP_MATCH_WINDOW_MS / 1000.0
             if (current["emb_ts"] - action_ts) > window:
@@ -301,14 +310,16 @@ class ExperienceLogger:
                 self.pending_action = None
                 return
         reward = self._resolve_reward()
-        if reward is None and EXP_REQUIRE_REWARD:
+        if reward is None:
             return
         record = self._build_record(emb_t, current, reward)
         self.writer.write(record)
         self.pending_action = None
 
-    def _resolve_reward(self) -> dict:
+    def _resolve_reward(self) -> Optional[dict]:
         if self.last_reward is None:
+            if EXP_REQUIRE_REWARD:
+                return None
             return {"value": EXP_REWARD_DEFAULT, "timestamp": time.time(), "source": "default"}
         return {"value": self.last_reward["value"], "timestamp": self.last_reward["timestamp"], "source": "reward_topic"}
 
