@@ -708,6 +708,23 @@ services:
     depends_on:
       - mq
 
+  experience_logger:
+    container_name: experience_logger_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint: ["python3", "/app/experience_logger_agent.py"]
+    volumes:
+      - /home/dima/multiagent/agents:/app
+      - /mnt/ssd/datasets:/mnt/ssd/datasets
+    env_file: *python_env_file
+    environment:
+      - MQTT_HOST=127.0.0.1
+      - MQTT_PORT=1883
+    depends_on:
+      - mq
+
   vision_controller:
     container_name: vision_controller_agent
     image: local/policy-agent:latest
