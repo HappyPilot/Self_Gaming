@@ -230,7 +230,7 @@ class ExperienceLogger:
         if msg.topic == SCENE_TOPIC:
             self._handle_scene(payload)
         elif msg.topic in {ACTION_TOPIC, ACTION_ALIAS}:
-            self._handle_action(payload)
+            self._handle_action(payload, msg.topic)
         elif msg.topic == REWARD_TOPIC:
             self._handle_reward(payload)
 
@@ -256,13 +256,16 @@ class ExperienceLogger:
             self._maybe_emit_transition(current)
             self.last_embedding = current
 
-    def _handle_action(self, payload: dict) -> None:
+    def _handle_action(self, payload: dict, topic: str) -> None:
         if not isinstance(payload, dict):
             return
         if "action" not in payload and "vector" not in payload:
             return
         action_ts = _as_float(payload.get("timestamp"), time.time())
         with self.lock:
+            if self.pending_action is not None:
+                logger.debug("Pending action already set; dropping new action.")
+                return
             if self.last_embedding is None:
                 logger.debug("Action received without embedding; dropping.")
                 return
@@ -271,7 +274,15 @@ class ExperienceLogger:
                 if action_ts < self.last_embedding["emb_ts"] or (action_ts - self.last_embedding["emb_ts"]) > window:
                     logger.debug("Action too far from last embedding; dropping.")
                     return
-            self.pending_action = {"payload": payload, "timestamp": action_ts, "emb_t": self.last_embedding}
+            action_id = payload.get("action_id") or payload.get("id") or payload.get("request_id")
+            action_id = str(action_id) if action_id else str(uuid.uuid4())
+            self.pending_action = {
+                "payload": payload,
+                "timestamp": action_ts,
+                "emb_t": self.last_embedding,
+                "action_id": action_id,
+                "topic": topic,
+            }
 
     def _handle_reward(self, payload: dict) -> None:
         if not isinstance(payload, dict):
@@ -303,12 +314,6 @@ class ExperienceLogger:
                 logger.debug("Next embedding exceeded max wait; dropping action.")
                 self.pending_action = None
                 return
-        if EXP_MATCH_WINDOW_MS > 0:
-            window = EXP_MATCH_WINDOW_MS / 1000.0
-            if (current["emb_ts"] - action_ts) > window:
-                logger.debug("Next embedding too far from action; dropping.")
-                self.pending_action = None
-                return
         reward = self._resolve_reward()
         if reward is None:
             return
@@ -330,6 +335,8 @@ class ExperienceLogger:
             "emb_t_ts": emb_t["emb_ts"],
             "emb_t1_ts": emb_t1["emb_ts"],
             "action_ts": self.pending_action.get("timestamp") if self.pending_action else None,
+            "action_id": self.pending_action.get("action_id") if self.pending_action else None,
+            "action_topic": self.pending_action.get("topic") if self.pending_action else None,
             "action": action_payload,
             "reward": reward,
             "meta": emb_t1.get("meta", {}),
