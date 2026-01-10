@@ -189,8 +189,8 @@ class ExperienceLogger:
         self.pending_action: Optional[dict] = None
         self.last_reward: Optional[dict] = None
         self.writer = RollingJsonlWriter() if EXP_LOG_ENABLED else None
+        self.connected = False
         self.stats = {
-            "records_written_total": 0,
             "transitions_written": 0,
             "actions_dropped_pending": 0,
             "actions_dropped_no_emb": 0,
@@ -222,6 +222,7 @@ class ExperienceLogger:
             if ACTION_ALIAS:
                 topics.append((ACTION_ALIAS, 0))
             client.subscribe(topics)
+            self.connected = True
             client.publish(
                 EXP_LOG_STATUS_TOPIC,
                 json.dumps({"ok": True, "event": "experience_logger_ready", "dir": str(EXP_LOG_DIR)}),
@@ -237,6 +238,7 @@ class ExperienceLogger:
     def _on_disconnect(self, _client, _userdata, rc):
         if rc != 0:
             logger.warning("MQTT disconnected: rc=%s", rc)
+        self.connected = False
 
     def _on_message(self, _client, _userdata, msg):
         try:
@@ -341,7 +343,6 @@ class ExperienceLogger:
         record = self._build_record(emb_t, current, reward)
         self.writer.write(record)
         now = time.time()
-        self.stats["records_written_total"] += 1
         self.stats["transitions_written"] += 1
         self.stats["last_write_ts"] = now
         self.pending_action = None
@@ -395,6 +396,8 @@ class ExperienceLogger:
             self._publish_status()
 
     def _publish_status(self) -> None:
+        if not self.connected:
+            return
         with self.lock:
             payload = {
                 "ok": True,
@@ -407,8 +410,8 @@ class ExperienceLogger:
         except Exception:  # noqa: BLE001
             pass
         logger.info(
-            "Experience logger status records=%s drops(pending=%s no_emb=%s window=%s max_wait=%s)",
-            payload.get("records_written_total"),
+            "Experience logger status transitions=%s drops(pending=%s no_emb=%s window=%s max_wait=%s)",
+            payload.get("transitions_written"),
             payload.get("actions_dropped_pending"),
             payload.get("actions_dropped_no_emb"),
             payload.get("actions_dropped_window"),
