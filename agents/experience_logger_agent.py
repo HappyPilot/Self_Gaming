@@ -399,6 +399,11 @@ class ExperienceLogger:
         if not self.connected:
             return
         with self.lock:
+            if self.pending_action and EXP_MAX_WAIT_MS > 0:
+                max_wait = EXP_MAX_WAIT_MS / 1000.0
+                if (time.time() - float(self.pending_action.get("timestamp", 0.0))) > max_wait:
+                    self.stats["actions_dropped_max_wait"] += 1
+                    self.pending_action = None
             payload = {
                 "ok": True,
                 "event": "experience_logger_status",
