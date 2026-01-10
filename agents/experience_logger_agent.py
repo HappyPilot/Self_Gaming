@@ -39,6 +39,7 @@ EXP_LOG_MAX_MB = float(os.getenv("EXP_LOG_MAX_MB", "200"))
 EXP_LOG_FLUSH_SEC = float(os.getenv("EXP_LOG_FLUSH_SEC", "2"))
 EXP_MATCH_WINDOW_MS = int(os.getenv("EXP_MATCH_WINDOW_MS", "500"))
 EXP_MAX_WAIT_MS = int(os.getenv("EXP_MAX_WAIT_MS", "2000"))
+EXP_STATUS_INTERVAL_SEC = float(os.getenv("EXP_STATUS_INTERVAL_SEC", "30"))
 EXP_STORE_EMB_BYTES = os.getenv("EXP_STORE_EMB_BYTES", "0") not in {"0", "false", "False"}
 EXP_LOG_COMPRESS = os.getenv("EXP_LOG_COMPRESS", os.getenv("EXPERIENCE_COMPRESS", "0")) not in {"0", "false", "False"}
 EXP_LOG_MAX_RECORDS = int(os.getenv("EXP_LOG_MAX_RECORDS", "0"))
@@ -105,6 +106,7 @@ class RollingJsonlWriter:
             "max_mb": EXP_LOG_MAX_MB,
             "flush_sec": EXP_LOG_FLUSH_SEC,
             "match_window_ms": EXP_MATCH_WINDOW_MS,
+            "max_wait_ms": EXP_MAX_WAIT_MS,
             "store_emb_bytes": EXP_STORE_EMB_BYTES,
         }
         (self.session_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -187,6 +189,16 @@ class ExperienceLogger:
         self.pending_action: Optional[dict] = None
         self.last_reward: Optional[dict] = None
         self.writer = RollingJsonlWriter() if EXP_LOG_ENABLED else None
+        self.stats = {
+            "records_written_total": 0,
+            "transitions_written": 0,
+            "actions_dropped_pending": 0,
+            "actions_dropped_no_emb": 0,
+            "actions_dropped_window": 0,
+            "actions_dropped_max_wait": 0,
+            "last_write_ts": None,
+        }
+        self.status_thread = threading.Thread(target=self._status_loop, daemon=True)
 
         if not EXP_LOG_ENABLED:
             logger.warning("EXP_LOG_ENABLED=0; experience logger will idle.")
@@ -194,9 +206,13 @@ class ExperienceLogger:
     def start(self) -> None:
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
         self.client.loop_start()
+        if EXP_STATUS_INTERVAL_SEC > 0:
+            self.status_thread.start()
         stop_event.wait()
         self.client.loop_stop()
         self.client.disconnect()
+        if EXP_STATUS_INTERVAL_SEC > 0 and self.status_thread.is_alive():
+            self.status_thread.join(timeout=2)
         if self.writer:
             self.writer.close()
 
@@ -265,14 +281,17 @@ class ExperienceLogger:
         with self.lock:
             if self.pending_action is not None:
                 logger.debug("Pending action already set; dropping new action.")
+                self.stats["actions_dropped_pending"] += 1
                 return
             if self.last_embedding is None:
                 logger.debug("Action received without embedding; dropping.")
+                self.stats["actions_dropped_no_emb"] += 1
                 return
             if EXP_MATCH_WINDOW_MS > 0:
                 window = EXP_MATCH_WINDOW_MS / 1000.0
                 if action_ts < self.last_embedding["emb_ts"] or (action_ts - self.last_embedding["emb_ts"]) > window:
                     logger.debug("Action too far from last embedding; dropping.")
+                    self.stats["actions_dropped_window"] += 1
                     return
             action_id = payload.get("action_id") or payload.get("id") or payload.get("request_id")
             action_id = str(action_id) if action_id else str(uuid.uuid4())
@@ -304,6 +323,7 @@ class ExperienceLogger:
         if action_ts is None:
             return
         if action_ts < emb_t["emb_ts"]:
+            self.stats["actions_dropped_window"] += 1
             self.pending_action = None
             return
         if current["emb_ts"] <= action_ts:
@@ -312,6 +332,7 @@ class ExperienceLogger:
             max_wait = EXP_MAX_WAIT_MS / 1000.0
             if (current["emb_ts"] - action_ts) > max_wait:
                 logger.debug("Next embedding exceeded max wait; dropping action.")
+                self.stats["actions_dropped_max_wait"] += 1
                 self.pending_action = None
                 return
         reward = self._resolve_reward()
@@ -319,6 +340,10 @@ class ExperienceLogger:
             return
         record = self._build_record(emb_t, current, reward)
         self.writer.write(record)
+        now = time.time()
+        self.stats["records_written_total"] += 1
+        self.stats["transitions_written"] += 1
+        self.stats["last_write_ts"] = now
         self.pending_action = None
 
     def _resolve_reward(self) -> Optional[dict]:
@@ -364,6 +389,31 @@ class ExperienceLogger:
             "objects_count": len(objects) if isinstance(objects, list) else None,
             "text_count": len(texts) if isinstance(texts, list) else None,
         }
+
+    def _status_loop(self) -> None:
+        while not stop_event.wait(EXP_STATUS_INTERVAL_SEC):
+            self._publish_status()
+
+    def _publish_status(self) -> None:
+        with self.lock:
+            payload = {
+                "ok": True,
+                "event": "experience_logger_status",
+                "timestamp": time.time(),
+                **self.stats,
+            }
+        try:
+            self.client.publish(EXP_LOG_STATUS_TOPIC, json.dumps(payload))
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info(
+            "Experience logger status records=%s drops(pending=%s no_emb=%s window=%s max_wait=%s)",
+            payload.get("records_written_total"),
+            payload.get("actions_dropped_pending"),
+            payload.get("actions_dropped_no_emb"),
+            payload.get("actions_dropped_window"),
+            payload.get("actions_dropped_max_wait"),
+        )
 
 
 def _handle_signal(signum, _frame):
