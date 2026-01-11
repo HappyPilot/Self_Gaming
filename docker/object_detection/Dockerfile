@@ -26,6 +26,7 @@ RUN chmod +x /usr/local/bin/vision-healthcheck
 
 # FORCE COPY AGENT CODE (Bypass volume issues)
 COPY agents/object_detection_agent.py /app/
+COPY agents/utils /app/utils
 
 WORKDIR /app
 ENV PYTHONPATH=/app:/opt/ultralytics_repo
