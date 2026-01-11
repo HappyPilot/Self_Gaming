@@ -197,7 +197,7 @@ services:
     container_name: onboarding_agent
     image: local/vision-agent:latest
     network_mode: host
-    restart: unless-stopped
+    restart: "no"
     working_dir: /app
     entrypoint:
     - python3
