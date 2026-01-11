@@ -401,6 +401,8 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -899,6 +901,8 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -1056,6 +1060,8 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
