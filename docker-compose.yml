@@ -862,7 +862,6 @@ services:
     - OBJECT_CLASS_PATH=/mnt/ssd/models/yolo/classes_generic.txt
     - OBJECT_CONF_THRESHOLD=0.25
     - OBJECT_IOU_THRESHOLD=0.45
-    - OBJECT_QUEUE=2
     ipc: host
     depends_on:
     - mq
