@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import inspect
 import json
 import logging
 import math
@@ -129,7 +130,7 @@ class TrainManagerAgent:
                 return max(teacher_min_alpha, alpha_start * (1.0 - min(step / float(decay_steps), 1.0)))
 
             use_rnn = job.get("use_rnn", False)
-            backbone = Backbone(frame_shape=FRAME_SHAPE, non_visual_dim=NON_VISUAL_DIM, use_rnn=use_rnn).to(DEVICE)
+            backbone = self._build_backbone(use_rnn).to(DEVICE)
             policy_head, value_head = nn.Linear(backbone.output_dim, num_classes).to(DEVICE), nn.Linear(backbone.output_dim, 1).to(DEVICE)
             optimizer = torch.optim.Adam(list(backbone.parameters()) + list(policy_head.parameters()) + list(value_head.parameters()), lr=LEARNING_RATE)
 
@@ -184,6 +185,17 @@ class TrainManagerAgent:
         except Exception as e:
             logger.error("Training job %s failed: %s", job_id, e, exc_info=True)
             self._publish_status({"ok": False, "event": "job_failed", "job_id": job_id, "error": str(e)})
+
+    def _build_backbone(self, use_rnn: bool) -> Backbone:
+        try:
+            sig = inspect.signature(Backbone)
+            if "use_rnn" in sig.parameters:
+                return Backbone(frame_shape=FRAME_SHAPE, non_visual_dim=NON_VISUAL_DIM, use_rnn=use_rnn)
+        except (TypeError, ValueError):
+            pass
+        if use_rnn:
+            logger.warning("Backbone does not support use_rnn; ignoring.")
+        return Backbone(frame_shape=FRAME_SHAPE, non_visual_dim=NON_VISUAL_DIM)
 
     def _load_samples(self, dataset_id=None, max_samples=2000):
         path_glob = (RECORDER_DIR / dataset_id).glob("*.json") if dataset_id and (RECORDER_DIR / dataset_id).is_dir() else RECORDER_DIR.glob("*.json")

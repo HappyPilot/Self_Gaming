@@ -56,7 +56,7 @@ VISION_MODE_DEFAULT = os.getenv("VISION_MODE_DEFAULT", "medium").lower()
 SLA_STAGE_DETECT_MS = get_sla_ms("SLA_STAGE_DETECT_MS")
 
 MODE_SETTINGS = {
-    "low": {"frame_stride": 3, "conf": min(0.6, CONF_THRESHOLD + 0.15), "imgsz": max(320, IMG_SIZE // 2)},
+    "low": {"frame_stride": 4, "conf": min(0.6, CONF_THRESHOLD + 0.15), "imgsz": max(320, IMG_SIZE // 2)},
     "medium": {"frame_stride": 2, "conf": CONF_THRESHOLD, "imgsz": IMG_SIZE},
     "high": {"frame_stride": 1, "conf": max(0.1, CONF_THRESHOLD - 0.1), "imgsz": max(IMG_SIZE, 640)},
 }
@@ -417,7 +417,15 @@ class ObjectDetectionAgent:
         try:
             self.frame_queue.put_nowait(msg.payload)
         except queue.Full:
-            logger.warning("Frame queue is full, dropping frame.")
+            try:
+                self.frame_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self.frame_queue.put_nowait(msg.payload)
+            except queue.Full:
+                pass
+            logger.debug("Frame queue full; dropped oldest frame.")
 
     def _worker_loop(self):
         """Worker thread to process frames from the queue."""

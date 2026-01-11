@@ -118,6 +118,11 @@ services:
     - CURSOR_HSV_V_MIN=0
     - CURSOR_HSV_S_MAX=0
     - CURSOR_BINARY_THRESHOLD=140
+    - CURSOR_HEALTH_FILE=/tmp/cursor_tracker_status.json
+    - CURSOR_HEALTH_OK_SEC=5.0
+    - CURSOR_HEALTH_INTERVAL_SEC=5.0
+    - CURSOR_HEALTH_FAIL_ERROR_SEC=15.0
+    - CURSOR_HEALTH_MAX_AGE_SEC=20.0
     - CURSOR_FRAME_STRIDE=1
     - CURSOR_LOSS_ANNOUNCE_SEC=1.0
     - CURSOR_MOTION_MIN=12
@@ -127,8 +132,8 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - /usr/local/bin/vision-healthcheck
-      interval: 30s
+      - /usr/local/bin/cursor-healthcheck
+      interval: 15s
       timeout: 5s
       retries: 3
       start_period: 30s
@@ -192,7 +197,7 @@ services:
     container_name: onboarding_agent
     image: local/vision-agent:latest
     network_mode: host
-    restart: unless-stopped
+    restart: "no"
     working_dir: /app
     entrypoint:
     - python3
@@ -396,6 +401,8 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -858,7 +865,6 @@ services:
     - OBJECT_CLASS_PATH=/mnt/ssd/models/yolo/classes_generic.txt
     - OBJECT_CONF_THRESHOLD=0.25
     - OBJECT_IOU_THRESHOLD=0.45
-    - OBJECT_QUEUE=2
     ipc: host
     depends_on:
     - mq
@@ -895,6 +901,8 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -1052,6 +1060,8 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -1159,14 +1169,20 @@ services:
     - MQTT_PORT=1883
     - PERCEPTION_TOPIC=vision/observation
     - HEARTBEAT_INTERVAL=5.0
-    - CONF_THRESHOLD=0.05
-    - DS_SOURCE=v4l2
+    - CONF_THRESHOLD=${CONF_THRESHOLD:-0.05}
+    - NMS_IOU=${NMS_IOU:-0.6}
+    - CLASS_WHITELIST=${CLASS_WHITELIST:-}
+    - CLASS_LABELS=${CLASS_LABELS:-}
+    - MAX_DETECTIONS_PER_FRAME=${MAX_DETECTIONS_PER_FRAME:-0}
+    - DEBUG_YOLO=${DEBUG_YOLO:-0}
+    - ENGINE_INPUT_SIZE=${ENGINE_INPUT_SIZE:-320}
+    - DS_SOURCE=${DS_SOURCE:-v4l2}
     - DS_V4L2_DEVICE=${DS_V4L2_DEVICE:-/dev/video0}
     - DS_V4L2_WIDTH=${DS_V4L2_WIDTH:-0}
     - DS_V4L2_HEIGHT=${DS_V4L2_HEIGHT:-0}
     - DS_V4L2_FPS=${DS_V4L2_FPS:-0}
     - DS_V4L2_FORMAT=${DS_V4L2_FORMAT:-AUTO}
-    - VIDEO_SOURCE=
+    - VIDEO_SOURCE=${VIDEO_SOURCE:-}
     depends_on:
     - mq
   yolo_logger:

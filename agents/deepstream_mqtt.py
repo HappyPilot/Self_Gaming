@@ -17,7 +17,7 @@ import os
 import sys
 import time
 import subprocess
-from typing import List
+from typing import Dict, List, Optional, Set
 
 import gi
 gi.require_version("Gst", "1.0")
@@ -48,6 +48,9 @@ V4L2_FORMAT = os.getenv("DS_V4L2_FORMAT", "AUTO").upper()  # AUTO to probe, else
 
 CONF_THRESHOLD = float(os.getenv("CONF_THRESHOLD", "0.25"))
 NMS_IOU = float(os.getenv("NMS_IOU", "0.6"))
+CLASS_WHITELIST_RAW = os.getenv("CLASS_WHITELIST", "")
+CLASS_LABELS_RAW = os.getenv("CLASS_LABELS", "")
+MAX_DETECTIONS_PER_FRAME = int(os.getenv("MAX_DETECTIONS_PER_FRAME", "0"))
 ENGINE_CONFIG = os.getenv("ENGINE_CONFIG", "/app/docker/deepstream/yolo11_pgie.txt")
 # Match streammux/nvinfer resolution to the engine. Default 320 aligns with yolov8s_worldv2_320_fp16.engine.
 ENGINE_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "320"))
@@ -56,6 +59,53 @@ DS_V4L2_RETRY = os.getenv("DS_V4L2_RETRY", "0") == "1"
 DS_V4L2_RETRY_COUNT = int(os.getenv("DS_V4L2_RETRY_COUNT", "3"))
 DS_V4L2_RETRY_SLEEP = float(os.getenv("DS_V4L2_RETRY_SLEEP", "2.0"))
 _seen_layers: set[str] = set()
+
+
+def _parse_class_whitelist(raw: str) -> Optional[Set[int]]:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("["):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                out = {int(v) for v in data if str(v).strip().isdigit()}
+                return out or None
+        except Exception:
+            pass
+    tokens = [t.strip() for t in raw.replace(";", ",").split(",")]
+    out = {int(t) for t in tokens if t.isdigit()}
+    return out or None
+
+
+def _parse_class_labels(raw: str) -> Dict[int, str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    if raw.startswith("{") or raw.startswith("["):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return {i: str(v) for i, v in enumerate(data) if str(v).strip()}
+            if isinstance(data, dict):
+                out = {}
+                for k, v in data.items():
+                    try:
+                        idx = int(k)
+                    except (TypeError, ValueError):
+                        continue
+                    label = str(v).strip()
+                    if label:
+                        out[idx] = label
+                return out
+        except Exception:
+            return {}
+    labels = [item.strip() for item in raw.split(",") if item.strip()]
+    return {i: name for i, name in enumerate(labels)}
+
+
+CLASS_WHITELIST = _parse_class_whitelist(CLASS_WHITELIST_RAW)
+CLASS_LABELS = _parse_class_labels(CLASS_LABELS_RAW)
 
 
 def probe_v4l2_formats(device: str) -> list[str]:
@@ -158,23 +208,75 @@ def nms(boxes: np.ndarray, scores: np.ndarray, iou_thresh: float) -> List[int]:
     return keep
 
 
+def _get_layer_ptr(layer: pyds.NvDsInferLayerInfo):
+    buf = layer.buffer
+    try:
+        if hasattr(pyds, "get_ptr"):
+            buf = pyds.get_ptr(buf)
+        return ctypes.cast(buf, ctypes.POINTER(ctypes.c_float))
+    except Exception as exc:
+        if DEBUG_YOLO:
+            print(f"[deepstream] buffer cast failed: {exc} type={type(layer.buffer)}")
+        return None
+
+
 def parse_yolo_output(layer: pyds.NvDsInferLayerInfo, conf_thresh: float, iou_thresh: float) -> List[dict]:
     dims = layer.inferDims
-    # Expected (1, 84, N)
-    size = dims.d[0] * dims.d[1] * dims.d[2]
-    ptr = ctypes.cast(layer.buffer, ctypes.POINTER(ctypes.c_float))
+    dims_list = [dims.d[i] for i in range(dims.numDims)]
+    if len(dims_list) == 2:
+        dims_list = [1, dims_list[0], dims_list[1]]
+    if len(dims_list) < 3:
+        return []
+    if len(dims_list) > 3:
+        dims_list = [dims_list[0], dims_list[1], int(np.prod(dims_list[2:]))]
+    d0, d1, d2 = dims_list
+    size = d0 * d1 * d2
+    ptr = _get_layer_ptr(layer)
+    if ptr is None:
+        return []
     data = np.ctypeslib.as_array(ptr, shape=(size,))
-    data = data.reshape((dims.d[0], dims.d[1], dims.d[2]))
+    data = data.reshape((d0, d1, d2))
+    # Normalize to shape (1, C, N) where C ~ 84.
+    if d1 > d2 and d2 <= 256:
+        data = data.transpose(0, 2, 1)
+        d0, d1, d2 = data.shape
+    elif d1 > 256 and d2 <= 256:
+        data = data.transpose(0, 2, 1)
+        d0, d1, d2 = data.shape
 
     boxes_xyxy = []
     scores = []
     classes = []
-    for i in range(dims.d[2]):
+    channels = data.shape[1]
+    for i in range(d2):
         xywh = data[0, 0:4, i]
-        cls_logits = data[0, 4:, i]
-        cls_scores = 1 / (1 + np.exp(-cls_logits))  # sigmoid
-        cls_id = int(cls_scores.argmax())
-        score = float(cls_scores[cls_id])
+        if channels >= 85:
+            obj_logits = data[0, 4, i]
+            cls_logits = data[0, 5:, i]
+            if cls_logits.size == 0:
+                continue
+            if cls_logits.max() <= 1.0 and cls_logits.min() >= 0.0:
+                cls_scores = cls_logits
+            else:
+                cls_scores = 1 / (1 + np.exp(-cls_logits))
+            if obj_logits <= 1.0 and obj_logits >= 0.0:
+                obj_score = float(obj_logits)
+            else:
+                obj_score = float(1 / (1 + math.exp(-float(obj_logits))))
+            cls_id = int(cls_scores.argmax())
+            score = float(cls_scores[cls_id]) * obj_score
+        else:
+            cls_logits = data[0, 4:, i]
+            if cls_logits.size == 0:
+                continue
+            if cls_logits.max() <= 1.0 and cls_logits.min() >= 0.0:
+                cls_scores = cls_logits
+            else:
+                cls_scores = 1 / (1 + np.exp(-cls_logits))
+            cls_id = int(cls_scores.argmax())
+            score = float(cls_scores[cls_id])
+        if CLASS_WHITELIST is not None and cls_id not in CLASS_WHITELIST:
+            continue
         if score < conf_thresh:
             continue
         boxes_xyxy.append(xywh_to_xyxy(xywh))
@@ -189,16 +291,21 @@ def parse_yolo_output(layer: pyds.NvDsInferLayerInfo, conf_thresh: float, iou_th
     boxes_xyxy = np.stack(boxes_xyxy, axis=0)
     scores_np = np.array(scores)
     keep = nms(boxes_xyxy, scores_np, iou_thresh)
+    if MAX_DETECTIONS_PER_FRAME > 0 and len(keep) > MAX_DETECTIONS_PER_FRAME:
+        keep = sorted(keep, key=lambda idx: scores[idx], reverse=True)[:MAX_DETECTIONS_PER_FRAME]
     results = []
     for k in keep:
         x1, y1, x2, y2 = boxes_xyxy[k]
-        results.append(
-            {
-                "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
-                "score": float(scores[k]),
-                "class_id": int(classes[k]),
-            }
-        )
+        class_id = int(classes[k])
+        entry = {
+            "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
+            "score": float(scores[k]),
+            "class_id": class_id,
+        }
+        label = CLASS_LABELS.get(class_id)
+        if label is not None:
+            entry["label"] = label
+        results.append(entry)
     return results
 
 
@@ -211,22 +318,35 @@ def infer_probe(pad, info, u_data):
     if not batch_meta:
         return Gst.PadProbeReturn.OK
 
+    def _collect_tensor_meta(user_list) -> List[dict]:
+        local_detections: List[dict] = []
+        l_user = user_list
+        while l_user:
+            user_meta = pyds.NvDsUserMeta.cast(l_user.data)
+            if user_meta and user_meta.base_meta.meta_type == pyds.NvDsMetaType.NVDSINFER_TENSOR_OUTPUT_META:
+                tmeta = pyds.NvDsInferTensorMeta.cast(user_meta.user_meta_data)
+                for i in range(tmeta.num_output_layers):
+                    layer = pyds.get_nvds_LayerInfo(tmeta, i)
+                    if not layer:
+                        continue
+                    if DEBUG_YOLO and layer.layerName not in _seen_layers:
+                        print(f"[deepstream] saw layer name={layer.layerName} dims={layer.inferDims.d[:layer.inferDims.numDims]}")
+                        _seen_layers.add(layer.layerName)
+                    if layer.layerName == "output0":
+                        local_detections.extend(parse_yolo_output(layer, CONF_THRESHOLD, NMS_IOU))
+            l_user = l_user.next
+        return local_detections
+
     detections: List[dict] = []
-    l_user = batch_meta.batch_user_meta_list
-    while l_user:
-        user_meta = pyds.NvDsUserMeta.cast(l_user.data)
-        if user_meta and user_meta.base_meta.meta_type == pyds.NvDsMetaType.NVDSINFER_TENSOR_OUTPUT_META:
-            tmeta = pyds.NvDsInferTensorMeta.cast(user_meta.user_meta_data)
-            for i in range(tmeta.num_output_layers):
-                layer = pyds.get_nvds_LayerInfo(tmeta, i)
-                if not layer:
-                    continue
-                if DEBUG_YOLO and layer.layerName not in _seen_layers:
-                    print(f"[deepstream] saw layer name={layer.layerName} dims={layer.inferDims.d[:layer.inferDims.numDims]}")
-                    _seen_layers.add(layer.layerName)
-                if layer.layerName == "output0":
-                    detections.extend(parse_yolo_output(layer, CONF_THRESHOLD, NMS_IOU))
-        l_user = l_user.next
+    detections.extend(_collect_tensor_meta(batch_meta.batch_user_meta_list))
+    if not detections:
+        l_frame = batch_meta.frame_meta_list
+        while l_frame:
+            frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+            detections.extend(_collect_tensor_meta(frame_meta.frame_user_meta_list))
+            l_frame = l_frame.next
+        if DEBUG_YOLO and not detections:
+            print("[deepstream] no tensor meta found on batch/frame lists")
 
     payload = {"timestamp": time.time(), "detections": detections, "source": "deepstream_trt_yolo11"}
     print(f"[deepstream] publishing {len(detections)} detections to {OBS_TOPIC}")
@@ -361,7 +481,7 @@ def main():
         bus = pipeline.get_bus()
         bus.add_signal_watch()
         loop = GObject.MainLoop()
-        error_state: dict | None = None
+        error_state: Optional[dict] = None
 
         def on_message(bus, message, udata):
             nonlocal error_state

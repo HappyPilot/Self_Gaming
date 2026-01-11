@@ -6,11 +6,11 @@ import os
 import threading
 import time
 from collections import deque
+from io import BytesIO
 
-import cv2
-import numpy as np
 import paho.mqtt.client as mqtt
 from flask import Flask, Response, render_template_string
+from PIL import Image, ImageDraw
 
 from utils.frame_transport import get_frame_bytes
 
@@ -22,6 +22,7 @@ OBJECT_TOPIC = os.getenv("VISION_OBJECT_TOPIC", "vision/objects")
 ACT_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
 SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 HTTP_PORT = int(os.getenv("DEBUG_PORT", "5000"))
+DECODE_LOG_INTERVAL_SEC = float(os.getenv("DEBUG_STREAM_DECODE_LOG_SEC", "5.0"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("debug_stream")
@@ -35,6 +36,7 @@ latest_objects = []
 latest_action = None
 latest_scene_text = ""
 action_history = deque(maxlen=20)
+last_decode_error_ts = 0.0
 
 # --- MQTT Worker ---
 def on_connect(client, userdata, flags, rc):
@@ -42,16 +44,23 @@ def on_connect(client, userdata, flags, rc):
     logger.info("Connected to MQTT")
 
 def on_message(client, userdata, msg):
-    global latest_frame, latest_objects, latest_action, latest_scene_text
+    global latest_frame, latest_objects, latest_action, latest_scene_text, last_decode_error_ts
     try:
         payload = json.loads(msg.payload.decode("utf-8", "ignore"))
         
         if msg.topic == FRAME_TOPIC:
             data = get_frame_bytes(payload)
             if data:
-                np_arr = np.frombuffer(data, np.uint8)
+                try:
+                    img = Image.open(BytesIO(data)).convert("RGB")
+                except Exception as exc:
+                    now = time.time()
+                    if now - last_decode_error_ts >= DECODE_LOG_INTERVAL_SEC:
+                        logger.warning("Failed to decode frame: %s", exc)
+                        last_decode_error_ts = now
+                    return
                 with state_lock:
-                    latest_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    latest_frame = img
         
         elif msg.topic == OBJECT_TOPIC:
             with state_lock:
@@ -89,7 +98,8 @@ def generate_frames():
             
             # Copy frame to draw on it
             img = latest_frame.copy()
-            h, w = img.shape[:2]
+            w, h = img.size
+            draw = ImageDraw.Draw(img)
             
             # Draw Objects
             for obj in latest_objects:
@@ -105,8 +115,8 @@ def generate_frames():
                     else:
                         x, y, bw, bh = [int(v) for v in bbox]
                     
-                    cv2.rectangle(img, (x, y), (x+bw, y+bh), (0, 255, 0), 2)
-                    cv2.putText(img, label, (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                    draw.rectangle([x, y, x + bw, y + bh], outline=(0, 255, 0), width=2)
+                    draw.text((x, max(0, y - 12)), label, fill=(0, 255, 0))
 
             # Draw Action Intent
             if latest_action:
@@ -115,15 +125,18 @@ def generate_frames():
                     dx = int(latest_action.get("dx", 0))
                     dy = int(latest_action.get("dy", 0))
                     cx, cy = w // 2, h // 2
-                    cv2.arrowedLine(img, (cx, cy), (cx+dx, cy+dy), (0, 0, 255), 3)
+                    draw.line([(cx, cy), (cx + dx, cy + dy)], fill=(255, 0, 0), width=2)
+                    end_x, end_y = cx + dx, cy + dy
+                    draw.ellipse([end_x - 4, end_y - 4, end_x + 4, end_y + 4], outline=(255, 0, 0), width=2)
                 
                 # Status Text Overlay
                 status = f"Act: {act} | Scene: {latest_scene_text}"
-                cv2.putText(img, status, (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                draw.text((10, max(0, h - 20)), status, fill=(255, 255, 0))
 
             # Encode back to JPG
-            ret, buffer = cv2.imencode('.jpg', img)
-            frame_bytes = buffer.tobytes()
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=80)
+            frame_bytes = buffer.getvalue()
 
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')

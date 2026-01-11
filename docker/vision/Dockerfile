@@ -15,12 +15,14 @@ RUN set -eux; \
         libv4l-0; \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir paho-mqtt
+RUN pip3 install --no-cache-dir paho-mqtt requests
 
 RUN find /usr/lib/aarch64-linux-gnu/nvidia/weston -type f -size 0 -delete || true
 
 COPY docker/health/vision.sh /usr/local/bin/vision-healthcheck
+COPY docker/health/cursor.sh /usr/local/bin/cursor-healthcheck
 RUN chmod +x /usr/local/bin/vision-healthcheck
+RUN chmod +x /usr/local/bin/cursor-healthcheck
 
 WORKDIR /app
 
