@@ -85,6 +85,9 @@ LABEL_MAP_PATH = Path(os.getenv("POLICY_LABEL_MAP_PATH", "/mnt/ssd/models/heads/
 HOT_RELOAD_ENABLED = os.getenv("POLICY_HOT_RELOAD", "1") != "0"
 POLICY_LAZY_LOAD = os.getenv("POLICY_LAZY_LOAD", "1") != "0"
 POLICY_LAZY_RETRY_SEC = float(os.getenv("POLICY_LAZY_RETRY_SEC", "120"))
+POLICY_AUTO_RELOAD = os.getenv("POLICY_AUTO_RELOAD", "1") != "0"
+POLICY_AUTO_RELOAD_SEC = float(os.getenv("POLICY_AUTO_RELOAD_SEC", "5"))
+POLICY_AUTO_RELOAD_DELAY_SEC = float(os.getenv("POLICY_AUTO_RELOAD_DELAY_SEC", "1.0"))
 LEARNING_STAGE = int(os.getenv("LEARNING_STAGE", "1"))
 STAGE0_ACTION_INTERVAL = float(os.getenv("STAGE0_ACTION_INTERVAL", "1.5"))
 STAGE0_SETTLE_SEC = float(os.getenv("STAGE0_SETTLE_SEC", "1.0"))
@@ -256,10 +259,15 @@ class PolicyAgent:
         self.last_click_ts = 0.0
         self.rng = random.Random()
         self.model_lock = threading.Lock()
+        self.reload_lock = threading.Lock()
         self.model: Optional[Dict] = None
         self.hot_reload_enabled = HOT_RELOAD_ENABLED
         self.lazy_load_enabled = POLICY_LAZY_LOAD
         self.lazy_retry_sec = max(0.0, POLICY_LAZY_RETRY_SEC)
+        self.auto_reload_enabled = POLICY_AUTO_RELOAD
+        self.auto_reload_sec = max(1.0, POLICY_AUTO_RELOAD_SEC)
+        self.auto_reload_delay_sec = max(0.0, POLICY_AUTO_RELOAD_DELAY_SEC)
+        self.last_checkpoint_signature: Optional[Tuple[Tuple[float, int], ...]] = None
         self.lazy_next_retry_at = 0.0
         self.lazy_last_retry_log_ts = 0.0
         self.model_load_attempted = False
@@ -301,6 +309,13 @@ class PolicyAgent:
         if self.hot_reload_enabled and not self.lazy_load_enabled:
             self._initial_model_load()
             self.model_load_attempted = True
+        if self.hot_reload_enabled and self.auto_reload_enabled:
+            threading.Thread(target=self._auto_reload_loop, daemon=True).start()
+            logger.info(
+                "Policy auto-reload enabled | interval=%.1fs delay=%.1fs",
+                self.auto_reload_sec,
+                self.auto_reload_delay_sec,
+            )
         logger.info(
             "Policy agent init | stage=%s stage0=%s screen=%sx%s",
             LEARNING_STAGE,
@@ -363,21 +378,83 @@ class PolicyAgent:
         threading.Thread(target=self._reload_worker, args=(paths,), daemon=True).start()
 
     def _reload_worker(self, paths: Dict):
+        if not self.reload_lock.acquire(blocking=False):
+            logger.debug("Policy reload already in progress; skipping")
+            return
         try:
             model = self._build_model(paths)
+            with self.model_lock:
+                self.model = model
+            signature = self._checkpoint_signature()
+            if signature is not None:
+                self.last_checkpoint_signature = signature
+            logger.info(
+                "Policy model reloaded from %s",
+                paths.get("policy_head_path"),
+            )
         except Exception as exc:
             logger.error("Failed to load policy checkpoint: %s", exc)
-            return
-        with self.model_lock:
-            self.model = model
-        logger.info(
-            "Policy model reloaded from %s",
-            paths.get("policy_head_path"),
-        )
+        finally:
+            self.reload_lock.release()
 
     def _get_model(self) -> Optional[Dict]:
         with self.model_lock:
             return self.model
+
+    def _checkpoint_signature(self) -> Optional[Tuple[Tuple[float, int], ...]]:
+        paths = [BACKBONE_PATH, POLICY_HEAD_PATH, LABEL_MAP_PATH]
+        for path in paths:
+            if not path.exists():
+                return None
+        signature = []
+        for path in paths:
+            stat = path.stat()
+            signature.append((stat.st_mtime, stat.st_size))
+        if VALUE_HEAD_PATH.exists():
+            stat = VALUE_HEAD_PATH.stat()
+            signature.append((stat.st_mtime, stat.st_size))
+        return tuple(signature)
+
+    def _checkpoint_paths_ready(self) -> bool:
+        if self.auto_reload_delay_sec <= 0:
+            return True
+        now = time.time()
+        for path in (BACKBONE_PATH, POLICY_HEAD_PATH, LABEL_MAP_PATH, VALUE_HEAD_PATH):
+            if not path.exists():
+                continue
+            stat = path.stat()
+            if now - stat.st_mtime < self.auto_reload_delay_sec:
+                return False
+        return True
+
+    def _auto_reload_loop(self) -> None:
+        while True:
+            time.sleep(self.auto_reload_sec)
+            if not self.hot_reload_enabled or not self.auto_reload_enabled:
+                continue
+            try:
+                self._maybe_auto_reload()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Policy auto-reload check failed: %s", exc)
+
+    def _maybe_auto_reload(self) -> None:
+        if self.lazy_load_enabled and self.model is None:
+            return
+        signature = self._checkpoint_signature()
+        if signature is None:
+            return
+        if not self._checkpoint_paths_ready():
+            return
+        if signature == self.last_checkpoint_signature:
+            return
+        self._reload_worker(
+            {
+                "backbone_path": str(BACKBONE_PATH),
+                "policy_head_path": str(POLICY_HEAD_PATH),
+                "value_head_path": str(VALUE_HEAD_PATH),
+                "label_map_path": str(LABEL_MAP_PATH),
+            }
+        )
 
     # ------------------------------------------------------------------ MQTT
     def _on_connect(self, client, _userdata, _flags, rc):
