@@ -2,7 +2,7 @@
 set -euo pipefail
 
 STATUS_FILE="${CURSOR_HEALTH_FILE:-/tmp/cursor_tracker_status.json}"
-MAX_AGE_SEC="${CURSOR_HEALTH_MAX_AGE_SEC:-15}"
+MAX_AGE_SEC="${CURSOR_HEALTH_MAX_AGE_SEC:-20}"
 
 if [ ! -f "$STATUS_FILE" ]; then
   exit 1
@@ -14,7 +14,7 @@ import os
 import time
 
 path = os.environ.get("CURSOR_HEALTH_FILE", "/tmp/cursor_tracker_status.json")
-max_age = float(os.environ.get("CURSOR_HEALTH_MAX_AGE_SEC", "15"))
+max_age = float(os.environ.get("CURSOR_HEALTH_MAX_AGE_SEC", "20"))
 
 try:
     with open(path, "r", encoding="utf-8") as f:

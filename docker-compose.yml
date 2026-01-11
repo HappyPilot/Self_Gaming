@@ -122,6 +122,7 @@ services:
     - CURSOR_HEALTH_OK_SEC=5.0
     - CURSOR_HEALTH_INTERVAL_SEC=5.0
     - CURSOR_HEALTH_FAIL_ERROR_SEC=15.0
+    - CURSOR_HEALTH_MAX_AGE_SEC=20.0
     - CURSOR_FRAME_STRIDE=1
     - CURSOR_LOSS_ANNOUNCE_SEC=1.0
     - CURSOR_MOTION_MIN=12
@@ -132,7 +133,7 @@ services:
       test:
       - CMD-SHELL
       - /usr/local/bin/cursor-healthcheck
-      interval: 30s
+      interval: 15s
       timeout: 5s
       retries: 3
       start_period: 30s

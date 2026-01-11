@@ -172,6 +172,7 @@ class CursorTrackerAgent:
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
+        self._state_lock = threading.Lock()
         self.last_detection_ts = 0.0
         self.last_publish_ts = 0.0
         self.last_frame_ts = 0.0
@@ -202,7 +203,8 @@ class CursorTrackerAgent:
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if _as_int(rc) == 0:
-            self.connected = True
+            with self._state_lock:
+                self.connected = True
             topics = [(FRAME_TOPIC, 0)]
             if ACT_CMD_TOPIC:
                 topics.append((ACT_CMD_TOPIC, 0))
@@ -222,7 +224,8 @@ class CursorTrackerAgent:
     def _on_disconnect(self, _client, _userdata, rc):
         if _as_int(rc) != 0:
             logger.warning("Unexpected disconnect: rc=%s", _as_int(rc))
-        self.connected = False
+        with self._state_lock:
+            self.connected = False
 
     def _publish_detection(self, detection: CursorDetection):
         payload = {
@@ -233,13 +236,15 @@ class CursorTrackerAgent:
             "timestamp": time.time(),
         }
         self.client.publish(CURSOR_TOPIC, json.dumps(payload))
-        self.last_publish_ts = payload["timestamp"]
+        with self._state_lock:
+            self.last_publish_ts = payload["timestamp"]
 
     def _publish_loss(self, reason: str):
         payload = {"ok": False, "reason": reason, "timestamp": time.time()}
         self.client.publish(CURSOR_TOPIC, json.dumps(payload))
-        self.last_point_px = None
-        self.last_publish_ts = payload["timestamp"]
+        with self._state_lock:
+            self.last_point_px = None
+            self.last_publish_ts = payload["timestamp"]
 
     def _on_message(self, client, _userdata, msg):
         if msg.topic == ACT_CMD_TOPIC:
@@ -251,7 +256,8 @@ class CursorTrackerAgent:
             return
 
         if msg.topic == FRAME_TOPIC:
-            self.last_frame_ts = time.time()
+            with self._state_lock:
+                self.last_frame_ts = time.time()
             self.frame_count += 1
             if self.frame_count % STRIDE != 0:
                 return
@@ -273,48 +279,62 @@ class CursorTrackerAgent:
                 if frame is None:
                     continue
                 
-                self.frame_height, self.frame_width = frame.shape[:2]
-                last_point = self.last_point_px
+                with self._state_lock:
+                    self.frame_height, self.frame_width = frame.shape[:2]
+                with self._state_lock:
+                    last_point = self.last_point_px
                 detection, gray = detect_cursor(frame, last_point, self.prev_gray)
                 if gray is not None:
                     self.prev_gray = gray
                 
                 if detection:
-                    self.last_detection_ts = time.time()
-                    self.last_point_px = (
-                        detection.x_norm * frame.shape[1],
-                        detection.y_norm * frame.shape[0],
-                    )
-                    self.synthetic_point_px = self.last_point_px
-                    self.synthetic_ts = self.last_detection_ts
-                    self.loss_notified = False
+                    now = time.time()
+                    with self._state_lock:
+                        self.last_detection_ts = now
+                        self.last_point_px = (
+                            detection.x_norm * frame.shape[1],
+                            detection.y_norm * frame.shape[0],
+                        )
+                        self.synthetic_point_px = self.last_point_px
+                        self.synthetic_ts = now
+                        self.loss_notified = False
                     self._publish_detection(detection)
                 else:
                     fallback = self._synthetic_detection()
                     if fallback:
-                        self.last_detection_ts = time.time()
+                        with self._state_lock:
+                            self.last_detection_ts = time.time()
                         self._publish_detection(fallback)
                     else:
-                        self.synthetic_point_px = None
-                        self.synthetic_ts = 0.0
+                        with self._state_lock:
+                            self.synthetic_point_px = None
+                            self.synthetic_ts = 0.0
                     
-                    if (not self.loss_notified and self.last_detection_ts and 
-                        time.time() - self.last_detection_ts >= LOSS_ANNOUNCE_SEC):
-                        self.loss_notified = True
+                    with self._state_lock:
+                        loss_notified = self.loss_notified
+                        last_detection_ts = self.last_detection_ts
+                    if (not loss_notified and last_detection_ts and 
+                        time.time() - last_detection_ts >= LOSS_ANNOUNCE_SEC):
+                        with self._state_lock:
+                            self.loss_notified = True
                         self._publish_loss("not_found")
             except Exception as e:
-                self.last_error_ts = time.time()
+                with self._state_lock:
+                    self.last_error_ts = time.time()
                 logger.error("Worker error: %s", e)
 
     def _synthetic_detection(self) -> Optional[CursorDetection]:
-        if not self.synthetic_point_px:
+        with self._state_lock:
+            synthetic_point = self.synthetic_point_px
+            synthetic_ts = self.synthetic_ts
+            width = self.frame_width or 1
+            height = self.frame_height or 1
+        if not synthetic_point:
             return None
-        if time.time() - self.synthetic_ts > 1.0:
+        if time.time() - synthetic_ts > 1.0:
             return None
-        width = self.frame_width or 1
-        height = self.frame_height or 1
-        x_px = max(0.0, min(float(width), self.synthetic_point_px[0]))
-        y_px = max(0.0, min(float(height), self.synthetic_point_px[1]))
+        x_px = max(0.0, min(float(width), synthetic_point[0]))
+        y_px = max(0.0, min(float(height), synthetic_point[1]))
         return CursorDetection(
             x_norm=x_px / max(1.0, width),
             y_norm=y_px / max(1.0, height),
@@ -331,34 +351,53 @@ class CursorTrackerAgent:
             dy = float(data.get("dy", 0.0))
         except (TypeError, ValueError):
             return
-        if not self.frame_width or not self.frame_height:
-            return
-        if self.synthetic_point_px is None:
-            if self.last_point_px is None:
+        with self._state_lock:
+            if not self.frame_width or not self.frame_height:
                 return
-            self.synthetic_point_px = tuple(self.last_point_px)
-        sx, sy = self.synthetic_point_px
-        self.synthetic_point_px = (sx + dx, sy + dy)
-        self.synthetic_ts = time.time()
+            if self.synthetic_point_px is None:
+                if self.last_point_px is None:
+                    return
+                self.synthetic_point_px = tuple(self.last_point_px)
+            sx, sy = self.synthetic_point_px
+            self.synthetic_point_px = (sx + dx, sy + dy)
+            self.synthetic_ts = time.time()
 
-    def _compute_health(self, now: float) -> str:
-        if not self.connected:
+    def _compute_health_snapshot(
+        self,
+        now: float,
+        connected: bool,
+        last_error_ts: float,
+        last_publish_ts: float,
+        last_frame_ts: float,
+    ) -> str:
+        if not connected:
             return "fail"
-        if self.last_error_ts and now - self.last_error_ts <= HEALTH_FAIL_ERROR_SEC:
+        if last_error_ts and now - last_error_ts <= HEALTH_FAIL_ERROR_SEC:
             return "fail"
-        last_ok_ts = max(self.last_publish_ts, self.last_frame_ts)
+        last_ok_ts = max(last_publish_ts, last_frame_ts)
         if last_ok_ts and now - last_ok_ts <= HEALTH_OK_SEC:
             return "ok"
         return "degraded"
 
     def _write_health(self, now: float) -> None:
+        with self._state_lock:
+            connected = self.connected
+            last_frame_ts = self.last_frame_ts
+            last_publish_ts = self.last_publish_ts
+            last_error_ts = self.last_error_ts
         status = {
             "ok": True,
-            "health": self._compute_health(now),
-            "connected": self.connected,
-            "last_frame_ts": self.last_frame_ts or None,
-            "last_publish_ts": self.last_publish_ts or None,
-            "last_error_ts": self.last_error_ts or None,
+            "health": self._compute_health_snapshot(
+                now,
+                connected,
+                last_error_ts,
+                last_publish_ts,
+                last_frame_ts,
+            ),
+            "connected": connected,
+            "last_frame_ts": last_frame_ts or None,
+            "last_publish_ts": last_publish_ts or None,
+            "last_error_ts": last_error_ts or None,
             "timestamp": now,
         }
         if status["health"] != self.last_health:
