@@ -22,6 +22,7 @@ OBJECT_TOPIC = os.getenv("VISION_OBJECT_TOPIC", "vision/objects")
 ACT_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
 SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 HTTP_PORT = int(os.getenv("DEBUG_PORT", "5000"))
+DECODE_LOG_INTERVAL_SEC = float(os.getenv("DEBUG_STREAM_DECODE_LOG_SEC", "5.0"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("debug_stream")
@@ -35,6 +36,7 @@ latest_objects = []
 latest_action = None
 latest_scene_text = ""
 action_history = deque(maxlen=20)
+last_decode_error_ts = 0.0
 
 # --- MQTT Worker ---
 def on_connect(client, userdata, flags, rc):
@@ -42,7 +44,7 @@ def on_connect(client, userdata, flags, rc):
     logger.info("Connected to MQTT")
 
 def on_message(client, userdata, msg):
-    global latest_frame, latest_objects, latest_action, latest_scene_text
+    global latest_frame, latest_objects, latest_action, latest_scene_text, last_decode_error_ts
     try:
         payload = json.loads(msg.payload.decode("utf-8", "ignore"))
         
@@ -51,7 +53,11 @@ def on_message(client, userdata, msg):
             if data:
                 try:
                     img = Image.open(BytesIO(data)).convert("RGB")
-                except Exception:
+                except Exception as exc:
+                    now = time.time()
+                    if now - last_decode_error_ts >= DECODE_LOG_INTERVAL_SEC:
+                        logger.warning("Failed to decode frame: %s", exc)
+                        last_decode_error_ts = now
                     return
                 with state_lock:
                     latest_frame = img

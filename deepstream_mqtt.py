@@ -17,7 +17,7 @@ import os
 import sys
 import time
 import subprocess
-from typing import List
+from typing import Dict, List, Optional, Set
 
 import gi
 gi.require_version("Gst", "1.0")
@@ -61,7 +61,7 @@ DS_V4L2_RETRY_SLEEP = float(os.getenv("DS_V4L2_RETRY_SLEEP", "2.0"))
 _seen_layers: set[str] = set()
 
 
-def _parse_class_whitelist(raw: str) -> set[int] | None:
+def _parse_class_whitelist(raw: str) -> Optional[Set[int]]:
     raw = (raw or "").strip()
     if not raw:
         return None
@@ -78,7 +78,7 @@ def _parse_class_whitelist(raw: str) -> set[int] | None:
     return out or None
 
 
-def _parse_class_labels(raw: str) -> dict[int, str]:
+def _parse_class_labels(raw: str) -> Dict[int, str]:
     raw = (raw or "").strip()
     if not raw:
         return {}
@@ -481,7 +481,7 @@ def main():
         bus = pipeline.get_bus()
         bus.add_signal_watch()
         loop = GObject.MainLoop()
-        error_state: dict | None = None
+        error_state: Optional[dict] = None
 
         def on_message(bus, message, udata):
             nonlocal error_state
