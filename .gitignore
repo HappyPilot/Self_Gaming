@@ -26,7 +26,6 @@ tmp/
 python.env
 !config/*.env
 config/local.env
-!tools/nitrogen/config/nitrogen.env
 
 # Models (keep repo clean; allow fixtures elsewhere)
 models/
