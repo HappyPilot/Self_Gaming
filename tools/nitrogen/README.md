@@ -36,6 +36,11 @@ Run these commands from `tools/nitrogen`:
 Notes:
 - Run the game agent on the same host as the game (Windows or macOS).
 - Both Windows and macOS agents publish frames to TOPIC_FRAME and consume actions from TOPIC_ACTION.
+- NitroGen's official play agent is Windows-only; the macOS agent here is a custom MQTT capture+input wrapper.
+
+Safety:
+- `PYAUTOGUI_FAILSAFE=1` (default) keeps the PyAutoGUI failsafe enabled.
+- Set `PYAUTOGUI_FAILSAFE=0` only if you understand the risks.
 
 ## IMPORTANT: Endpoint + action mapping
 The NitroGen server's HTTP endpoint and output JSON schema may differ from this skeleton.

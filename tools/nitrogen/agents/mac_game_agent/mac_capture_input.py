@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import atexit
 import base64
 import io
 import json
 import os
+import signal
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -144,8 +146,8 @@ def _apply_button(action: str, pressed: bool, held: set[str]) -> None:
 def main() -> None:
     cfg = load_cfg()
 
-    pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0
+    pyautogui.FAILSAFE = os.getenv("PYAUTOGUI_FAILSAFE", "1") != "0"
+    pyautogui.PAUSE = float(os.getenv("PYAUTOGUI_PAUSE", "0"))
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     if cfg.mqtt_user:
@@ -154,6 +156,31 @@ def main() -> None:
 
     last_action: Dict[str, Any] = {"lx": 0, "ly": 0, "rx": 0, "ry": 0, "btn": {}}
     held_buttons: set[str] = set()
+
+    def cleanup() -> None:
+        for item in list(held_buttons):
+            try:
+                if item in {"click_primary", "click_secondary", "click_middle"}:
+                    button = (
+                        "left"
+                        if item == "click_primary"
+                        else "right"
+                        if item == "click_secondary"
+                        else "middle"
+                    )
+                    pyautogui.mouseUp(button=button)
+                else:
+                    pyautogui.keyUp(item)
+            except Exception:
+                pass
+            held_buttons.discard(item)
+
+    def _handle_signal(_signum, _frame) -> None:
+        raise SystemExit()
+
+    atexit.register(cleanup)
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
 
     def on_action(_c, _u, msg):
         nonlocal last_action
