@@ -1,0 +1,4 @@
+paho-mqtt
+mss
+pillow
+pyautogui

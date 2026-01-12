@@ -1,0 +1,6 @@
+paho-mqtt
+mss
+Pillow
+psutil
+pywin32
+vgamepad

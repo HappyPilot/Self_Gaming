@@ -1,0 +1,31 @@
+services:
+  nitrogen:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./_vendor/NitroGen:/app/NitroGen
+      - ./_vendor/ng.pt:/app/ng.pt
+    command: >
+      bash -lc "
+      pip install -U pip &&
+      pip install -e /app/NitroGen &&
+      python /app/NitroGen/scripts/serve.py /app/ng.pt
+      "
+    ports:
+      - "8000:8000"
+
+  nitrogen-proxy:
+    image: python:3.12-slim
+    working_dir: /app
+    env_file:
+      - ./config/nitrogen.env
+    volumes:
+      - ./agents:/app/agents
+    command: >
+      bash -lc "
+      pip install -U pip &&
+      pip install paho-mqtt requests pillow &&
+      python /app/agents/nitrogen_proxy.py
+      "
+    depends_on:
+      - nitrogen
