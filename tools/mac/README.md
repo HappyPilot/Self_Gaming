@@ -51,6 +51,17 @@ INPUT_DESKTOP_KEYWORDS=finder,trash,dock,apple menu,desktop,wallpaper
 INPUT_PLAYER_CONF_MIN=0.25
 ```
 
+## Auto-pause when front app is not the game (recommended)
+Pause input when the foreground app is not the game. This uses `osascript`
+and may require macOS Automation permission for "System Events".
+
+```bash
+INPUT_REQUIRE_FRONT_APP=1
+INPUT_FRONT_APP=Path of Exile
+INPUT_FRONT_APP_CHECK_SEC=1.0
+INPUT_FRONT_APP_GRACE_SEC=2.0
+```
+
 ## MQTT control (optional)
 
 ```bash

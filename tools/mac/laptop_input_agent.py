@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import socketserver
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -45,6 +46,10 @@ DESKTOP_PAUSE_SEC = float(os.environ.get("INPUT_DESKTOP_PAUSE_SEC", "3.0"))
 PLAYER_CONF_MIN = float(os.environ.get("INPUT_PLAYER_CONF_MIN", "0.25"))
 GAME_KEYWORDS_CFG = os.environ.get("INPUT_GAME_KEYWORDS", "")
 DESKTOP_KEYWORDS_CFG = os.environ.get("INPUT_DESKTOP_KEYWORDS", "finder,trash,dock,apple menu,desktop,wallpaper")
+FRONT_APP_REQUIRED = os.environ.get("INPUT_REQUIRE_FRONT_APP", "0").strip().lower() not in ("0", "false", "no", "")
+FRONT_APP_NAMES_CFG = os.environ.get("INPUT_FRONT_APP") or os.environ.get("INPUT_FRONT_APPS", "")
+FRONT_APP_CHECK_SEC = float(os.environ.get("INPUT_FRONT_APP_CHECK_SEC", "1.0"))
+FRONT_APP_GRACE_SEC = float(os.environ.get("INPUT_FRONT_APP_GRACE_SEC", "2.0"))
 
 pyautogui.FAILSAFE = False
 
@@ -93,6 +98,12 @@ GAME_KEYWORDS = _parse_keywords(GAME_KEYWORDS_CFG)
 DESKTOP_KEYWORDS = _parse_keywords(DESKTOP_KEYWORDS_CFG)
 if REQUIRE_GAME:
     logger.info("scene guard enabled: topic=%s game_keywords=%s desktop_keywords=%s", SCENE_TOPIC, GAME_KEYWORDS, DESKTOP_KEYWORDS)
+FRONT_APP_NAMES = _parse_keywords(FRONT_APP_NAMES_CFG)
+if FRONT_APP_REQUIRED:
+    if not FRONT_APP_NAMES:
+        logger.warning("front app guard enabled but INPUT_FRONT_APP is empty")
+    else:
+        logger.info("front app guard enabled: %s", FRONT_APP_NAMES)
 
 state_lock = threading.Lock()
 last_msg_ts = 0.0
@@ -103,6 +114,10 @@ auto_pause_reason = None
 last_scene_ts = 0.0
 last_game_seen_ts = 0.0
 last_desktop_seen_ts = 0.0
+last_front_app = None
+last_front_app_ts = 0.0
+last_front_app_ok_ts = 0.0
+last_front_app_error_log = 0.0
 recent_action_ids = collections.deque()
 recent_action_id_set = set()
 recent_fingerprints = collections.deque(maxlen=256)
@@ -198,32 +213,83 @@ def _handle_scene(state: dict):
         with state_lock:
             last_game_seen_ts = now
 
+def _front_app_matches(name: str) -> bool:
+    if not FRONT_APP_NAMES:
+        return False
+    lowered = name.lower()
+    return any(token in lowered for token in FRONT_APP_NAMES)
+
+def _get_front_app_name():
+    result = subprocess.run(
+        ["/usr/bin/osascript", "-e", 'tell application "System Events" to get name of first application process whose frontmost is true'],
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(err or f"osascript exit {result.returncode}")
+    return result.stdout.strip() or None
+
+def _front_app_loop():
+    global last_front_app, last_front_app_ts, last_front_app_ok_ts, last_front_app_error_log
+    if not FRONT_APP_REQUIRED:
+        return
+    sleep_sec = max(0.2, FRONT_APP_CHECK_SEC)
+    while True:
+        time.sleep(sleep_sec)
+        name = None
+        try:
+            name = _get_front_app_name()
+        except Exception as exc:
+            now = time.time()
+            if now - last_front_app_error_log > 10:
+                last_front_app_error_log = now
+                logger.warning("front app check failed: %s", exc)
+        now = time.time()
+        with state_lock:
+            last_front_app = name
+            last_front_app_ts = now
+            if name and _front_app_matches(name):
+                last_front_app_ok_ts = now
+
 def _update_auto_pause():
     global auto_paused, auto_pause_reason
-    if not REQUIRE_GAME:
+    if not REQUIRE_GAME and not FRONT_APP_REQUIRED:
         if auto_paused:
             auto_paused = False
             auto_pause_reason = None
-            logger.info("auto-resumed: scene guard disabled")
+            logger.info("auto-resumed: guard disabled")
         return
     now = time.time()
     with state_lock:
         scene_ts = last_scene_ts
         game_ts = last_game_seen_ts
         desktop_ts = last_desktop_seen_ts
+        front_ok_ts = last_front_app_ok_ts
+        front_name = last_front_app
     reason = None
-    if scene_ts and SCENE_STALE_SEC > 0 and (now - scene_ts) > SCENE_STALE_SEC:
-        reason = "no_scene"
-    elif desktop_ts and DESKTOP_PAUSE_SEC > 0 and (now - desktop_ts) < DESKTOP_PAUSE_SEC:
-        reason = "desktop_detected"
-    elif game_ts and (now - game_ts) <= NO_GAME_PAUSE_SEC:
-        reason = None
-    else:
-        reason = "no_game_signal"
+    if FRONT_APP_REQUIRED:
+        if not FRONT_APP_NAMES:
+            reason = "front_app_not_configured"
+        elif front_ok_ts and (now - front_ok_ts) <= FRONT_APP_GRACE_SEC:
+            reason = None
+        else:
+            reason = "front_app_mismatch" if front_name else "front_app_unknown"
+    if reason is None and REQUIRE_GAME:
+        if scene_ts and SCENE_STALE_SEC > 0 and (now - scene_ts) > SCENE_STALE_SEC:
+            reason = "no_scene"
+        elif desktop_ts and DESKTOP_PAUSE_SEC > 0 and (now - desktop_ts) < DESKTOP_PAUSE_SEC:
+            reason = "desktop_detected"
+        elif game_ts and (now - game_ts) <= NO_GAME_PAUSE_SEC:
+            reason = None
+        else:
+            reason = "no_game_signal"
     if reason:
         if not auto_paused or auto_pause_reason != reason:
             auto_paused = True
             auto_pause_reason = reason
+            _panic_release()
             logger.warning("auto-paused: %s", reason)
     else:
         if auto_paused:
@@ -478,6 +544,9 @@ def _status_payload() -> dict:
         last_seen = last_msg_ts
         scene_ts = last_scene_ts
         game_ts = last_game_seen_ts
+        front_name = last_front_app
+        front_ok_ts = last_front_app_ok_ts
+        front_ts = last_front_app_ts
     return {
         "paused": _is_paused(),
         "auto_paused": auto_paused,
@@ -486,6 +555,10 @@ def _status_payload() -> dict:
         "last_msg_age_sec": round(now - last_seen, 3) if last_seen else None,
         "last_scene_age_sec": round(now - scene_ts, 3) if scene_ts else None,
         "last_game_seen_sec": round(now - game_ts, 3) if game_ts else None,
+        "front_app_required": FRONT_APP_REQUIRED,
+        "front_app": front_name,
+        "front_app_age_sec": round(now - front_ts, 3) if front_ts else None,
+        "front_app_ok_age_sec": round(now - front_ok_ts, 3) if front_ok_ts else None,
         "topic": TOPIC,
         "control_topic": CONTROL_TOPIC or None,
         "scene_topic": SCENE_TOPIC or None,
@@ -605,6 +678,7 @@ def _heartbeat_loop():
             logger.warning("no commands for %.1fs (topic=%s)", now - last_seen, TOPIC)
 
 threading.Thread(target=_heartbeat_loop, daemon=True).start()
+threading.Thread(target=_front_app_loop, daemon=True).start()
 _start_http_server()
 
 cli.on_connect = on_connect
