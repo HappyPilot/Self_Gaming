@@ -39,6 +39,8 @@ DTYPE_MAP = {
     "float32": torch.float32,
 }
 
+TRANSFORMERS_PATCHED = False
+
 
 def _parse_dtype(raw: str) -> torch.dtype:
     key = (raw or "").strip().lower()
@@ -49,6 +51,25 @@ def _autocast_dtype(dtype: torch.dtype) -> Optional[torch.dtype]:
     if dtype in (torch.float16, torch.bfloat16):
         return dtype
     return None
+
+
+def _patch_transformers_dtype(dtype: torch.dtype) -> None:
+    global TRANSFORMERS_PATCHED
+    if TRANSFORMERS_PATCHED:
+        return
+    if dtype not in (torch.float16, torch.bfloat16):
+        return
+    from transformers import AutoModel, SiglipVisionModel
+
+    def _wrap(orig):
+        def _inner(*args, **kwargs):
+            kwargs.setdefault("torch_dtype", dtype)
+            return orig(*args, **kwargs)
+        return _inner
+
+    AutoModel.from_pretrained = _wrap(AutoModel.from_pretrained)
+    SiglipVisionModel.from_pretrained = _wrap(SiglipVisionModel.from_pretrained)
+    TRANSFORMERS_PATCHED = True
 
 
 def load_model(checkpoint_path: str, dtype: torch.dtype, device: str):
@@ -74,6 +95,7 @@ def load_model(checkpoint_path: str, dtype: torch.dtype, device: str):
             ]
         tokenizer = NitrogenTokenizer(tokenizer_cfg)
         game_mapping = tokenizer.game_mapping
+        _patch_transformers_dtype(dtype)
         prev_dtype = torch.get_default_dtype()
         if dtype in (torch.float16, torch.bfloat16):
             torch.set_default_dtype(dtype)
