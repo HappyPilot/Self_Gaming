@@ -64,6 +64,7 @@ def _patch_transformers_dtype(dtype: torch.dtype) -> None:
     def _wrap(orig):
         def _inner(*args, **kwargs):
             kwargs.setdefault("torch_dtype", dtype)
+            kwargs.setdefault("low_cpu_mem_usage", True)
             return orig(*args, **kwargs)
         return _inner
 
