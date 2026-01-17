@@ -24,6 +24,11 @@ try:
     import torch
 except Exception:  # noqa: BLE001
     torch = None
+try:
+    from transformers import AutoImageProcessor, AutoModel
+except Exception:  # noqa: BLE001
+    AutoImageProcessor = None
+    AutoModel = None
 
 logging.basicConfig(level=os.getenv("VL_JEPA_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("vl_jepa_agent")
@@ -44,6 +49,9 @@ FRAME_QUEUE_MAX = int(os.getenv("VL_JEPA_QUEUE", "2"))
 FP16 = os.getenv("VL_JEPA_FP16", "0") not in {"0", "false", "False"}
 MEAN_STR = os.getenv("VL_JEPA_MEAN", "")
 STD_STR = os.getenv("VL_JEPA_STD", "")
+SIGLIP_MODEL_ID = os.getenv("VL_JEPA_MODEL_ID", "").strip()
+SIGLIP_POOL = os.getenv("VL_JEPA_POOL", "pooler").strip().lower()
+SIGLIP_ATTN_IMPL = os.getenv("VL_JEPA_ATTN_IMPL", "").strip().lower()
 MAX_EMBED_DIM = int(os.getenv("VL_JEPA_MAX_EMBED_DIM", "4096"))
 MAX_PAYLOAD_BYTES = int(os.getenv("VL_JEPA_MAX_PAYLOAD_BYTES", "262144"))
 SLA_STAGE_EMBED_MS = get_sla_ms("SLA_STAGE_EMBED_MS")
@@ -167,6 +175,82 @@ class TensorRTEncoder(BaseEncoder):
             return None
 
 
+class SiglipEncoder(BaseEncoder):
+    backend = "siglip2"
+
+    def __init__(self, model_id: str, device: str, input_size: int, fp16: bool, pool: str, attn_impl: str):
+        if torch is None or AutoModel is None or AutoImageProcessor is None:
+            raise RuntimeError("transformers/torch not available for siglip2 backend")
+        self.device = device
+        self.input_size = max(1, input_size)
+        self.fp16 = fp16 and device.startswith("cuda")
+        self.pool = pool or "pooler"
+        self.attn_impl = attn_impl or ""
+        self.model_id = model_id or "google/siglip2-base-patch16-224"
+
+        self.processor = AutoImageProcessor.from_pretrained(self.model_id)
+        self.model = self._load_model()
+        self.model.eval()
+        self.model.to(self.device)
+
+    def _load_model(self):
+        kwargs = {}
+        if self.fp16:
+            kwargs["torch_dtype"] = torch.float16
+        if self.attn_impl:
+            kwargs["attn_implementation"] = self.attn_impl
+        try:
+            return AutoModel.from_pretrained(self.model_id, **kwargs)
+        except TypeError:
+            kwargs.pop("attn_implementation", None)
+            return AutoModel.from_pretrained(self.model_id, **kwargs)
+
+    def _prepare_inputs(self, image: Image.Image):
+        if self.input_size:
+            image = image.resize((self.input_size, self.input_size), resample=Image.BILINEAR)
+        inputs = self.processor(images=image, return_tensors="pt")
+        pixel_values = inputs.get("pixel_values")
+        if pixel_values is None:
+            return None
+        pixel_values = pixel_values.to(self.device)
+        if self.fp16:
+            pixel_values = pixel_values.half()
+        return {"pixel_values": pixel_values}
+
+    def _pool_output(self, outputs):
+        if self.pool in {"image_embeds", "image"} and hasattr(outputs, "image_embeds"):
+            return outputs.image_embeds
+        if self.pool in {"pooler", "pool"} and hasattr(outputs, "pooler_output"):
+            return outputs.pooler_output
+        if hasattr(outputs, "last_hidden_state"):
+            last = outputs.last_hidden_state
+            if self.pool in {"mean", "avg"}:
+                return last.mean(dim=1)
+            return last[:, 0]
+        if isinstance(outputs, (list, tuple)) and outputs:
+            return outputs[0]
+        if isinstance(outputs, dict):
+            for key in ("pooler_output", "image_embeds", "last_hidden_state"):
+                if key in outputs:
+                    return outputs[key]
+        return None
+
+    def encode(self, image: Image.Image) -> Optional[np.ndarray]:
+        if torch is None:
+            return None
+        inputs = self._prepare_inputs(image)
+        if not inputs:
+            return None
+        with torch.inference_mode():
+            outputs = self.model(**inputs)
+        pooled = self._pool_output(outputs)
+        if pooled is None:
+            return None
+        if pooled.ndim >= 2:
+            pooled = pooled[0]
+        return pooled.float().cpu().numpy()
+
+
 def _extract_embedding(output) -> Optional[np.ndarray]:
     if torch is None:
         return None
@@ -268,12 +352,33 @@ class VlJepaAgent:
                     encoder = TensorRTEncoder(ENGINE_PATH, INPUT_SIZE, mean, std)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("TensorRT init failed: %s", exc)
+            elif BACKEND in {"siglip", "siglip2"}:
+                try:
+                    encoder = SiglipEncoder(
+                        SIGLIP_MODEL_ID,
+                        device,
+                        INPUT_SIZE,
+                        FP16,
+                        SIGLIP_POOL,
+                        SIGLIP_ATTN_IMPL,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("SigLIP init failed: %s", exc)
             elif BACKEND not in {"dummy", ""}:
                 logger.warning("Unknown VL_JEPA_BACKEND=%s; falling back to dummy", BACKEND)
             if encoder is None:
                 encoder = DummyEncoder(EMBED_DIM)
             self.encoder = encoder
-            logger.info("VL-JEPA encoder ready: backend=%s device=%s input=%s", self.encoder.backend, device, INPUT_SIZE)
+            if isinstance(self.encoder, SiglipEncoder):
+                logger.info(
+                    "VL-JEPA encoder ready: backend=%s device=%s input=%s model=%s",
+                    self.encoder.backend,
+                    device,
+                    INPUT_SIZE,
+                    self.encoder.model_id,
+                )
+            else:
+                logger.info("VL-JEPA encoder ready: backend=%s device=%s input=%s", self.encoder.backend, device, INPUT_SIZE)
 
     def _worker_loop(self):
         while not stop_event.is_set():
@@ -321,6 +426,7 @@ class VlJepaAgent:
                 "dim": len(embedding_list),
                 "backend": self.encoder.backend if self.encoder else "unknown",
                 "model_path": MODEL_PATH,
+                "model_id": getattr(self.encoder, "model_id", ""),
             }
             payload_json = json.dumps(out_payload)
             if MAX_PAYLOAD_BYTES and len(payload_json) > MAX_PAYLOAD_BYTES:

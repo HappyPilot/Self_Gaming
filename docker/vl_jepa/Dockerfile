@@ -16,7 +16,8 @@ RUN python3 -m pip install --no-cache-dir -U pip && \
         "numpy<2" \
         paho-mqtt \
         pillow \
-        pycuda
+        pycuda \
+        transformers
 
 WORKDIR /app
 

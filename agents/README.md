@@ -57,6 +57,24 @@ If using Docker Compose, enable the optional `strategy_state` service (profile `
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
 
+## Visual Embeddings (SigLIP2 / V-JEPA)
+
+`vl_jepa_agent.py` subscribes to `vision/frame/preview` and publishes visual embeddings on `vision/embeddings`.
+You can run it with lightweight SigLIP2 weights (no NitroGen required):
+
+```bash
+export VL_JEPA_BACKEND=siglip2
+export VL_JEPA_MODEL_ID=google/siglip2-base-patch16-224
+export VL_JEPA_INPUT_SIZE=224
+export VL_JEPA_EMBED_DIM=768
+export VL_JEPA_FP16=1
+export VL_JEPA_ATTN_IMPL=sdpa   # optional
+```
+
+This keeps the control loop and MQTT contracts intact while giving your agents a strong
+pretrained vision backbone. If you prefer existing TorchScript/TensorRT encoders,
+keep `VL_JEPA_BACKEND=torchscript` or `tensorrt` and set the corresponding paths.
+
 ## Reward Manager
 
 `reward_manager.py` pulls three signals to publish dense rewards on `train/reward`:

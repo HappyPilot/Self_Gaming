@@ -146,6 +146,7 @@ Required: ok, timestamp, embedding, dim
   "backend": "torchscript"
 }
 ```
+Note: backend is typically `torchscript`, `tensorrt`, `siglip2`, or `dummy` depending on vl_jepa_agent config.
 
 ### ocr_easy/text
 Required: ok, text, results, backend
