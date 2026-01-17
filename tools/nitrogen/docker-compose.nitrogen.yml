@@ -12,7 +12,7 @@ services:
       python /app/NitroGen/scripts/serve.py /app/ng.pt
       "
     ports:
-      - "8000:8000"
+      - "5555:5555"
 
   nitrogen-proxy:
     image: python:3.12-slim
@@ -24,7 +24,7 @@ services:
     command: >
       bash -lc "
       pip install -U pip &&
-      pip install paho-mqtt requests pillow &&
+      pip install paho-mqtt pyzmq pillow numpy &&
       python /app/agents/nitrogen_proxy.py
       "
     depends_on:
