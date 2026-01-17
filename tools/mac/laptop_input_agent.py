@@ -99,8 +99,13 @@ DESKTOP_KEYWORDS = _parse_keywords(DESKTOP_KEYWORDS_CFG)
 if REQUIRE_GAME:
     logger.info("scene guard enabled: topic=%s game_keywords=%s desktop_keywords=%s", SCENE_TOPIC, GAME_KEYWORDS, DESKTOP_KEYWORDS)
 FRONT_APP_NAMES = _parse_keywords(FRONT_APP_NAMES_CFG)
+FRONT_APP_MODE = "strict"
+if FRONT_APP_NAMES_CFG.strip().lower() in ("auto", "*", "any"):
+    FRONT_APP_MODE = "auto"
 if FRONT_APP_REQUIRED:
-    if not FRONT_APP_NAMES:
+    if FRONT_APP_MODE == "auto":
+        logger.info("front app guard enabled: auto")
+    elif not FRONT_APP_NAMES:
         logger.warning("front app guard enabled but INPUT_FRONT_APP is empty")
     else:
         logger.info("front app guard enabled: %s", FRONT_APP_NAMES)
@@ -117,6 +122,8 @@ last_desktop_seen_ts = 0.0
 last_front_app = None
 last_front_app_ts = 0.0
 last_front_app_ok_ts = 0.0
+last_front_app_allowed = None
+last_front_app_allowed_ts = 0.0
 last_front_app_error_log = 0.0
 recent_action_ids = collections.deque()
 recent_action_id_set = set()
@@ -214,10 +221,31 @@ def _handle_scene(state: dict):
             last_game_seen_ts = now
 
 def _front_app_matches(name: str) -> bool:
+    if FRONT_APP_MODE == "auto":
+        if not last_front_app_allowed:
+            return False
+        return last_front_app_allowed in name.lower()
     if not FRONT_APP_NAMES:
         return False
     lowered = name.lower()
     return any(token in lowered for token in FRONT_APP_NAMES)
+
+def _set_front_app_allowed(name: str, reason: str):
+    global last_front_app_allowed, last_front_app_allowed_ts
+    if not name:
+        return
+    lowered = name.lower()
+    if last_front_app_allowed == lowered:
+        return
+    last_front_app_allowed = lowered
+    last_front_app_allowed_ts = time.time()
+    logger.info("front app allowed set to '%s' (%s)", name, reason)
+
+def _maybe_update_front_app_allowed(name: str):
+    if FRONT_APP_MODE != "auto":
+        return
+    if not last_front_app_allowed and name:
+        _set_front_app_allowed(name, "auto_first_seen")
 
 def _get_front_app_name():
     result = subprocess.run(
@@ -250,6 +278,7 @@ def _front_app_loop():
         with state_lock:
             last_front_app = name
             last_front_app_ts = now
+            _maybe_update_front_app_allowed(name)
             if name and _front_app_matches(name):
                 last_front_app_ok_ts = now
 
@@ -270,8 +299,10 @@ def _update_auto_pause():
         front_name = last_front_app
     reason = None
     if FRONT_APP_REQUIRED:
-        if not FRONT_APP_NAMES:
+        if FRONT_APP_MODE != "auto" and not FRONT_APP_NAMES:
             reason = "front_app_not_configured"
+        elif FRONT_APP_MODE == "auto" and not last_front_app_allowed:
+            reason = "front_app_unset"
         elif front_ok_ts and (now - front_ok_ts) <= FRONT_APP_GRACE_SEC:
             reason = None
         else:
@@ -547,6 +578,8 @@ def _status_payload() -> dict:
         front_name = last_front_app
         front_ok_ts = last_front_app_ok_ts
         front_ts = last_front_app_ts
+        front_allowed = last_front_app_allowed
+        front_allowed_ts = last_front_app_allowed_ts
     return {
         "paused": _is_paused(),
         "auto_paused": auto_paused,
@@ -556,9 +589,12 @@ def _status_payload() -> dict:
         "last_scene_age_sec": round(now - scene_ts, 3) if scene_ts else None,
         "last_game_seen_sec": round(now - game_ts, 3) if game_ts else None,
         "front_app_required": FRONT_APP_REQUIRED,
+        "front_app_mode": FRONT_APP_MODE,
         "front_app": front_name,
         "front_app_age_sec": round(now - front_ts, 3) if front_ts else None,
         "front_app_ok_age_sec": round(now - front_ok_ts, 3) if front_ok_ts else None,
+        "front_app_allowed": front_allowed,
+        "front_app_allowed_age_sec": round(now - front_allowed_ts, 3) if front_allowed_ts else None,
         "topic": TOPIC,
         "control_topic": CONTROL_TOPIC or None,
         "scene_topic": SCENE_TOPIC or None,
@@ -623,6 +659,14 @@ class _ControlHandler(http.server.BaseHTTPRequestHandler):
             _set_paused(False)
         elif action == "panic":
             _panic_release()
+        elif action == "set_front_app":
+            try:
+                name = _get_front_app_name()
+            except Exception as exc:
+                logger.warning("front app set failed: %s", exc)
+                return
+            if name:
+                _set_front_app_allowed(name, "manual")
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
@@ -636,12 +680,20 @@ class _ControlHandler(http.server.BaseHTTPRequestHandler):
             self._handle_action(path.lstrip("/"))
             self._send(200, _render_index(_status_payload()))
             return
+        if path == "/set_front_app":
+            self._handle_action("set_front_app")
+            self._send(200, _render_index(_status_payload()))
+            return
         self._send(404, "not found", "text/plain; charset=utf-8")
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         if path in ("/pause", "/resume", "/panic"):
             self._handle_action(path.lstrip("/"))
+            self._send(200, _render_index(_status_payload()))
+            return
+        if path == "/set_front_app":
+            self._handle_action("set_front_app")
             self._send(200, _render_index(_status_payload()))
             return
         if path == "/status":

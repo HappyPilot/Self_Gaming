@@ -62,6 +62,10 @@ INPUT_FRONT_APP_CHECK_SEC=1.0
 INPUT_FRONT_APP_GRACE_SEC=2.0
 ```
 
+To make it generic for any game, set `INPUT_FRONT_APP=auto` and start the bridge
+while the game is in focus. You can also call `/set_front_app` from the control
+panel to bind to the current front app.
+
 ## MQTT control (optional)
 
 ```bash
