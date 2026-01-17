@@ -6,8 +6,8 @@ This is a minimal, hackable skeleton to integrate NitroGen as a low-level "hands
 
 ## Assumptions
 - You have an MQTT broker (e.g., Mosquitto) reachable by both Windows and Linux/Jetson.
-- You run NitroGen's server as described in their repo: `python scripts/serve.py <path_to_ng.pt>`
-  (ZeroMQ server on port 5555 by default).
+- You run NitroGen's server (ZeroMQ on port 5555 by default). This repo provides
+  `tools/nitrogen/agents/nitrogen_serve.py` as a fp16-aware wrapper around NitroGen.
   and run the agent on Windows games via `python scripts/play.py --process '<game.exe>'`.
   (See MineDojo/NitroGen README.)
 
@@ -15,7 +15,8 @@ This is a minimal, hackable skeleton to integrate NitroGen as a low-level "hands
 Run these commands from `tools/nitrogen`:
 1) Vendor NitroGen repo into `_vendor/NitroGen`
 2) Put checkpoint `ng.pt` into `_vendor/ng.pt`
-3) Copy `config/nitrogen.env.example` -> `config/nitrogen.env` and set MQTT/NITROGEN_HOST/NITROGEN_PORT (ZeroMQ)
+3) Copy `config/nitrogen.env.example` -> `config/nitrogen.env` and set MQTT/NITROGEN_HOST/NITROGEN_PORT (ZeroMQ).
+   On Jetson 8GB, keep `NITROGEN_DTYPE=fp16` to reduce memory.
 4) `docker compose -f docker-compose.nitrogen.yml up --build`
 
 ## Recommended deployment (Jetson GPU + Mac capture)
@@ -26,8 +27,8 @@ Jetson (server + proxy):
    - `~/self-gaming/tools/nitrogen/_vendor/NitroGen`
    - `~/self-gaming/tools/nitrogen/_vendor/ng.pt`
 2) Start NitroGen server:
-   - `python ~/self-gaming/tools/nitrogen/_vendor/NitroGen/scripts/serve.py ~/self-gaming/tools/nitrogen/_vendor/ng.pt`
-     (add `--port 5555` if you override the default)
+   - `NITROGEN_DTYPE=fp16 python ~/self-gaming/tools/nitrogen/agents/nitrogen_serve.py \`
+     `~/self-gaming/tools/nitrogen/_vendor/ng.pt --port 5555`
 3) Start the proxy (publishes actions to `act/cmd`):
    - `PYTHONPATH=~/self-gaming/tools/nitrogen/agents \`
      `MQTT_HOST=127.0.0.1 NITROGEN_HOST=127.0.0.1 NITROGEN_PORT=5555 \`
@@ -78,3 +79,7 @@ The NitroGen server uses ZeroMQ (port 5555 by default) and returns a raw action 
 Check `scripts/serve.py` logs/docs and then adjust:
 - `agents/nitrogen_client.py` (host/port + payload)
 - `agents/nitrogen_proxy.py:normalize_action()` (schema + button mapping)
+
+Memory notes:
+- On Jetson 8GB, start with `NITROGEN_DTYPE=fp16` to reduce memory usage.
+- If fp16 causes instability, try `NITROGEN_DTYPE=fp32` (higher memory).

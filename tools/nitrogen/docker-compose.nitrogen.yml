@@ -5,11 +5,12 @@ services:
     volumes:
       - ./_vendor/NitroGen:/app/NitroGen
       - ./_vendor/ng.pt:/app/ng.pt
+      - ./agents:/app/agents
     command: >
       bash -lc "
       pip install -U pip &&
       pip install -e /app/NitroGen &&
-      python /app/NitroGen/scripts/serve.py /app/ng.pt
+      python /app/agents/nitrogen_serve.py /app/ng.pt --port 5555
       "
     ports:
       - "5555:5555"
