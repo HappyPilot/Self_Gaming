@@ -192,13 +192,18 @@ Schema: `schemas/action.schema.json`
 ```
 
 ### teacher/action
-Required: ok, text, timestamp
+Required: ok, action, reasoning, timestamp
 ```json
 {
   "ok": true,
+  "action": "Click the Play button",
+  "reasoning": "The Play button is highlighted and expected to continue.",
   "text": "Click the Play button",
   "timestamp": 1712345678.4,
-  "game_id": "poe"
+  "rules_used": 1,
+  "recent_critical_used": 0,
+  "game_id": "poe",
+  "context_game": "Path of Exile"
 }
 ```
 

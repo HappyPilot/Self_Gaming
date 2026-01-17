@@ -83,9 +83,61 @@ def _text_change_ratio(prev: str, current: str) -> float:
     return 1.0 - (len(prev_tokens & curr_tokens) / len(union))
 
 class BaseChatClient:
-    def summarize(self, scene_summary: str, snapshot_hint: str, recent_actions: str) -> str: raise NotImplementedError
-    def propose_action(self, reasoning: str, scene_summary: str, recent_actions: str) -> str: raise NotImplementedError
-    def describe_environment(self, scene_text: str, objects: str) -> str: raise NotImplementedError
+    def _complete(self, messages):  # pragma: no cover - subclasses implement transport
+        raise NotImplementedError
+
+    def summarize(self, scene_summary: str, snapshot_hint: str, recent_actions: str) -> str:
+        prompt = [
+            {"role": "system", "content": "Summarize the current UI state and constraints for the agent."},
+            {
+                "role": "user",
+                "content": (
+                    f"Scene summary:\n{scene_summary}\n\n"
+                    f"Snapshot hint: {snapshot_hint}\n\n"
+                    f"Recent actions:\n{recent_actions}\n\n"
+                    "Return a concise summary the agent can act on."
+                ),
+            },
+        ]
+        return self._complete(prompt)
+
+    def propose_action(self, reasoning: str, scene_summary: str, recent_actions: str) -> str:
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "Propose one safe, concrete next action. "
+                    "If you include coordinates, use normalized 0..1."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Reasoning:\n{reasoning}\n\n"
+                    f"Scene summary:\n{scene_summary}\n\n"
+                    f"Recent actions:\n{recent_actions}\n\n"
+                    "Return the action as a single sentence."
+                ),
+            },
+        ]
+        return self._complete(prompt)
+
+    def describe_environment(self, scene_text: str, objects: str) -> str:
+        prompt = [
+            {
+                "role": "system",
+                "content": "Identify the game and key UI context as a compact JSON object.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Scene text:\n{scene_text}\n\n"
+                    f"Objects:\n{objects}\n\n"
+                    "Return JSON with keys: game, summary, controls."
+                ),
+            },
+        ]
+        return self._complete(prompt)
 
 class OpenAIChatClient(BaseChatClient):
     def __init__(self, api_key: str, model: str = OPENAI_MODEL):
@@ -153,6 +205,21 @@ class TeacherAgent:
         self._watchdog_last: Dict[str, float] = {}
         self.game_id: Optional[str] = None
 
+    def _ensure_mem_rpc(self):
+        if self.mem_rpc:
+            return self.mem_rpc
+        try:
+            self.mem_rpc = MemRPC(
+                host=MQTT_HOST,
+                port=MQTT_PORT,
+                query_topic=MEM_QUERY_TOPIC,
+                reply_topic=MEM_RESPONSE_TOPIC,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MemRPC unavailable: %s", exc)
+            self.mem_rpc = None
+        return self.mem_rpc
+
     def _on_connect(self, client, _userdata, _flags, rc):
         if _as_int(rc) == 0:
             topics = [(t, 0) for t in [SCENE_TOPIC, SIM_TOPIC, SNAPSHOT_TOPIC, ACT_RESULT_TOPIC] if t]
@@ -207,6 +274,108 @@ class TeacherAgent:
         except Exception as e:
             logger.warning("Identification failed: %s", e)
 
+    def _scene_scope(self, scene: dict) -> str:
+        if scene.get("flags", {}).get("death"):
+            return "critical_dialog:death"
+        return TEACHER_CONTEXT_SCOPE_FALLBACK
+
+    def _format_scene_desc(self, scene: dict) -> str:
+        elements = []
+        for target in scene.get("targets", []) or []:
+            label = target.get("label", "ui")
+            center = target.get("center", [0.5, 0.5])
+            elements.append(f'UI "{label}" at ({center[0]:.2f}, {center[1]:.2f})')
+        for obj in scene.get("objects", []) or []:
+            label = obj.get("label") or obj.get("class") or "obj"
+            pos = obj.get("pos")
+            if not pos and obj.get("bbox"):
+                bbox = obj["bbox"]
+                pos = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+            pos = pos or [0.5, 0.5]
+            elements.append(f'Obj "{label}" at ({pos[0]:.2f}, {pos[1]:.2f})')
+        if elements:
+            scene_desc = " | ".join(elements)
+            raw_text = scene.get("text", [])
+            if len(raw_text) < 5:
+                scene_desc += f" | Raw Text: {raw_text}"
+            return scene_desc
+        return json.dumps(scene.get("text", []))
+
+    def _format_recent_actions(self, actions: List[str]) -> str:
+        if not actions:
+            return "none"
+        return "\n".join(f"- {action}" for action in actions[-5:])
+
+    def _query_mem(self, payload: dict, timeout: float = 1.0) -> Optional[dict]:
+        mem = self._ensure_mem_rpc()
+        if not mem:
+            return None
+        try:
+            return mem.query(payload, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Mem query failed: %s", exc)
+            return None
+
+    def _build_scene_summary(self, scene: dict, rules: List[dict], recent_critical: List[dict]) -> str:
+        parts = [self._format_scene_desc(scene)]
+        stats = scene.get("stats")
+        if stats:
+            parts.append(f"Stats: {json.dumps(stats)}")
+        if rules:
+            rules_text = "\n".join(f"- {rule.get('text')}" for rule in rules)
+            parts.append(f"Rules:\n{rules_text}")
+        if recent_critical:
+            crit_text = "\n".join(
+                f"- {entry.get('delta') or entry.get('event')} ({entry.get('episode_id')})"
+                for entry in recent_critical
+            )
+            parts.append(f"Recent critical:\n{crit_text}")
+        return "\n".join(parts)
+
+    def _maybe_refresh_context(self, client, llm: BaseChatClient, scene: dict, scope: str) -> Optional[dict]:
+        if not hasattr(llm, "describe_environment"):
+            return None
+        scene_text = " ".join(scene.get("text", [])).strip()
+        objects = scene.get("objects") or []
+        if not scene_text and not objects:
+            return None
+        now = time.time()
+        last_refresh = self._context_refresh_times.get(scope, 0.0)
+        prev_text = self._context_text_fingerprint.get(scope, "")
+        text_fingerprint = _text_fingerprint(scene_text)
+        should_refresh = not last_refresh or (now - last_refresh) >= TEACHER_CONTEXT_REFRESH_SEC
+        if not should_refresh and scene_text and len(scene_text) >= TEACHER_CONTEXT_MIN_CHARS:
+            change_ratio = _text_change_ratio(prev_text, text_fingerprint)
+            if change_ratio >= TEACHER_CONTEXT_DIFF_JACCARD and len(scene_text) >= TEACHER_CONTEXT_DIFF_MIN_CHARS:
+                should_refresh = True
+        if not should_refresh:
+            return self._context_cache.get(scope)
+
+        object_labels = [str(obj.get("label") or obj.get("class") or "obj") for obj in objects[:TEACHER_CONTEXT_OBJECT_LIMIT]]
+        object_summary = ", ".join(object_labels)
+        try:
+            raw_context = llm.describe_environment(scene_text[:TEACHER_CONTEXT_TEXT_LIMIT], object_summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Context describe failed: %s", exc)
+            return None
+        try:
+            context_payload = json.loads(raw_context) if isinstance(raw_context, str) else raw_context
+        except Exception:
+            context_payload = {"summary": str(raw_context)}
+
+        if isinstance(context_payload, dict):
+            context_payload.setdefault("timestamp", now)
+            context_payload.setdefault("scope", scope)
+            context_key = f"{TEACHER_CONTEXT_KEY}:{scope}"
+            self._context_cache[scope] = context_payload
+            self._context_text_fingerprint[scope] = text_fingerprint
+            self._context_refresh_times[scope] = now
+            client.publish(
+                self.mem_store_topic,
+                json.dumps({"op": "set", "key": context_key, "value": context_payload, "timestamp": now}),
+            )
+        return context_payload if isinstance(context_payload, dict) else None
+
     def _maybe_request_action(self, client):
         now = time.time()
         if self._inflight: return
@@ -227,67 +396,44 @@ class TeacherAgent:
             if llm is None:
                 logger.warning("No LLM available")
                 return
-            
-            # Construct spatial map for the Teacher
-            elements = []
-            # 1. UI Targets (buttons, text zones with coords)
-            for t in scene.get('targets', []):
-                label = t.get('label', 'ui')
-                center = t.get('center', [0.5, 0.5])
-                # Format: UI "Save" at (0.2, 0.8)
-                elements.append(f'UI "{label}" at ({center[0]:.2f}, {center[1]:.2f})')
-            
-            # 2. Game Objects (enemies, player, loot)
-            for o in scene.get('objects', []):
-                label = o.get('label') or o.get('class') or 'obj'
-                # Some objects store pos as 'pos', others might calculate it from bbox
-                pos = o.get('pos')
-                if not pos and o.get('bbox'):
-                    b = o['bbox']
-                    pos = [(b[0]+b[2])/2, (b[1]+b[3])/2]
-                pos = pos or [0.5, 0.5]
-                elements.append(f'Obj "{label}" at ({pos[0]:.2f}, {pos[1]:.2f})')
 
-            # 3. Fallback or Append Raw Text
-            if not elements:
-                scene_desc = json.dumps(scene.get('text', []))
-            else:
-                scene_desc = " | ".join(elements)
-                raw_text = scene.get('text', [])
-                if len(raw_text) < 5:
-                    scene_desc += f" | Raw Text: {raw_text}"
+            scope = self._scene_scope(scene)
+            rules = []
+            recent_critical = []
+            rules_resp = self._query_mem({"mode": "rules", "scope": scope, "limit": TEACHER_RULE_LIMIT})
+            if rules_resp and isinstance(rules_resp.get("value"), list):
+                rules = rules_resp["value"]
+            critical_resp = self._query_mem({"mode": "recent_critical", "scope": scope, "limit": TEACHER_RECENT_CRITICAL_LIMIT})
+            if critical_resp and isinstance(critical_resp.get("value"), list):
+                recent_critical = critical_resp["value"]
 
-            # History for context
-            history_str = "\n".join([f"- {a}" for a in list(self.actions)[-5:]])
+            scene_summary = self._build_scene_summary(scene, rules, recent_critical)
+            snapshot_hint = f"{len(snapshot)} bytes" if snapshot else "none"
+            recent_actions = self._format_recent_actions(actions)
 
-            prompt = [
-                {"role": "system", "content": f"You are an expert player of {self.game_id or 'this game'}. {TARGET_HINT_INSTRUCTIONS}\n\nCRITICAL: If previous actions failed to move the character or change the scene, try a DIFFERENT approach (e.g., hold mouse, click elsewhere, use keyboard)."},
-                {"role": "user", "content": f"Scene: {scene_desc}\nStatus: {json.dumps(scene.get('stats', {}))}\nRecent Actions:\n{history_str}\n\nProblem: Character might be stuck. What exactly should I do?"}
-            ]
-            
-            response = llm._complete(prompt)
-            logger.info("Teacher says: %s", response)
+            context_payload = self._maybe_refresh_context(client, llm, scene, scope)
+            context_game = None
+            if isinstance(context_payload, dict):
+                context_game = context_payload.get("game")
 
-            # --- THOUGHT LOG ---
-            try:
-                log_dir = "/app/logs"
-                if not os.path.exists(log_dir): os.makedirs(log_dir, exist_ok=True)
-                with open(f"{log_dir}/thought_process.log", "a") as f:
-                    entry = {
-                        "timestamp": time.time(),
-                        "game": self.game_id,
-                        "scene": scene_desc[:300],
-                        "history": list(self.actions)[-3:],
-                        "advice": response
-                    }
-                    f.write(json.dumps(entry) + "\n")
-            except Exception as e:
-                logger.error(f"Failed to write thought log: {e}")
-            # -------------------
-            
-            payload = {"ok": True, "text": response, "timestamp": time.time(), "game_id": self.game_id}
+            reasoning = llm.summarize(scene_summary, snapshot_hint, recent_actions)
+            action_text = llm.propose_action(reasoning, scene_summary, recent_actions)
+            if not action_text:
+                return
+
+            payload = {
+                "ok": True,
+                "timestamp": time.time(),
+                "action": action_text,
+                "reasoning": reasoning,
+                "text": action_text,
+                "rules_used": len(rules),
+                "recent_critical_used": len(recent_critical),
+                "game_id": self.game_id,
+                "context_game": context_game,
+            }
             client.publish(TEACHER_TOPIC, json.dumps(payload))
-            
+
         except Exception as exc:
             logger.error("LLM error: %s", exc)
         finally:
