@@ -31,6 +31,8 @@ Run these commands from `tools/nitrogen`:
 2) Set env vars:
    - MQTT_HOST (broker IP)
    - CAPTURE_MONITOR=1 (or CAPTURE_REGION=left,top,width,height)
+   - INPUT_ENABLED=0 (capture-only; use laptop_input_agent.py for input)
+   - INPUT_PAUSE_FILE=/tmp/sg_input_pause (shared pause toggle)
 3) `python agents/mac_game_agent/mac_capture_input.py`
 
 Notes:

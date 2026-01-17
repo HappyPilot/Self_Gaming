@@ -36,10 +36,16 @@ class Cfg:
     mouse_range: float
     mouse_deadzone: float
     button_map: Dict[str, str]
+    input_enabled: bool
+    input_pause_file: str
 
 
 def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default)
+
+def _env_bool(name: str, default: str = "0") -> bool:
+    raw = _env(name, default).strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 def _parse_region(raw: str) -> Optional[Tuple[int, int, int, int]]:
@@ -74,6 +80,12 @@ def _parse_button_map(raw: str) -> Dict[str, str]:
 
 
 def load_cfg() -> Cfg:
+    input_enabled = _env_bool("INPUT_ENABLED", "1")
+    if _env_bool("CAPTURE_ONLY", "0"):
+        input_enabled = False
+    pause_file = _env("INPUT_PAUSE_FILE", "/tmp/sg_input_pause").strip()
+    if pause_file.lower() in ("", "0", "none", "false"):
+        pause_file = ""
     return Cfg(
         mqtt_host=_env("MQTT_HOST", "localhost"),
         mqtt_port=int(_env("MQTT_PORT", "1883")),
@@ -96,6 +108,8 @@ def load_cfg() -> Cfg:
                 "LB=key_q,RB=key_w,START=key_tab,BACK=key_esc",
             )
         ),
+        input_enabled=input_enabled,
+        input_pause_file=pause_file,
     )
 
 
@@ -156,6 +170,7 @@ def main() -> None:
 
     last_action: Dict[str, Any] = {"lx": 0, "ly": 0, "rx": 0, "ry": 0, "btn": {}}
     held_buttons: set[str] = set()
+    was_paused = False
 
     def cleanup() -> None:
         for item in list(held_buttons):
@@ -174,6 +189,13 @@ def main() -> None:
             except Exception:
                 pass
             held_buttons.discard(item)
+
+    def is_paused() -> bool:
+        if not cfg.input_enabled:
+            return True
+        if cfg.input_pause_file and os.path.exists(cfg.input_pause_file):
+            return True
+        return False
 
     def _handle_signal(_signum, _frame) -> None:
         raise SystemExit()
@@ -219,18 +241,25 @@ def main() -> None:
         }
         client.publish(cfg.topic_frame, json.dumps(frame_msg), qos=0)
 
-        lx = clamp(float(last_action.get("lx", 0.0)), -1.0, 1.0)
-        ly = clamp(float(last_action.get("ly", 0.0)), -1.0, 1.0)
-        if abs(lx) >= cfg.mouse_deadzone or abs(ly) >= cfg.mouse_deadzone:
-            dx = int(lx * cfg.mouse_range)
-            dy = int(-ly * cfg.mouse_range)
-            if dx or dy:
-                pyautogui.moveRel(dx, dy, duration=0)
+        paused_now = is_paused()
+        if paused_now:
+            if not was_paused:
+                cleanup()
+            was_paused = True
+        else:
+            was_paused = False
+            lx = clamp(float(last_action.get("lx", 0.0)), -1.0, 1.0)
+            ly = clamp(float(last_action.get("ly", 0.0)), -1.0, 1.0)
+            if abs(lx) >= cfg.mouse_deadzone or abs(ly) >= cfg.mouse_deadzone:
+                dx = int(lx * cfg.mouse_range)
+                dy = int(-ly * cfg.mouse_range)
+                if dx or dy:
+                    pyautogui.moveRel(dx, dy, duration=0)
 
-        btn = last_action.get("btn", {}) or {}
-        for name, mapped in cfg.button_map.items():
-            pressed = bool(btn.get(name, 0))
-            _apply_button(mapped, pressed, held_buttons)
+            btn = last_action.get("btn", {}) or {}
+            for name, mapped in cfg.button_map.items():
+                pressed = bool(btn.get(name, 0))
+                _apply_button(mapped, pressed, held_buttons)
 
         spent = time.time() - t0
         if spent < dt:
