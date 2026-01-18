@@ -438,6 +438,7 @@ services:
     working_dir: /app
     volumes:
     - ./agents:/app
+    - /mnt/ssd/models:/mnt/ssd/models
     env_file: *id001
     entrypoint:
     - python3
