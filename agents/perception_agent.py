@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import cv2
@@ -45,6 +46,8 @@ YOLO_FALLBACK_CPU = os.getenv("YOLO_FALLBACK_CPU", "0").lower() not in {"0", "fa
 YOLO_CLIP_CPU = os.getenv("YOLO_CLIP_CPU", "1").lower() not in {"0", "false", "no"}
 DETECTOR_BACKEND = os.getenv("DETECTOR_BACKEND", "yolo11_torch")
 YOLO_WORLD_CLASSES = [token.strip() for token in os.getenv("YOLO_WORLD_CLASSES", "enemy,boss,player,npc,loot,portal,waypoint,quest_marker,dialog_button").split(",") if token.strip()]
+YOLO_CLASS_LIST = os.getenv("YOLO_CLASS_LIST", "")
+YOLO_CLASS_PATH = os.getenv("YOLO_CLASS_PATH", "")
 OCR_BACKEND = os.getenv("OCR_BACKEND", "easyocr")
 OCR_LANGS = [token.strip() for token in os.getenv("OCR_LANGS", "en").split(",") if token.strip()]
 OCR_USE_GPU = os.getenv("OCR_USE_GPU", "1").lower() not in {"0", "false", "no"}
@@ -58,6 +61,32 @@ PLAYER_MAX_OFFSET = float(os.getenv("PLAYER_LOCATOR_MAX_OFFSET", "0.45"))
 PLAYER_MIN_AREA = float(os.getenv("PLAYER_LOCATOR_MIN_AREA", "0.01"))
 PLAYER_ROI = os.getenv("PLAYER_LOCATOR_ROI", "0.25,0.25,0.75,0.9")
 PLAYER_MIN_ROI_AREA = float(os.getenv("PLAYER_LOCATOR_MIN_ROI_AREA", "0.02"))
+
+def _load_class_names(class_list: str, class_paths: str) -> List[str]:
+    if class_list:
+        names = [token.strip() for token in class_list.split(",") if token.strip()]
+        if names:
+            logger.info("Loaded %d class names from YOLO_CLASS_LIST", len(names))
+            return names
+
+    if class_paths:
+        for raw in class_paths.split(","):
+            cleaned = raw.strip()
+            if not cleaned:
+                continue
+            path = Path(cleaned)
+            if path.exists():
+                try:
+                    with open(path, "r", encoding="utf-8") as handle:
+                        names = [line.strip() for line in handle if line.strip()]
+                    if names:
+                        logger.info("Loaded %d class names from %s", len(names), path)
+                        return names
+                except Exception as exc:
+                    logger.warning("Failed to read class names from %s: %s", path, exc)
+    return []
+
+YOLO_CLASS_NAMES = _load_class_names(YOLO_CLASS_LIST, YOLO_CLASS_PATH)
 
 def _as_int(code) -> int:
     try:
@@ -103,7 +132,7 @@ class _NullDetector:
 class PerceptionAgent:
     def __init__(self) -> None:
         logger.info(
-            "Starting perception backend=%s weights=%s device=%s conf=%.3f imgsz=%s max_size=%s classes=%s",
+            "Starting perception backend=%s weights=%s device=%s conf=%.3f imgsz=%s max_size=%s classes=%s class_names=%s",
             DETECTOR_BACKEND,
             YOLO_WEIGHTS,
             YOLO_DEVICE,
@@ -111,6 +140,7 @@ class PerceptionAgent:
             YOLO_IMGSZ,
             YOLO_MAX_SIZE,
             YOLO_WORLD_CLASSES,
+            len(YOLO_CLASS_NAMES),
         )
         self.pipeline = None
         self.pipeline_lock = threading.Lock()
@@ -134,6 +164,7 @@ class PerceptionAgent:
                 max_size=YOLO_MAX_SIZE,
                 fallback_cpu=YOLO_FALLBACK_CPU,
                 clip_cpu=YOLO_CLIP_CPU,
+                class_names=YOLO_CLASS_NAMES,
             )
         except Exception as exc:
             logger.error("Detector backend error: %s", exc)

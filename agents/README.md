@@ -54,8 +54,43 @@ If using Docker Compose, enable the optional `strategy_state` service (profile `
   - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` - sampling rate + encoding coming from `vision_agent`.
   - `OBJECT_DETECTOR_BACKEND` - `onnx`, `ultralytics` (`torch`/`trt` aliases), or `dummy` for smoke tests. `torch` expects `.pt` weights, `onnx` expects a `.onnx`, and `trt`/`tensorrt` expects a `.engine`.
   - `OBJECT_CONF_THRESHOLD`, `OBJECT_IOU_THRESHOLD`, `OBJECT_QUEUE` - runtime tuning knobs.
+  - `OBJECT_FALLBACK_*` - optional secondary detector used when the primary returns zero boxes (same keys as the primary with the `OBJECT_FALLBACK_` prefix).
+
+Example: YOLO-World TensorRT primary + ONNX fallback:
+
+```bash
+export OBJECT_DETECTOR_BACKEND=tensorrt
+export OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolov8s_worldv2_320_fp16.engine
+export OBJECT_CLASS_PATH=/mnt/ssd/models/yolo/coco.names
+export OBJECT_CONF_THRESHOLD=0.03
+export OBJECT_FALLBACK_BACKEND=onnx
+export OBJECT_FALLBACK_MODEL_PATH=/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx
+export OBJECT_FALLBACK_CLASS_PATH=/mnt/ssd/models/yolo/classes_generic.txt
+export OBJECT_FALLBACK_CONF_THRESHOLD=0.1
+```
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
+
+## Perception Agent (YOLO + OCR)
+
+`perception_agent.py` builds `vision/observation` (consumed by `scene_agent` for `scene/state`). It uses `DETECTOR_BACKEND` + the `YOLO11_*` settings, not the `OBJECT_*` settings.
+
+Relevant environment switches:
+- `DETECTOR_BACKEND` - `yolo11_torch`, `yolo11_trt`, `yolo_trt_engine`, or `yoloworld`.
+- `YOLO11_WEIGHTS` - `.pt` or `.engine` path for the selected backend.
+- `YOLO11_CONF`, `YOLO11_IMGSZ` - detection thresholds and input size.
+- `YOLO_CLASS_LIST` / `YOLO_CLASS_PATH` - class names for `yolo_trt_engine` (comma list or a newline file).
+- `YOLO_WORLD_CLASSES` - class prompts for the `yoloworld` backend.
+
+Example: YOLO-World TensorRT engine for perception:
+
+```bash
+export DETECTOR_BACKEND=yolo_trt_engine
+export YOLO11_WEIGHTS=/mnt/ssd/models/yolo/yolov8s_worldv2_320_fp16.engine
+export YOLO11_IMGSZ=320
+export YOLO11_CONF=0.03
+export YOLO_CLASS_PATH=/mnt/ssd/models/yolo/coco.names
+```
 
 ## Visual Embeddings (SigLIP2 / V-JEPA)
 
