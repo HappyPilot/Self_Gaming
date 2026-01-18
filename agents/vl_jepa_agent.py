@@ -10,6 +10,7 @@ import queue
 import signal
 import threading
 import time
+import zlib
 from typing import Optional, Sequence
 
 import numpy as np
@@ -29,6 +30,10 @@ try:
 except Exception:  # noqa: BLE001
     AutoImageProcessor = None
     AutoModel = None
+try:
+    from transformers import SiglipVisionModel
+except Exception:  # noqa: BLE001
+    SiglipVisionModel = None
 
 logging.basicConfig(level=os.getenv("VL_JEPA_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("vl_jepa_agent")
@@ -54,6 +59,8 @@ SIGLIP_POOL = os.getenv("VL_JEPA_POOL", "pooler").strip().lower()
 SIGLIP_ATTN_IMPL = os.getenv("VL_JEPA_ATTN_IMPL", "").strip().lower()
 MAX_EMBED_DIM = int(os.getenv("VL_JEPA_MAX_EMBED_DIM", "4096"))
 MAX_PAYLOAD_BYTES = int(os.getenv("VL_JEPA_MAX_PAYLOAD_BYTES", "262144"))
+EMBED_FPS = float(os.getenv("VL_JEPA_EMBED_FPS", "0") or 0)
+CACHE_HASH = os.getenv("VL_JEPA_CACHE_HASH", "1") not in {"0", "false", "False"}
 SLA_STAGE_EMBED_MS = get_sla_ms("SLA_STAGE_EMBED_MS")
 
 
@@ -199,11 +206,20 @@ class SiglipEncoder(BaseEncoder):
             kwargs["torch_dtype"] = torch.float16
         if self.attn_impl:
             kwargs["attn_implementation"] = self.attn_impl
+        if SiglipVisionModel is not None:
+            try:
+                return SiglipVisionModel.from_pretrained(self.model_id, **kwargs)
+            except TypeError:
+                kwargs.pop("attn_implementation", None)
+                return SiglipVisionModel.from_pretrained(self.model_id, **kwargs)
         try:
-            return AutoModel.from_pretrained(self.model_id, **kwargs)
+            model = AutoModel.from_pretrained(self.model_id, **kwargs)
         except TypeError:
             kwargs.pop("attn_implementation", None)
-            return AutoModel.from_pretrained(self.model_id, **kwargs)
+            model = AutoModel.from_pretrained(self.model_id, **kwargs)
+        if hasattr(model, "vision_model"):
+            return model.vision_model
+        return model
 
     def _prepare_inputs(self, image: Image.Image):
         if self.input_size:
@@ -276,6 +292,12 @@ def _extract_embedding(output) -> Optional[np.ndarray]:
     return tensor.float().cpu().numpy()
 
 
+def _frame_hash(data: bytes) -> Optional[int]:
+    if not data:
+        return None
+    return zlib.adler32(data)
+
+
 class VlJepaAgent:
     def __init__(self):
         self.client = mqtt.Client(client_id="vl_jepa_agent", protocol=mqtt.MQTTv311)
@@ -289,6 +311,10 @@ class VlJepaAgent:
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.frame_stride = max(1, FRAME_STRIDE)
         self._frame_counter = 0
+        self._last_publish_ts = 0.0
+        self._embed_min_interval_s = 1.0 / EMBED_FPS if EMBED_FPS > 0 else 0.0
+        self._last_embedding = None
+        self._last_frame_hash = None
 
     def start(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
@@ -390,6 +416,9 @@ class VlJepaAgent:
                 payload = json.loads(payload_bytes.decode("utf-8", "ignore"))
             except Exception:
                 continue
+            now = time.time()
+            if self._embed_min_interval_s and (now - self._last_publish_ts) < self._embed_min_interval_s:
+                continue
             frame_bytes = get_frame_bytes(payload)
             if not frame_bytes:
                 continue
@@ -398,20 +427,31 @@ class VlJepaAgent:
                 continue
             self._ensure_encoder()
             frame_ts = payload.get("frame_ts") or payload.get("timestamp")
-            embed_start = time.perf_counter()
-            embedding = self.encoder.encode(image) if self.encoder else None
-            embed_ms = (time.perf_counter() - embed_start) * 1000.0
-            emit_latency(
-                self.client,
-                "embed",
-                embed_ms,
-                sla_ms=SLA_STAGE_EMBED_MS,
-                tags={"frame_ts": frame_ts},
-                agent="vl_jepa_agent",
-            )
-            if embedding is None:
-                continue
-            embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
+            cached = False
+            embedding_list = None
+            frame_hash = _frame_hash(frame_bytes) if CACHE_HASH else None
+            if self._last_embedding and frame_hash is not None and frame_hash == self._last_frame_hash:
+                embedding_list = self._last_embedding["embedding"]
+                cached = True
+            else:
+                embed_start = time.perf_counter()
+                try:
+                    embedding = self.encoder.encode(image) if self.encoder else None
+                except Exception:  # noqa: BLE001
+                    logger.exception("VL-JEPA encode failed")
+                    embedding = None
+                embed_ms = (time.perf_counter() - embed_start) * 1000.0
+                emit_latency(
+                    self.client,
+                    "embed",
+                    embed_ms,
+                    sla_ms=SLA_STAGE_EMBED_MS,
+                    tags={"frame_ts": frame_ts, "cached": "0"},
+                    agent="vl_jepa_agent",
+                )
+                if embedding is None:
+                    continue
+                embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
             if MAX_EMBED_DIM and len(embedding_list) > MAX_EMBED_DIM:
                 logger.warning("Embedding dim too large (%s > %s); dropping payload.", len(embedding_list), MAX_EMBED_DIM)
                 continue
@@ -419,7 +459,7 @@ class VlJepaAgent:
                 logger.warning("Embedding dim mismatch: got=%s expected=%s", len(embedding_list), EMBED_DIM)
             out_payload = {
                 "ok": True,
-                "timestamp": time.time(),
+                "timestamp": now,
                 "frame_ts": frame_ts or time.time(),
                 "frame_id": payload.get("frame_id"),
                 "embedding": embedding_list,
@@ -428,11 +468,22 @@ class VlJepaAgent:
                 "model_path": MODEL_PATH,
                 "model_id": getattr(self.encoder, "model_id", ""),
             }
+            if cached:
+                out_payload["cached"] = True
+                if self._last_embedding and self._last_embedding.get("timestamp"):
+                    out_payload["cache_age_ms"] = round((now - self._last_embedding["timestamp"]) * 1000.0, 3)
             payload_json = json.dumps(out_payload)
             if MAX_PAYLOAD_BYTES and len(payload_json) > MAX_PAYLOAD_BYTES:
                 logger.warning("Embedding payload too large (%s bytes > %s); dropping.", len(payload_json), MAX_PAYLOAD_BYTES)
                 continue
             self.client.publish(EMBED_TOPIC, payload_json)
+            self._last_publish_ts = now
+            if not cached and embedding_list is not None:
+                self._last_embedding = {
+                    "embedding": embedding_list,
+                    "timestamp": now,
+                }
+                self._last_frame_hash = frame_hash
 
 
 def _decode_image(data: bytes) -> Optional[Image.Image]:

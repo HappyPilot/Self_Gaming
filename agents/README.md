@@ -67,8 +67,11 @@ export VL_JEPA_BACKEND=siglip2
 export VL_JEPA_MODEL_ID=google/siglip2-base-patch16-224
 export VL_JEPA_INPUT_SIZE=224
 export VL_JEPA_EMBED_DIM=768
-export VL_JEPA_FP16=1
+export VL_JEPA_DEVICE=cpu
+export VL_JEPA_FP16=0
 export VL_JEPA_ATTN_IMPL=sdpa   # optional
+export VL_JEPA_EMBED_FPS=2      # rate-limit embedding publishes
+export VL_JEPA_CACHE_HASH=1     # reuse last embedding if frame bytes repeat
 ```
 
 This keeps the control loop and MQTT contracts intact while giving your agents a strong
