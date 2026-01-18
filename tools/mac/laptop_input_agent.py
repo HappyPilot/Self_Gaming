@@ -457,7 +457,11 @@ def on_message(client, userdata, msg):
     except Exception as e:
         logger.error("error: %s", e)
 
-def on_disconnect(client, userdata, reason_code, properties=None):
+def on_disconnect(client, userdata, reason_code=None, properties=None, *args):
+    # Paho MQTT v2 passes (disconnect_flags, reason_code, properties)
+    if args:
+        reason_code = properties
+        properties = args[0]
     logger.warning("disconnected: %s", reason_code)
     delay = 1.0
     while True:
