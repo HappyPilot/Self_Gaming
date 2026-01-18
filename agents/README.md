@@ -78,10 +78,12 @@ The `scene_agent` now fuses OCR, mean luminance, and the most recent detection p
 Controls:
 - `SCENE_CLASS_PATH` (or `YOLO_CLASS_PATH`) to map `class_id` to labels.
 - `ENGINE_INPUT_SIZE` to normalize DeepStream boxes when frame dimensions are not present.
+- `OBJECT_PREFER_OBSERVATION=1` keeps DeepStream detections as the primary source; `OBJECT_FALLBACK_AFTER_SEC` controls how long to wait before accepting `vision/objects` as fallback.
 
 ## Perception Agent (YOLO + OCR)
 
 `perception_agent.py` builds `vision/observation` (consumed by `scene_agent` for `scene/state`). It uses `DETECTOR_BACKEND` + the `YOLO11_*` settings, not the `OBJECT_*` settings.
+This GPU-backed path is experimental; enable it via the `experimental` docker-compose profile if needed.
 
 Relevant environment switches:
 - `DETECTOR_BACKEND` - `yolo11_torch`, `yolo11_trt`, `yolo_trt_engine`, or `yoloworld`.
@@ -120,6 +122,14 @@ export VL_JEPA_CACHE_HASH=1     # reuse last embedding if frame bytes repeat
 This keeps the control loop and MQTT contracts intact while giving your agents a strong
 pretrained vision backbone. If you prefer existing TorchScript/TensorRT encoders,
 keep `VL_JEPA_BACKEND=torchscript` or `tensorrt` and set the corresponding paths.
+
+To feed embeddings into policy + training, enable:
+
+```bash
+export EMBED_FEATURE_ENABLED=1
+export EMBED_FEATURE_DIM=128
+export EMBED_FEATURE_SOURCE_DIM=768
+```
 
 ## Embedding Guard (In-Game Gate)
 

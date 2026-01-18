@@ -51,6 +51,14 @@ IMG_SIZE = int(os.getenv("OBJECT_IMAGE_SIZE", "640"))
 CLASS_LIST = os.getenv("OBJECT_CLASS_LIST", "")  # Optional: comma-separated names
 CLASS_PATHS = os.getenv("OBJECT_CLASS_PATH", "")  # Optional: comma-separated paths to names files
 GAME_ID = os.getenv("GAME_ID", "").strip().lower()
+FALLBACK_BACKEND = os.getenv("OBJECT_FALLBACK_BACKEND", "").strip().lower()
+FALLBACK_MODEL_PATH = os.getenv("OBJECT_FALLBACK_MODEL_PATH", "").strip()
+FALLBACK_DEVICE = os.getenv("OBJECT_FALLBACK_DEVICE", "").strip()
+FALLBACK_CONF_THRESHOLD = float(os.getenv("OBJECT_FALLBACK_CONF_THRESHOLD", str(CONF_THRESHOLD)))
+FALLBACK_IOU_THRESHOLD = float(os.getenv("OBJECT_FALLBACK_IOU_THRESHOLD", str(IOU_THRESHOLD)))
+FALLBACK_IMG_SIZE = int(os.getenv("OBJECT_FALLBACK_IMAGE_SIZE", str(IMG_SIZE)))
+FALLBACK_CLASS_LIST = os.getenv("OBJECT_FALLBACK_CLASS_LIST", "")
+FALLBACK_CLASS_PATHS = os.getenv("OBJECT_FALLBACK_CLASS_PATH", "")
 VISION_CONFIG_TOPIC = os.getenv("VISION_CONFIG_TOPIC", "vision/config")
 VISION_MODE_DEFAULT = os.getenv("VISION_MODE_DEFAULT", "medium").lower()
 SLA_STAGE_DETECT_MS = get_sla_ms("SLA_STAGE_DETECT_MS")
@@ -72,7 +80,12 @@ def _as_int(code) -> int:
         return 0
 
 
-def _load_class_names(model_path: str) -> dict[int, str]:
+def _load_class_names(
+    model_path: str,
+    class_list: str = "",
+    class_paths: str = "",
+    game_id: str = "",
+) -> dict[int, str]:
     """
     Resolve class names with precedence:
     1) OBJECT_CLASS_LIST env (comma-separated)
@@ -81,15 +94,15 @@ def _load_class_names(model_path: str) -> dict[int, str]:
     4) Default COCO-ish stub cls_{i}
     """
     # 1) Direct list from env
-    if CLASS_LIST:
-        names = [n.strip() for n in CLASS_LIST.split(",") if n.strip()]
+    if class_list:
+        names = [n.strip() for n in class_list.split(",") if n.strip()]
         if names:
             logger.info("Loaded class names from OBJECT_CLASS_LIST (%d classes)", len(names))
             return {i: name for i, name in enumerate(names)}
 
     # 2) Custom file(s) from env
-    if CLASS_PATHS:
-        for raw in CLASS_PATHS.split(","):
+    if class_paths:
+        for raw in class_paths.split(","):
             path = Path(raw.strip())
             if path.exists():
                 try:
@@ -110,12 +123,12 @@ def _load_class_names(model_path: str) -> dict[int, str]:
             root.parent / "classes.txt",
             root.parent / "names.txt",
         ]
-        if GAME_ID:
+        if game_id:
             candidates.extend([
-                root.with_name(f"{root.stem}_{GAME_ID}.names"),
-                root.with_name(f"{root.stem}_{GAME_ID}.txt"),
-                root.parent / f"classes_{GAME_ID}.txt",
-                root.parent / f"names_{GAME_ID}.txt",
+                root.with_name(f"{root.stem}_{game_id}.names"),
+                root.with_name(f"{root.stem}_{game_id}.txt"),
+                root.parent / f"classes_{game_id}.txt",
+                root.parent / f"names_{game_id}.txt",
             ])
         for path in candidates:
             if path.exists():
@@ -157,6 +170,8 @@ def decode_frame(image_payload: str | bytes) -> Optional[np.ndarray]:
 
 
 class BaseDetector:
+    backend = "base"
+
     def detect(self, frame: np.ndarray) -> Iterable[Detection]:
         raise NotImplementedError
 
@@ -165,12 +180,24 @@ class BaseDetector:
 
 
 class DummyDetector(BaseDetector):
+    backend = "dummy"
+
     def detect(self, frame: np.ndarray) -> Iterable[Detection]:
         return []
 
 
 class UltralyticsDetector(BaseDetector):
-    def __init__(self, model_path: str, device: str = "cpu", conf: float = 0.35, imgsz: int = 640):
+    backend = "ultralytics"
+
+    def __init__(
+        self,
+        model_path: str,
+        device: str = "cpu",
+        conf: float = 0.35,
+        imgsz: int = 640,
+        class_list: str = "",
+        class_paths: str = "",
+    ):
         if not model_path:
             raise ValueError("OBJECT_MODEL_PATH must be set for Ultralytics backend")
         from ultralytics import YOLO
@@ -179,7 +206,7 @@ class UltralyticsDetector(BaseDetector):
         self._conf = conf
         self._imgsz = imgsz
         # Allow overriding names if provided via env or sidecar files.
-        self._override_names = _load_class_names(model_path)
+        self._override_names = _load_class_names(model_path, class_list, class_paths, GAME_ID)
 
     def detect(self, frame: np.ndarray) -> Iterable[Detection]:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -219,7 +246,17 @@ class UltralyticsDetector(BaseDetector):
 
 
 class OnnxDetector(BaseDetector):
-    def __init__(self, model_path: str, device: str = "cuda", conf: float = 0.35, imgsz: int = 640):
+    backend = "onnx"
+
+    def __init__(
+        self,
+        model_path: str,
+        device: str = "cuda",
+        conf: float = 0.35,
+        imgsz: int = 640,
+        class_list: str = "",
+        class_paths: str = "",
+    ):
         if not model_path:
             raise ValueError("ONNX model path required")
         try:
@@ -238,7 +275,7 @@ class OnnxDetector(BaseDetector):
         self.input_name = self.session.get_inputs()[0].name
         self.output_names = [o.name for o in self.session.get_outputs()]
         # Class names (defaults to COCO-ish stub, overridden by env/sidecars)
-        self.names = _load_class_names(self.model_path)
+        self.names = _load_class_names(self.model_path, class_list, class_paths, GAME_ID)
 
     def _preprocess(self, img):
         h, w = img.shape[:2]
@@ -330,34 +367,45 @@ class OnnxDetector(BaseDetector):
         self._conf = float(config.get("conf", self._conf))
 
 
-def build_detector() -> BaseDetector:
-    if DETECTOR_BACKEND in {"ultralytics", "torch", "trt", "tensorrt"}:
+def build_detector(
+    backend: str,
+    model_path: str,
+    device: str,
+    conf: float,
+    imgsz: int,
+    class_list: str = "",
+    class_paths: str = "",
+) -> BaseDetector:
+    if backend in {"ultralytics", "torch", "trt", "tensorrt"}:
         try:
-            if DETECTOR_BACKEND in {"trt", "tensorrt"} and not MODEL_PATH.endswith(".engine"):
+            if backend in {"trt", "tensorrt"} and not model_path.endswith(".engine"):
                 logger.warning(
                     "DETECTOR_BACKEND=%s selected but OBJECT_MODEL_PATH is not a .engine (%s). "
                     "This backend is an alias routed to UltralyticsDetector; provide a TensorRT .engine for true TRT path.",
-                    DETECTOR_BACKEND,
-                    MODEL_PATH,
+                    backend,
+                    model_path,
                 )
-            detector = UltralyticsDetector(MODEL_PATH, DEVICE, CONF_THRESHOLD, IMG_SIZE)
+            detector = UltralyticsDetector(model_path, device, conf, imgsz, class_list, class_paths)
+            detector.backend = backend
             logger.info(
                 "Detector init ok: backend=%s impl=UltralyticsDetector model=%s device=%s imgsz=%s",
-                DETECTOR_BACKEND,
-                MODEL_PATH,
-                DEVICE,
-                IMG_SIZE,
+                backend,
+                model_path,
+                device,
+                imgsz,
             )
             return detector
         except Exception as exc:
             logger.error("Failed to init Ultralytics detector: %s", exc)
-    elif DETECTOR_BACKEND == "onnx":
+    elif backend == "onnx":
         try:
-            return OnnxDetector(MODEL_PATH, DEVICE, CONF_THRESHOLD, IMG_SIZE)
+            detector = OnnxDetector(model_path, device, conf, imgsz, class_list, class_paths)
+            detector.backend = backend
+            return detector
         except Exception as exc:
             logger.error("Failed to init ONNX detector: %s", exc)
     else:
-        logger.info("Object detector backend %s not recognized, using dummy", DETECTOR_BACKEND)
+        logger.info("Object detector backend %s not recognized, using dummy", backend)
     return DummyDetector()
 
 
@@ -369,6 +417,7 @@ class ObjectDetectionAgent:
         self.client.on_disconnect = self._on_disconnect
         
         self.detector = None
+        self.fallback_detector = None
         self.detector_lock = threading.Lock()
         self.vision_mode = VISION_MODE_DEFAULT if VISION_MODE_DEFAULT in MODE_SETTINGS else "medium"
         settings = MODE_SETTINGS.get(self.vision_mode, MODE_SETTINGS["medium"])
@@ -448,14 +497,29 @@ class ObjectDetectionAgent:
 
             self._ensure_detector()
             detect_start = time.perf_counter()
-            detections = self.detector.detect(frame)
+            detections = []
+            used_detector = self.detector
+            fallback_used = False
+            try:
+                detections = self.detector.detect(frame)
+            except Exception:  # noqa: BLE001
+                logger.exception("Primary detector failed")
+                detections = []
+            if not detections and self.fallback_detector is not None:
+                try:
+                    detections = self.fallback_detector.detect(frame)
+                    used_detector = self.fallback_detector
+                    fallback_used = True
+                except Exception:  # noqa: BLE001
+                    logger.exception("Fallback detector failed")
+                    detections = []
             detect_ms = (time.perf_counter() - detect_start) * 1000.0
             emit_latency(
                 self.client,
                 "detect",
                 detect_ms,
                 sla_ms=SLA_STAGE_DETECT_MS,
-                tags={"frame_ts": payload.get("timestamp")},
+                tags={"frame_ts": payload.get("timestamp"), "fallback": str(fallback_used)},
                 agent="object_detection_agent",
             )
             logger.info("Detected %d objects", len(detections))
@@ -464,6 +528,8 @@ class ObjectDetectionAgent:
                 "timestamp": time.time(),
                 "frame_ts": payload.get("timestamp", time.time()),
                 "objects": [det.as_dict() for det in detections],
+                "backend": getattr(used_detector, "backend", DETECTOR_BACKEND),
+                "fallback_used": fallback_used,
             }
             self.client.publish(OBJECT_TOPIC, json.dumps(result_payload))
 
@@ -474,7 +540,15 @@ class ObjectDetectionAgent:
             if self.detector is not None:
                 return
             try:
-                self.detector = build_detector()
+                self.detector = build_detector(
+                    DETECTOR_BACKEND,
+                    MODEL_PATH,
+                    DEVICE,
+                    CONF_THRESHOLD,
+                    IMG_SIZE,
+                    CLASS_LIST,
+                    CLASS_PATHS,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.error("Detector init failed, falling back to dummy: %s", exc)
                 self.detector = DummyDetector()
@@ -482,6 +556,26 @@ class ObjectDetectionAgent:
             if hasattr(self.detector, "update_runtime"):
                 settings = getattr(self, "_pending_settings", MODE_SETTINGS.get(self.vision_mode, MODE_SETTINGS["medium"]))
                 self.detector.update_runtime(settings)
+            if FALLBACK_BACKEND and FALLBACK_MODEL_PATH:
+                device = FALLBACK_DEVICE or DEVICE
+                try:
+                    self.fallback_detector = build_detector(
+                        FALLBACK_BACKEND,
+                        FALLBACK_MODEL_PATH,
+                        device,
+                        FALLBACK_CONF_THRESHOLD,
+                        FALLBACK_IMG_SIZE,
+                        FALLBACK_CLASS_LIST,
+                        FALLBACK_CLASS_PATHS,
+                    )
+                    logger.info(
+                        "Fallback detector initialized: backend=%s impl=%s",
+                        FALLBACK_BACKEND,
+                        type(self.fallback_detector).__name__,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Fallback detector init failed: %s", exc)
+                    self.fallback_detector = None
 
     def _apply_detector_settings(self, settings: dict):
         self._pending_settings = settings

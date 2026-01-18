@@ -33,6 +33,8 @@ EMBED_PUBLISH_INTERVAL = float(os.getenv("SCENE_EMBED_PUBLISH_INTERVAL", "1.0"))
 SCENE_CLASS_PATH = os.getenv("SCENE_CLASS_PATH", "")
 YOLO_CLASS_PATH = os.getenv("YOLO_CLASS_PATH", "")
 DEEPSTREAM_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "0"))
+OBJECT_PREFER_OBSERVATION = os.getenv("OBJECT_PREFER_OBSERVATION", "1") != "0"
+OBJECT_FALLBACK_AFTER_SEC = float(os.getenv("OBJECT_FALLBACK_AFTER_SEC", "1.0"))
 NORMALIZE_TEXT = os.getenv("SCENE_NORMALIZE_TEXT", "1") != "0"
 TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
@@ -180,7 +182,7 @@ class SceneAgent:
         self.state = {
             "mean": deque(maxlen=10), "easy_text": "", "simple_text": "", "snapshot_ts": 0.0,
             "objects": [], "objects_ts": 0.0, "text_zones": {}, "observation": {}, "observation_ts": 0.0,
-            "embeddings": [], "embeddings_ts": 0.0, "flags": {}, "flags_ts": 0.0,
+            "objects_source": "", "embeddings": [], "embeddings_ts": 0.0, "flags": {}, "flags_ts": 0.0,
         }
         self._last_embed_publish_ts = 0.0
         self._symbolic_candidate_since = 0.0
@@ -296,6 +298,7 @@ class SceneAgent:
         flags = dict(self.state.get("flags") or {})
         payload = {"ok": True, "event": "scene_update", "mean": self.state["mean"][-1], "trend": list(self.state["mean"]),
                    "text": text_payload, "objects": objects, "objects_ts": self.state.get("objects_ts", 0.0),
+                   "objects_source": self.state.get("objects_source", ""),
                    "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now,
                    "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0)}
         if flags:
@@ -345,11 +348,18 @@ class SceneAgent:
         elif msg.topic == VISION_SNAPSHOT_TOPIC: self.state["snapshot_ts"] = time.time()
         elif OBJECT_TOPIC and msg.topic == OBJECT_TOPIC:
             if isinstance(data, dict):
+                if OBJECT_PREFER_OBSERVATION and self.state.get("observation_ts"):
+                    obs_age = time.time() - self.state.get("observation_ts", 0.0)
+                    if obs_age <= OBJECT_FALLBACK_AFTER_SEC:
+                        publish_now = False
+                        return
                 converted = _convert_detections_to_objects(data)
                 if converted:
                     self.state["objects"], self.state["objects_ts"] = converted, time.time()
+                    self.state["objects_source"] = "objects_topic"
                 elif isinstance(data.get("objects"), list):
                     self.state["objects"], self.state["objects_ts"] = data["objects"], time.time()
+                    self.state["objects_source"] = "objects_topic"
         elif OBSERVATION_TOPIC and msg.topic == OBSERVATION_TOPIC:
             if isinstance(data, dict):
                 if not isinstance(data.get("yolo_objects"), list):
@@ -357,7 +367,9 @@ class SceneAgent:
                     if converted:
                         data["yolo_objects"] = converted
                 self.state["observation"], self.state["observation_ts"] = data, time.time()
-                if isinstance(data.get("yolo_objects"), list): self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], time.time()
+                if isinstance(data.get("yolo_objects"), list):
+                    self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], time.time()
+                    self.state["objects_source"] = "observation"
                 if isinstance(data.get("text_zones"), dict): self.state["text_zones"] = data["text_zones"]
                 if self.state["text_zones"]: self.state["easy_text"] = "\n".join([str(z.get("text") or "") for z in self.state["text_zones"].values() if z.get("text")])
                 if self._sanitize_player(data.get("player_candidate")): self.state["player_candidate"], self.state["player_candidate_ts"] = self._sanitize_player(data["player_candidate"]), time.time()

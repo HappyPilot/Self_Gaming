@@ -403,7 +403,7 @@ services:
     network_mode: host
     restart: unless-stopped
     profiles:
-    - heavy
+    - experimental
     working_dir: /app
     entrypoint:
     - python3
@@ -934,7 +934,7 @@ services:
     network_mode: host
     restart: unless-stopped
     profiles:
-    - heavy
+    - experimental
     working_dir: /app
     entrypoint:
     - python3
