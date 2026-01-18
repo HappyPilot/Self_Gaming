@@ -55,6 +55,7 @@ TEACHER_CONTEXT_MIN_CHARS, TEACHER_CONTEXT_TEXT_LIMIT = int(os.getenv("TEACHER_C
 TEACHER_CONTEXT_OBJECT_LIMIT = int(os.getenv("TEACHER_CONTEXT_OBJECT_LIMIT", "8"))
 TEACHER_CONTEXT_SCOPE_FALLBACK = os.getenv("TEACHER_CONTEXT_SCOPE_FALLBACK", "generic_ui")
 TEACHER_CONTEXT_DIFF_JACCARD, TEACHER_CONTEXT_DIFF_MIN_CHARS = float(os.getenv("TEACHER_CONTEXT_DIFF_JACCARD", "0.4")), int(os.getenv("TEACHER_CONTEXT_DIFF_MIN_CHARS", "48"))
+TEACHER_REQUIRE_IN_GAME = os.getenv("TEACHER_REQUIRE_IN_GAME", "0") != "0"
 TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
 TEACHER_RESPAWN_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_RESPAWN_KEYWORDS", "resurrect,resurrect at checkpoint,respawn,revive").split(",") if item.strip()}
 TEACHER_DEATH_SCOPES = {item.strip().lower() for item in os.getenv("TEACHER_DEATH_SCOPES", "death_dialog,critical_dialog:death").split(",") if item.strip()}
@@ -81,6 +82,10 @@ def _text_change_ratio(prev: str, current: str) -> float:
     union = prev_tokens | curr_tokens
     if not union: return 0.0
     return 1.0 - (len(prev_tokens & curr_tokens) / len(union))
+
+def _scene_in_game(scene: dict) -> bool:
+    flags = scene.get("flags") or {}
+    return flags.get("in_game") is not False
 
 class BaseChatClient:
     def _complete(self, messages):  # pragma: no cover - subclasses implement transport
@@ -240,6 +245,8 @@ class TeacherAgent:
             if msg.topic in {SCENE_TOPIC, SIM_TOPIC} and isinstance(data, dict) and data.get("ok"):
                 self.scene = data
                 self._handle_scene_update(data)
+                if TEACHER_REQUIRE_IN_GAME and not _scene_in_game(data):
+                    return
                 self._maybe_request_action(client)
             elif msg.topic == SNAPSHOT_TOPIC and isinstance(data, dict) and data.get("ok"): self.snapshot = data.get("image_b64")
             elif msg.topic == ACT_RESULT_TOPIC and isinstance(data, dict) and data.get("applied"): self.actions.append(str(data["applied"]))
@@ -391,6 +398,8 @@ class TeacherAgent:
             with self._lock:
                 if self.scene is None: return
                 scene, snapshot, actions = self.scene, self.snapshot, list(self.actions)
+            if TEACHER_REQUIRE_IN_GAME and not _scene_in_game(scene):
+                return
             
             llm = self._ensure_llm()
             if llm is None:

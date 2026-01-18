@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 
 from models.backbone import Backbone
+from utils.embedding_projector import EmbeddingProjector
 from utils.latency import emit_control_metric, emit_latency, get_float_env, get_sla_ms
 
 
@@ -73,10 +74,16 @@ MIN_ALPHA = float(os.getenv("TEACHER_ALPHA_MIN", "0.0"))
 MOUSE_RANGE = int(os.getenv("POLICY_MOUSE_RANGE", "60"))
 MIN_MOUSE_DELTA = int(os.getenv("POLICY_MIN_MOUSE_DELTA", "8"))
 CLICK_COOLDOWN = float(os.getenv("POLICY_CLICK_COOLDOWN", "0.75"))
-NON_VISUAL_DIM = 128
 NUMERIC_DIM = 32
 OBJECT_HIST_DIM = 32
 TEXT_EMBED_DIM = 64
+BASE_NON_VISUAL_DIM = NUMERIC_DIM + OBJECT_HIST_DIM + TEXT_EMBED_DIM
+EMBED_FEATURE_ENABLED = os.getenv("EMBED_FEATURE_ENABLED", "0") != "0"
+EMBED_FEATURE_DIM = int(os.getenv("EMBED_FEATURE_DIM", "128"))
+EMBED_FEATURE_SOURCE_DIM = int(os.getenv("EMBED_FEATURE_SOURCE_DIM", "768"))
+EMBED_FEATURE_SEED = int(os.getenv("EMBED_FEATURE_SEED", "42"))
+EMBED_FEATURE_LAYER_NORM = os.getenv("EMBED_FEATURE_LAYER_NORM", "1") != "0"
+NON_VISUAL_DIM = BASE_NON_VISUAL_DIM + (EMBED_FEATURE_DIM if EMBED_FEATURE_ENABLED else 0)
 FRAME_SHAPE = (3, int(os.getenv("POLICY_FRAME_HEIGHT", "96")), int(os.getenv("POLICY_FRAME_WIDTH", "54")))
 BACKBONE_PATH = Path(os.getenv("POLICY_BACKBONE_PATH", "/mnt/ssd/models/backbone/backbone.pt"))
 POLICY_HEAD_PATH = Path(os.getenv("POLICY_HEAD_PATH", "/mnt/ssd/models/heads/ppo/policy_head.pt"))
@@ -113,6 +120,7 @@ FEEDBACK_SETTLE_SEC = float(os.getenv("POLICY_FEEDBACK_SETTLE_SEC", "1.0"))
 POLICY_GAME_KEYWORDS = _parse_env_list(
     os.getenv("POLICY_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map")
 )
+POLICY_REQUIRE_IN_GAME = os.getenv("POLICY_REQUIRE_IN_GAME", "0") != "0"
 RESPAWN_TEXTS = _parse_env_list(
     os.getenv("RESPAWN_TRIGGER_TEXTS", "resurrect at checkpoint,resurrect in town,resurrect")
 )
@@ -137,6 +145,16 @@ TEACHER_TARGET_LABEL_RE = re.compile(r"target_hint\s*:?\s*([^|\n\r]+)", re.IGNOR
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+EMBED_PROJECTOR = (
+    EmbeddingProjector(
+        in_dim=EMBED_FEATURE_SOURCE_DIM,
+        out_dim=EMBED_FEATURE_DIM,
+        seed=EMBED_FEATURE_SEED,
+        use_layer_norm=EMBED_FEATURE_LAYER_NORM,
+    )
+    if EMBED_FEATURE_ENABLED
+    else None
+)
 
 
 def compute_cursor_motion(
@@ -209,7 +227,15 @@ def encode_non_visual(state: Dict) -> torch.Tensor:
         for token in str(entry).lower().split():
             idx = hash(token) % TEXT_EMBED_DIM
             text_bins[idx] += 1.0
-    vector[start + OBJECT_HIST_DIM :] = text_bins
+    text_offset = start + OBJECT_HIST_DIM
+    vector[text_offset : text_offset + TEXT_EMBED_DIM] = text_bins
+    if EMBED_FEATURE_ENABLED and EMBED_PROJECTOR is not None:
+        embedding = state.get("embeddings") or state.get("embedding")
+        projected = EMBED_PROJECTOR.project(embedding)
+        if projected is not None:
+            embed_tensor = torch.from_numpy(projected)
+            embed_offset = BASE_NON_VISUAL_DIM
+            vector[embed_offset : embed_offset + EMBED_FEATURE_DIM] = embed_tensor
     return vector
 
 
@@ -852,6 +878,8 @@ class PolicyAgent:
         if now < self.forbidden_until:
             return False, "forbidden_cooldown"
         flags = state.get("flags") or {}
+        if POLICY_REQUIRE_IN_GAME and flags.get("in_game") is False:
+            return False, "not_in_game"
         if flags.get("death"):
             return True, None
         texts = self._collect_scene_texts(state)

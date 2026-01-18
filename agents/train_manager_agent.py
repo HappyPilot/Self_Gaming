@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from models.backbone import Backbone
+from utils.embedding_projector import EmbeddingProjector
 
 # --- Constants ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
@@ -30,8 +31,14 @@ RECORDER_DIR = Path(os.getenv("RECORDER_DIR", "/mnt/ssd/datasets/episodes"))
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/mnt/ssd/models"))
 EPOCHS = int(os.getenv("TRAIN_EPOCHS", "3"))
 BATCH_SIZE = int(os.getenv("TRAIN_BATCH_SIZE", "64"))
-NON_VISUAL_DIM = 128
 NUMERIC_DIM, OBJECT_HIST_DIM, TEXT_EMBED_DIM = 32, 32, 64
+BASE_NON_VISUAL_DIM = NUMERIC_DIM + OBJECT_HIST_DIM + TEXT_EMBED_DIM
+EMBED_FEATURE_ENABLED = os.getenv("EMBED_FEATURE_ENABLED", "0") != "0"
+EMBED_FEATURE_DIM = int(os.getenv("EMBED_FEATURE_DIM", "128"))
+EMBED_FEATURE_SOURCE_DIM = int(os.getenv("EMBED_FEATURE_SOURCE_DIM", "768"))
+EMBED_FEATURE_SEED = int(os.getenv("EMBED_FEATURE_SEED", "42"))
+EMBED_FEATURE_LAYER_NORM = os.getenv("EMBED_FEATURE_LAYER_NORM", "1") != "0"
+NON_VISUAL_DIM = BASE_NON_VISUAL_DIM + (EMBED_FEATURE_DIM if EMBED_FEATURE_ENABLED else 0)
 FRAME_HEIGHT, FRAME_WIDTH = int(os.getenv("TRAIN_FRAME_HEIGHT", "96")), int(os.getenv("TRAIN_FRAME_WIDTH", "54"))
 FRAME_SHAPE = (3, FRAME_HEIGHT, FRAME_WIDTH)
 TEACHER_KL_WEIGHT = float(os.getenv("TEACHER_KL_WEIGHT", "1.0"))
@@ -43,6 +50,16 @@ POLICY_HEAD_PATH = Path(os.getenv("POLICY_HEAD_WEIGHTS_PATH", "/mnt/ssd/models/h
 VALUE_HEAD_PATH = Path(os.getenv("VALUE_HEAD_WEIGHTS_PATH", "/mnt/ssd/models/heads/ppo/value_head.pt"))
 LABEL_MAP_PATH = Path(os.getenv("POLICY_LABEL_MAP_PATH", "/mnt/ssd/models/heads/ppo/label_map.json"))
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+EMBED_PROJECTOR = (
+    EmbeddingProjector(
+        in_dim=EMBED_FEATURE_SOURCE_DIM,
+        out_dim=EMBED_FEATURE_DIM,
+        seed=EMBED_FEATURE_SEED,
+        use_layer_norm=EMBED_FEATURE_LAYER_NORM,
+    )
+    if EMBED_FEATURE_ENABLED
+    else None
+)
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("TRAIN_LOG_LEVEL", "INFO").upper(), format="[train_manager] %(levelname)s %(message)s")
@@ -279,7 +296,14 @@ class TrainManagerAgent:
             for token in str(entry).lower().split():
                 idx = hash(token) % TEXT_EMBED_DIM
                 text_bins[idx] += 1.0
-        vector[start + OBJECT_HIST_DIM :] = text_bins
+        text_offset = start + OBJECT_HIST_DIM
+        vector[text_offset : text_offset + TEXT_EMBED_DIM] = text_bins
+        if EMBED_FEATURE_ENABLED and EMBED_PROJECTOR is not None:
+            embedding = scene.get("embeddings") or scene.get("embedding")
+            projected = EMBED_PROJECTOR.project(embedding)
+            if projected is not None:
+                embed_offset = BASE_NON_VISUAL_DIM
+                vector[embed_offset : embed_offset + EMBED_FEATURE_DIM] = projected
         return vector
 
     def run(self):

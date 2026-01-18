@@ -7,7 +7,8 @@ import signal
 import threading
 import time
 from collections import deque
-from typing import Dict
+from pathlib import Path
+from typing import Dict, List, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -22,12 +23,16 @@ VISION_SNAPSHOT_TOPIC = os.getenv("VISION_SNAPSHOT_TOPIC", "vision/snapshot")
 VISION_EMBEDDINGS_TOPIC = os.getenv("VISION_EMBEDDINGS_TOPIC", "vision/embeddings")
 OBJECT_TOPIC = os.getenv("VISION_OBJECT_TOPIC", "vision/objects")
 OBSERVATION_TOPIC = os.getenv("VISION_OBSERVATION_TOPIC", "")
+SCENE_FLAGS_TOPIC = os.getenv("SCENE_FLAGS_TOPIC", "scene/flags")
 OCR_TEXT_TOPIC = os.getenv("OCR_TEXT_TOPIC", "ocr/text")
 OCR_EASY_TOPIC = os.getenv("OCR_EASY_TOPIC", "ocr_easy/text")
 SIMPLE_OCR_TOPIC = os.getenv("SIMPLE_OCR_TOPIC", "simple_ocr/text")
 SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 WINDOW_SEC = float(os.getenv("SCENE_WINDOW_SEC", "2.0"))
 EMBED_PUBLISH_INTERVAL = float(os.getenv("SCENE_EMBED_PUBLISH_INTERVAL", "1.0"))
+SCENE_CLASS_PATH = os.getenv("SCENE_CLASS_PATH", "")
+YOLO_CLASS_PATH = os.getenv("YOLO_CLASS_PATH", "")
+DEEPSTREAM_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "0"))
 NORMALIZE_TEXT = os.getenv("SCENE_NORMALIZE_TEXT", "1") != "0"
 TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
@@ -45,6 +50,120 @@ SLA_STAGE_FUSE_MS = get_sla_ms("SLA_STAGE_FUSE_MS")
 
 stop_event = threading.Event()
 
+def _load_class_names(paths: List[str]) -> List[str]:
+    for raw in paths:
+        cleaned = (raw or "").strip()
+        if not cleaned:
+            continue
+        for token in cleaned.split(","):
+            path = Path(token.strip())
+            if not path.exists():
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    names = [line.strip() for line in handle if line.strip()]
+                if names:
+                    logger.info("Loaded %d class names from %s", len(names), path)
+                    return names
+            except Exception as exc:
+                logger.warning("Failed to read class names from %s: %s", path, exc)
+    return []
+
+
+CLASS_NAMES = _load_class_names([SCENE_CLASS_PATH, YOLO_CLASS_PATH])
+
+
+def _normalize_xyxy(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    frame_w: Optional[float],
+    frame_h: Optional[float],
+) -> Optional[List[float]]:
+    coords = [x1, y1, x2, y2]
+    max_val, min_val = max(coords), min(coords)
+    if max_val <= 1.5 and min_val >= -0.1:
+        nx1, ny1, nx2, ny2 = coords
+    else:
+        if frame_w and frame_h:
+            nx1, ny1, nx2, ny2 = x1 / frame_w, y1 / frame_h, x2 / frame_w, y2 / frame_h
+        elif DEEPSTREAM_INPUT_SIZE > 0:
+            size = float(DEEPSTREAM_INPUT_SIZE)
+            nx1, ny1, nx2, ny2 = x1 / size, y1 / size, x2 / size, y2 / size
+        else:
+            return None
+    nx1, ny1, nx2, ny2 = [max(0.0, min(1.0, float(v))) for v in (nx1, ny1, nx2, ny2)]
+    if nx2 <= nx1 or ny2 <= ny1:
+        return None
+    return [round(nx1, 4), round(ny1, 4), round(nx2, 4), round(ny2, 4)]
+
+
+def _extract_frame_dims(payload: dict) -> tuple[Optional[float], Optional[float]]:
+    for key in ("frame_width", "image_width", "width"):
+        if key in payload:
+            try:
+                frame_w = float(payload[key])
+                break
+            except (TypeError, ValueError):
+                frame_w = None
+                break
+    else:
+        frame_w = None
+    for key in ("frame_height", "image_height", "height"):
+        if key in payload:
+            try:
+                frame_h = float(payload[key])
+                break
+            except (TypeError, ValueError):
+                frame_h = None
+                break
+    else:
+        frame_h = None
+    return frame_w, frame_h
+
+
+def _convert_detections_to_objects(payload: dict) -> List[Dict[str, object]]:
+    detections = payload.get("detections")
+    if not isinstance(detections, list):
+        return []
+    frame_w, frame_h = _extract_frame_dims(payload)
+    objects: List[Dict[str, object]] = []
+    for det in detections:
+        if not isinstance(det, dict):
+            continue
+        bbox = det.get("bbox") or det.get("box")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        try:
+            x1, y1, w, h = [float(v) for v in bbox]
+        except (TypeError, ValueError):
+            continue
+        x2, y2 = x1 + w, y1 + h
+        norm_bbox = _normalize_xyxy(x1, y1, x2, y2, frame_w, frame_h)
+        if not norm_bbox:
+            continue
+        class_id = det.get("class_id")
+        label = det.get("label")
+        if not label and class_id is not None and CLASS_NAMES:
+            try:
+                label = CLASS_NAMES[int(class_id)]
+            except Exception:
+                label = None
+        if not label and class_id is not None:
+            label = f"class_{class_id}"
+        conf = det.get("score")
+        if conf is None:
+            conf = det.get("confidence")
+        if conf is None:
+            conf = det.get("conf")
+        try:
+            conf_val = float(conf) if conf is not None else 0.0
+        except (TypeError, ValueError):
+            conf_val = 0.0
+        objects.append({"label": label or "object", "confidence": round(conf_val, 4), "bbox": norm_bbox})
+    return objects
+
 def _as_int(code) -> int:
     try:
         if hasattr(code, "value"):
@@ -61,7 +180,7 @@ class SceneAgent:
         self.state = {
             "mean": deque(maxlen=10), "easy_text": "", "simple_text": "", "snapshot_ts": 0.0,
             "objects": [], "objects_ts": 0.0, "text_zones": {}, "observation": {}, "observation_ts": 0.0,
-            "embeddings": [], "embeddings_ts": 0.0,
+            "embeddings": [], "embeddings_ts": 0.0, "flags": {}, "flags_ts": 0.0,
         }
         self._last_embed_publish_ts = 0.0
         self._symbolic_candidate_since = 0.0
@@ -152,6 +271,7 @@ class SceneAgent:
             if OBJECT_TOPIC: topics.append((OBJECT_TOPIC, 0))
             if OBSERVATION_TOPIC: topics.append((OBSERVATION_TOPIC, 0))
             if VISION_EMBEDDINGS_TOPIC: topics.append((VISION_EMBEDDINGS_TOPIC, 0))
+            if SCENE_FLAGS_TOPIC: topics.append((SCENE_FLAGS_TOPIC, 0))
             client.subscribe(topics)
             client.publish(SCENE_TOPIC, json.dumps({"ok": True, "event": "scene_agent_ready"}))
         else:
@@ -173,10 +293,13 @@ class SceneAgent:
         if not player_entry: player_entry = self.state.get("player_candidate") or {"label": "player_estimate", "confidence": 0.05, "bbox": [0.35, 0.35, 0.65, 0.85]}
         enemies = self._extract_enemies(objects)
         resources = self._extract_resources(text_zones) or self._extract_resources({"aggregate": {"text": "\n".join(text_payload)}})
+        flags = dict(self.state.get("flags") or {})
         payload = {"ok": True, "event": "scene_update", "mean": self.state["mean"][-1], "trend": list(self.state["mean"]),
                    "text": text_payload, "objects": objects, "objects_ts": self.state.get("objects_ts", 0.0),
                    "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now,
                    "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0)}
+        if flags:
+            payload["flags"] = dict(flags)
         if isinstance(player_entry, dict) and player_entry.get("bbox"):
             bbox = player_entry["bbox"]
             payload["player_center"] = [round((bbox[0] + bbox[2]) / 2.0, 4), round((bbox[1] + bbox[3]) / 2.0, 4)]
@@ -190,10 +313,13 @@ class SceneAgent:
         if targets: payload["targets"] = targets
         lower_text = " ".join(text_payload).lower()
         if (lower_text and any(kw in lower_text for kw in DEATH_KEYWORDS)) or self._object_matches(objects):
-            payload["flags"], payload["death_reason"] = {"death": True}, "text_or_object_match"
+            flags["death"] = True
+            payload["flags"], payload["death_reason"] = flags, "text_or_object_match"
         elif text_payload and self._symbolic_text_only(text_payload) and payload.get("mean") <= DEATH_SYMBOL_MEAN_THRESHOLD and len(objects) <= DEATH_OBJECT_THRESHOLD:
             if self._symbolic_candidate_since == 0.0: self._symbolic_candidate_since = now
-            if (now - self._symbolic_candidate_since) >= DEATH_SYMBOL_PERSIST: payload["flags"], payload["death_reason"] = {"death": True}, "symbolic_text"
+            if (now - self._symbolic_candidate_since) >= DEATH_SYMBOL_PERSIST:
+                flags["death"] = True
+                payload["flags"], payload["death_reason"] = flags, "symbolic_text"
         else: self._symbolic_candidate_since = 0.0
         if payload.get("flags", {}).get("death"): payload["death_text"] = text_payload
         client.publish(SCENE_TOPIC, json.dumps(payload))
@@ -218,15 +344,31 @@ class SceneAgent:
                 self.state["snapshot_ts"] = time.time()
         elif msg.topic == VISION_SNAPSHOT_TOPIC: self.state["snapshot_ts"] = time.time()
         elif OBJECT_TOPIC and msg.topic == OBJECT_TOPIC:
-            if isinstance(data, dict) and isinstance(data.get("objects"), list):
-                self.state["objects"], self.state["objects_ts"] = data["objects"], time.time()
+            if isinstance(data, dict):
+                converted = _convert_detections_to_objects(data)
+                if converted:
+                    self.state["objects"], self.state["objects_ts"] = converted, time.time()
+                elif isinstance(data.get("objects"), list):
+                    self.state["objects"], self.state["objects_ts"] = data["objects"], time.time()
         elif OBSERVATION_TOPIC and msg.topic == OBSERVATION_TOPIC:
             if isinstance(data, dict):
+                if not isinstance(data.get("yolo_objects"), list):
+                    converted = _convert_detections_to_objects(data)
+                    if converted:
+                        data["yolo_objects"] = converted
                 self.state["observation"], self.state["observation_ts"] = data, time.time()
                 if isinstance(data.get("yolo_objects"), list): self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], time.time()
                 if isinstance(data.get("text_zones"), dict): self.state["text_zones"] = data["text_zones"]
                 if self.state["text_zones"]: self.state["easy_text"] = "\n".join([str(z.get("text") or "") for z in self.state["text_zones"].values() if z.get("text")])
                 if self._sanitize_player(data.get("player_candidate")): self.state["player_candidate"], self.state["player_candidate_ts"] = self._sanitize_player(data["player_candidate"]), time.time()
+        elif SCENE_FLAGS_TOPIC and msg.topic == SCENE_FLAGS_TOPIC:
+            if isinstance(data, dict):
+                flags = data.get("flags") if isinstance(data.get("flags"), dict) else data
+                if isinstance(flags, dict):
+                    merged = dict(self.state.get("flags") or {})
+                    merged.update(flags)
+                    self.state["flags"] = merged
+                    self.state["flags_ts"] = time.time()
         elif msg.topic in (OCR_TEXT_TOPIC, OCR_EASY_TOPIC):
             if isinstance(data, dict):
                 self.state["easy_text"] = (str(data.get("text") or "")).strip()

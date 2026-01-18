@@ -458,6 +458,28 @@ services:
     - ocr
     - ocr_easy
     - simple_ocr
+  embedding_guard:
+    container_name: embedding_guard
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/embedding_guard_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_EMBEDDINGS_TOPIC=vision/embeddings
+    - SCENE_FLAGS_TOPIC=scene/flags
+    depends_on:
+    - mq
+    - vl_jepa
+    - scene
   teach:
     container_name: teach_agent
     image: local/policy-agent:latest

@@ -71,6 +71,14 @@ export OBJECT_FALLBACK_CONF_THRESHOLD=0.1
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
 
+## DeepStream Perception Bridge
+
+`perception_ds` publishes `vision/observation` with `detections` (xywh boxes + `class_id`). The `scene_agent` now converts those into `yolo_objects` so `scene/state` receives usable objects even when the Python perception agent is down.
+
+Controls:
+- `SCENE_CLASS_PATH` (or `YOLO_CLASS_PATH`) to map `class_id` to labels.
+- `ENGINE_INPUT_SIZE` to normalize DeepStream boxes when frame dimensions are not present.
+
 ## Perception Agent (YOLO + OCR)
 
 `perception_agent.py` builds `vision/observation` (consumed by `scene_agent` for `scene/state`). It uses `DETECTOR_BACKEND` + the `YOLO11_*` settings, not the `OBJECT_*` settings.
@@ -112,6 +120,15 @@ export VL_JEPA_CACHE_HASH=1     # reuse last embedding if frame bytes repeat
 This keeps the control loop and MQTT contracts intact while giving your agents a strong
 pretrained vision backbone. If you prefer existing TorchScript/TensorRT encoders,
 keep `VL_JEPA_BACKEND=torchscript` or `tensorrt` and set the corresponding paths.
+
+## Embedding Guard (In-Game Gate)
+
+`embedding_guard_agent.py` listens to `vision/embeddings`, compares them to stored centroids, and publishes `scene/flags` with `in_game=true/false`. This gates actions and teacher updates when the screen is not in-game.
+
+Quick setup:
+- Collect samples by running with `EMBEDDING_GUARD_MODE=collect_game` and `collect_non`.
+- Store centroids under `/mnt/ssd/models/embedding_guard`.
+- Enable gating with `POLICY_REQUIRE_IN_GAME=1` and `TEACHER_REQUIRE_IN_GAME=1`.
 
 ## Reward Manager
 
