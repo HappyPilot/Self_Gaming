@@ -19,6 +19,14 @@ Run these commands from `tools/nitrogen`:
    On Jetson 8GB, keep `NITROGEN_DTYPE=fp16` to reduce memory.
 4) `docker compose -f docker-compose.nitrogen.yml up --build`
 
+You can automate steps 1-2 with the fetch script:
+
+```bash
+./scripts/fetch_assets.sh
+# Optional integrity checks:
+#   NITROGEN_NG_PT_SIZE=<bytes> NITROGEN_NG_PT_SHA256=<hex> ./scripts/fetch_assets.sh
+```
+
 ## Recommended deployment (Jetson GPU + Mac capture)
 Run NitroGen server + proxy on the Jetson (GPU) and only capture/input on the Mac.
 
