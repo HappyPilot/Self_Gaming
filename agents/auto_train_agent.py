@@ -52,6 +52,8 @@ class AutoTrainer:
 
         self.sample_count = 0
         self.last_seen_count = 0
+        self.latest_mtime = 0.0
+        self.last_seen_mtime = 0.0
         self.last_trigger_time = 0.0
         self.active_job_id: Optional[str] = None
         self.last_scene_ts = 0.0
@@ -91,6 +93,7 @@ class AutoTrainer:
         elif event in {"job_finished", "job_failed"}:
             self.active_job_id = None
             self.last_seen_count = self.sample_count
+            self.last_seen_mtime = self.latest_mtime
             self.last_trigger_time = time.time()
             self._publish_status({"ok": True, "event": event, "job_id": job_id})
 
@@ -102,6 +105,7 @@ class AutoTrainer:
             while not stop_event.is_set():
                 with self.state_lock:
                     self.sample_count = self._count_samples()
+                    self.latest_mtime = self._latest_mtime()
                     if self._should_trigger():
                         self._request_training()
                 time.sleep(CHECK_INTERVAL)
@@ -114,12 +118,27 @@ class AutoTrainer:
             return 0
         return sum(1 for _ in RECORDER_DIR.glob("*.json"))
 
+    def _latest_mtime(self) -> float:
+        if not RECORDER_DIR.exists():
+            return 0.0
+        latest = 0.0
+        for path in RECORDER_DIR.glob("*.json"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > latest:
+                latest = mtime
+        return latest
+
     def _should_trigger(self) -> bool:
         if self.sample_count < MIN_SAMPLES:
             return False
         if self.active_job_id is not None:
             return False
-        if self.sample_count - self.last_seen_count < MIN_INCREMENT:
+        has_new_count = (self.sample_count - self.last_seen_count) >= MIN_INCREMENT
+        has_new_mtime = self.latest_mtime > self.last_seen_mtime
+        if not (has_new_count or has_new_mtime):
             return False
         now = time.time()
         if now - self.last_trigger_time < COOLDOWN_SEC:

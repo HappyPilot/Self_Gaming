@@ -28,6 +28,7 @@ TRAIN_JOB_TOPIC = os.getenv("TRAIN_JOB_TOPIC", "train/jobs")
 TRAIN_STATUS_TOPIC = os.getenv("TRAIN_STATUS_TOPIC", "train/status")
 CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
 RECORDER_DIR = Path(os.getenv("RECORDER_DIR", "/mnt/ssd/datasets/episodes"))
+MAX_SAMPLES = int(os.getenv("TRAIN_MAX_SAMPLES", "2000"))
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/mnt/ssd/models"))
 EPOCHS = int(os.getenv("TRAIN_EPOCHS", "3"))
 BATCH_SIZE = int(os.getenv("TRAIN_BATCH_SIZE", "64"))
@@ -214,7 +215,7 @@ class TrainManagerAgent:
             logger.warning("Backbone does not support use_rnn; ignoring.")
         return Backbone(frame_shape=FRAME_SHAPE, non_visual_dim=NON_VISUAL_DIM)
 
-    def _load_samples(self, dataset_id=None, max_samples=2000):
+    def _load_samples(self, dataset_id=None, max_samples=MAX_SAMPLES):
         path_glob = (RECORDER_DIR / dataset_id).glob("*.json") if dataset_id and (RECORDER_DIR / dataset_id).is_dir() else RECORDER_DIR.glob("*.json")
         files = sorted(path_glob)
         if not files: logger.warning("No samples found in %s", dataset_id or RECORDER_DIR)
