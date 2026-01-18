@@ -69,6 +69,16 @@ export OBJECT_FALLBACK_CLASS_PATH=/mnt/ssd/models/yolo/classes_generic.txt
 export OBJECT_FALLBACK_CONF_THRESHOLD=0.1
 ```
 
+Stable baseline (Jetson): ONNX on CPU with preview frames:
+
+```bash
+export VISION_FRAME_TOPIC=vision/frame/preview
+export OBJECT_DETECTOR_BACKEND=onnx
+export OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx
+export OBJECT_CLASS_PATH=/mnt/ssd/models/yolo/classes_generic.txt
+export OBJECT_DEVICE=cpu
+```
+
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
 
 ## DeepStream Perception Bridge
