@@ -621,7 +621,6 @@ services:
     - TEACHER_ACTION_TOPIC=teacher/action
     - REWARD_TOPIC=train/reward
     - RECORDER_DIR=/mnt/ssd/datasets/episodes
-    - RECORDER_MAX=2000
     depends_on:
     - mq
     - scene
