@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import signal
 import threading
 import time
@@ -36,6 +37,11 @@ DEEPSTREAM_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "0"))
 OBJECT_PREFER_OBSERVATION = os.getenv("OBJECT_PREFER_OBSERVATION", "1") != "0"
 OBJECT_FALLBACK_AFTER_SEC = float(os.getenv("OBJECT_FALLBACK_AFTER_SEC", "1.0"))
 NORMALIZE_TEXT = os.getenv("SCENE_NORMALIZE_TEXT", "1") != "0"
+OCR_TARGET_MIN_LEN = int(os.getenv("OCR_TARGET_MIN_LEN", "2"))
+OCR_TARGET_MIN_CONF = float(os.getenv("OCR_TARGET_MIN_CONF", "0.55"))
+OCR_TARGET_MIN_ALPHA_RATIO = float(os.getenv("OCR_TARGET_MIN_ALPHA_RATIO", "0.3"))
+OCR_TARGET_EXCLUDE_REGEX = os.getenv("OCR_TARGET_EXCLUDE_REGEX", "").strip()
+OCR_TARGET_EXCLUDE = re.compile(OCR_TARGET_EXCLUDE_REGEX) if OCR_TARGET_EXCLUDE_REGEX else None
 TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
 DEATH_SYMBOLS = [sym.strip() for sym in os.getenv("SCENE_DEATH_SYMBOLS", "*,†,+,☠").split(",") if sym.strip()]
@@ -73,6 +79,25 @@ def _load_class_names(paths: List[str]) -> List[str]:
 
 
 CLASS_NAMES = _load_class_names([SCENE_CLASS_PATH, YOLO_CLASS_PATH])
+
+
+def _target_text_valid(text: str, zone: dict) -> bool:
+    trimmed = "".join(ch for ch in text if not ch.isspace())
+    if not trimmed or len(trimmed) < OCR_TARGET_MIN_LEN:
+        return False
+    conf = zone.get("confidence")
+    if conf is not None:
+        try:
+            if float(conf) < OCR_TARGET_MIN_CONF:
+                return False
+        except (TypeError, ValueError):
+            pass
+    if OCR_TARGET_EXCLUDE and OCR_TARGET_EXCLUDE.search(trimmed):
+        return False
+    alpha = sum(1 for ch in trimmed if ch.isalpha())
+    if (alpha / max(1, len(trimmed))) < OCR_TARGET_MIN_ALPHA_RATIO:
+        return False
+    return True
 
 
 def _normalize_xyxy(
@@ -310,6 +335,8 @@ class SceneAgent:
         for name, zone in (text_zones or {}).items():
             text, bbox = str(zone.get("text") or "").strip(), zone.get("bbox") or zone.get("box")
             if not text or not bbox: continue
+            if not _target_text_valid(text, zone):
+                continue
             norm_bbox = self._normalize_bbox(bbox)
             if not norm_bbox: continue
             targets.append({"label": text, "zone": name, "bbox": norm_bbox, "center": [round((norm_bbox[0] + norm_bbox[2]) / 2.0, 4), round((norm_bbox[1] + norm_bbox[3]) / 2.0, 4)]})

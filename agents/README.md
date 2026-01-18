@@ -80,6 +80,7 @@ export OBJECT_DEVICE=cpu
 ```
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
+OCR-derived `targets` can be filtered with `OCR_TARGET_MIN_CONF`, `OCR_TARGET_MIN_LEN`, `OCR_TARGET_MIN_ALPHA_RATIO`, and `OCR_TARGET_EXCLUDE_REGEX` to reduce noisy UI hints.
 
 ## DeepStream Perception Bridge
 
