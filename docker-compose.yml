@@ -252,7 +252,7 @@ services:
     depends_on:
     - mq
     - vision
-    - perception
+    - scene
     - ocr_easy
   ocr:
     container_name: ocr_agent
