@@ -3,7 +3,7 @@
 policy_brain: shadow-mode brain
 - Subscribes to scene/state
 - Vectorizes state deterministically to fixed size
-- Runs dummy model (noop)
+- Runs a lightweight heuristic model
 - Publishes to policy_brain/cmd
 - Compares with act/cmd and logs metrics to policy_brain/metrics
 """
@@ -38,18 +38,100 @@ SCHEMA_VERSION = int(os.getenv("POLICY_BRAIN_SCHEMA_VERSION", "1"))
 DEVICE = os.getenv("POLICY_BRAIN_DEVICE", "cpu")
 CMD_WINDOW_SEC = float(os.getenv("POLICY_BRAIN_CMD_WINDOW_SEC", "1.0"))
 
+MIN_OBJECT_CONF = float(os.getenv("POLICY_BRAIN_MIN_OBJECT_CONF", "0.2"))
+IDLE_ACTION = os.getenv("POLICY_BRAIN_IDLE_ACTION", "wait")
+ENEMY_LABELS = {
+    item.strip().lower()
+    for item in os.getenv("POLICY_BRAIN_ENEMY_LABELS", "enemy,boss,monster,bandit").split(",")
+    if item.strip()
+}
+INTERACT_LABELS = {
+    item.strip().lower()
+    for item in os.getenv("POLICY_BRAIN_INTERACT_LABELS", "portal,waypoint,loot,npc,dialog_button").split(",")
+    if item.strip()
+}
+
 stop_event = False
 
 
-class DummyPolicyModel:
-    """Placeholder model: always emits noop."""
+class HeuristicPolicyModel:
+    """Rule-based policy brain to avoid noop-only outputs."""
 
-    def __call__(self, vec: np.ndarray) -> Dict:
-        return {
-            "action_type": "noop",
-            "confidence": 0.0,
-            "reason": "dummy_model",
-        }
+    def __call__(self, scene: Dict, vec: Optional[np.ndarray] = None) -> Dict:
+        del vec  # Reserved for future learned models.
+        flags = scene.get("flags") or {}
+        if flags.get("in_game") is False:
+            return _action("wait", 0.1, "not_in_game")
+        if flags.get("death"):
+            return _action("click_primary", 0.7, "death_flag")
+
+        enemies = _filter_objects(scene.get("enemies") or [], ENEMY_LABELS)
+        if enemies:
+            target = _target_from_entry(enemies[0])
+            return _action("click_primary", 0.7, "enemy_present", target)
+
+        targets = scene.get("targets") or []
+        target = _select_target(targets)
+        if target:
+            return _action("mouse_move", 0.5, "text_target", target)
+
+        objects = _filter_objects(scene.get("objects") or [], INTERACT_LABELS)
+        if objects:
+            target = _target_from_entry(objects[0])
+            return _action("mouse_move", 0.35, "object_present", target)
+
+        return _action(IDLE_ACTION, 0.1, "idle")
+
+
+def _action(action_type: str, confidence: float, reason: str, target: Optional[Dict] = None) -> Dict:
+    payload = {"action_type": action_type, "confidence": round(confidence, 3), "reason": reason}
+    if target:
+        payload["target"] = target
+    return payload
+
+
+def _filter_objects(entries, labels):
+    filtered = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        conf = entry.get("confidence")
+        try:
+            conf_val = float(conf) if conf is not None else 0.0
+        except (TypeError, ValueError):
+            conf_val = 0.0
+        if conf_val < MIN_OBJECT_CONF:
+            continue
+        label = str(entry.get("label") or entry.get("class") or "").lower()
+        if labels and label not in labels:
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def _select_target(targets):
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        center = target.get("center")
+        if isinstance(center, (list, tuple)) and len(center) == 2:
+            return {
+                "label": target.get("label"),
+                "x": float(center[0]),
+                "y": float(center[1]),
+            }
+    return None
+
+
+def _target_from_entry(entry):
+    bbox = entry.get("bbox") or entry.get("box")
+    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        try:
+            x1, y1, x2, y2 = [float(v) for v in bbox]
+            return {"label": entry.get("label"), "x": round((x1 + x2) / 2.0, 4), "y": round((y1 + y2) / 2.0, 4)}
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 class PolicyBrainAgent:
@@ -59,7 +141,7 @@ class PolicyBrainAgent:
         self.client.on_message = self._on_message
 
         self.vectorizer = StateVectorizer(size=VECTOR_SIZE, schema_version=SCHEMA_VERSION)
-        self.model = DummyPolicyModel()
+        self.model = HeuristicPolicyModel()
 
         self.scene_buffer: Deque[Dict] = deque(maxlen=4)
         self.last_cmd: Optional[Dict] = None
@@ -89,7 +171,7 @@ class PolicyBrainAgent:
     # Core logic --------------------------------------------------------
     def _handle_scene(self, scene: Dict):
         vec = self.vectorizer.vectorize(scene)
-        cmd = self.model(vec)
+        cmd = self.model(scene, vec)
         now = time.time()
         payload = {
             "ts": now,
