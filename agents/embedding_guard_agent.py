@@ -116,8 +116,12 @@ class EmbeddingGuardAgent:
 
         self.game_samples = _load_samples(GAME_SAMPLES_PATH)
         self.non_samples = _load_samples(NON_SAMPLES_PATH)
-        self.mu_game = _load_centroid(MU_GAME_PATH) or _compute_centroid(self.game_samples)
-        self.mu_non = _load_centroid(MU_NON_PATH) or _compute_centroid(self.non_samples)
+        self.mu_game = _load_centroid(MU_GAME_PATH)
+        if self.mu_game is None:
+            self.mu_game = _compute_centroid(self.game_samples)
+        self.mu_non = _load_centroid(MU_NON_PATH)
+        if self.mu_non is None:
+            self.mu_non = _compute_centroid(self.non_samples)
         if self.mu_game is not None and not MU_GAME_PATH.exists():
             _save_centroid(MU_GAME_PATH, self.mu_game)
         if self.mu_non is not None and not MU_NON_PATH.exists():
