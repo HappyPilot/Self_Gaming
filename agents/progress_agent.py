@@ -6,7 +6,9 @@ Exposes a Web Dashboard on port 8000.
 """
 import json
 import logging
+import math
 import os
+import re
 import threading
 import time
 import requests
@@ -23,11 +25,24 @@ OBJECT_TOPIC = os.getenv("OBJECT_TOPIC", "vision/objects")
 OCR_TOPIC = os.getenv("OCR_TOPIC", "ocr_easy/text")
 SIMPLE_OCR_TOPIC = os.getenv("SIMPLE_OCR_TOPIC", "simple_ocr/text")
 ACT_CMD_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
+CURSOR_TOPIC = os.getenv("CURSOR_TOPIC", "cursor/state")
 LLM_ENDPOINT = os.getenv("TEACHER_LOCAL_ENDPOINT", "http://10.0.0.230:11434/v1/chat/completions")
 LLM_MODEL = os.getenv("TEACHER_OPENAI_MODEL", "gpt-4o-mini")
 
 STUCK_THRESHOLD_SEC = 300  # 5 minutes without significant reward
 MIN_REWARD_THRESHOLD = 0.05 # What counts as "good" reward
+PROGRESS_TOPIC = os.getenv("PROGRESS_TOPIC", "progress/status")
+UNDERSTANDING_TOPIC = os.getenv("UNDERSTANDING_TOPIC", "progress/understanding")
+UNDERSTANDING_PUBLISH_SEC = float(os.getenv("UNDERSTANDING_PUBLISH_SEC", "10"))
+UNDERSTANDING_EMBED_SAMPLE_SEC = float(os.getenv("UNDERSTANDING_EMBED_SAMPLE_SEC", "1.0"))
+LOCATION_SIM_THRESHOLD = float(os.getenv("UNDERSTANDING_LOCATION_SIM", "0.86"))
+LOCATION_EMA_ALPHA = float(os.getenv("UNDERSTANDING_LOCATION_EMA", "0.1"))
+LOCATION_MAX = int(os.getenv("UNDERSTANDING_LOCATION_MAX", "200"))
+LOCATION_WINDOW = int(os.getenv("UNDERSTANDING_LOCATION_WINDOW", "120"))
+LOCATION_VOCAB_MAX = int(os.getenv("UNDERSTANDING_LOCATION_VOCAB_MAX", "500"))
+MIN_EMBED_DIM = int(os.getenv("UNDERSTANDING_MIN_EMBED_DIM", "64"))
+GROUNDING_RADIUS = float(os.getenv("UNDERSTANDING_GROUNDING_RADIUS", "0.08"))
+CURSOR_STALE_SEC = float(os.getenv("UNDERSTANDING_CURSOR_STALE_SEC", "1.0"))
 HTTP_PORT = 8000
 
 logging.basicConfig(level=logging.INFO, format="[progress] %(message)s")
@@ -45,8 +60,74 @@ state = {
     "objects": {"count": 0, "labels": [], "ts": 0.0},
     "ocr": {"text": "", "ts": 0.0},
     "simple_ocr": {"text": "", "ts": 0.0},
+    "cursor": {"ok": False, "x_norm": None, "y_norm": None, "ts": 0.0},
+    "understanding": {
+        "locations": {
+            "count": 0,
+            "unique": 0,
+            "assignments": 0,
+            "new_rate": 0.0,
+            "revisit_rate": 0.0,
+            "current_id": None,
+            "current_similarity": 0.0,
+            "current_age_sec": -1,
+            "transitions": 0,
+            "top": [],
+        },
+        "objects": {
+            "vocab_size": 0,
+            "new_rate": 0.0,
+            "last_new": [],
+            "last_count": 0,
+        },
+        "ocr": {
+            "vocab_size": 0,
+            "new_rate": 0.0,
+            "last_new": [],
+            "last_count": 0,
+        },
+        "grounding": {
+            "clicks": 0,
+            "hits": 0,
+            "hit_rate": 0.0,
+            "targeted_clicks": 0,
+            "cursor_clicks": 0,
+            "last_hit": None,
+            "last_reason": "",
+        },
+    },
 }
 lock = threading.Lock()
+
+TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+
+locations = []
+location_id_counter = 0
+location_window = deque(maxlen=LOCATION_WINDOW)
+transition_counts = {}
+last_location_id = None
+last_location_started = 0.0
+last_location_similarity = 0.0
+last_embed_processed = 0.0
+object_vocab_global = set()
+ocr_vocab_global = set()
+object_new_rate_avg = None
+ocr_new_rate_avg = None
+last_new_objects = []
+last_new_tokens = []
+last_scene_objects = []
+last_scene_targets = []
+last_scene_ts = 0.0
+last_scene_emb_ts = 0.0
+last_cursor = {"ok": False, "x_norm": None, "y_norm": None, "ts": 0.0}
+grounding_stats = {
+    "clicks": 0,
+    "hits": 0,
+    "last_hit": None,
+    "last_reason": "",
+    "targeted_clicks": 0,
+    "cursor_clicks": 0,
+}
 
 def _now() -> float:
     return time.time()
@@ -56,9 +137,234 @@ def _age(ts: float) -> int:
         return -1
     return int(max(0, _now() - ts))
 
+def _ema(prev: float | None, value: float, alpha: float) -> float:
+    if prev is None:
+        return value
+    return prev * (1.0 - alpha) + value * alpha
+
+def _normalize_embedding(vec: list) -> list | None:
+    if not isinstance(vec, list) or len(vec) < MIN_EMBED_DIM:
+        return None
+    total = 0.0
+    out = []
+    for val in vec:
+        try:
+            fval = float(val)
+        except (TypeError, ValueError):
+            return None
+        out.append(fval)
+        total += fval * fval
+    if total <= 0.0:
+        return None
+    inv = 1.0 / math.sqrt(total)
+    return [val * inv for val in out]
+
+def _dot(a: list, b: list) -> float:
+    total = 0.0
+    for av, bv in zip(a, b):
+        total += av * bv
+    return total
+
+def _extract_tokens(texts: list[str]) -> list[str]:
+    tokens = []
+    for entry in texts:
+        if not entry:
+            continue
+        tokens.extend(TOKEN_RE.findall(entry.lower()))
+    return tokens
+
+def _extract_labels(objects: list[dict]) -> list[str]:
+    labels = []
+    for obj in objects or []:
+        label = obj.get("label") or obj.get("class") or obj.get("name")
+        if label:
+            labels.append(str(label).lower())
+    return labels
+
+def _extract_bbox(entry: dict) -> list[float] | None:
+    bbox = entry.get("bbox") or entry.get("box")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+    try:
+        x1, y1, x2, y2 = (float(v) for v in bbox)
+    except (TypeError, ValueError):
+        return None
+    if max(x1, y1, x2, y2) > 1.5:
+        return None
+    return [x1, y1, x2, y2]
+
+def _center_from_bbox(bbox: list[float] | None) -> tuple[float, float] | None:
+    if not bbox or len(bbox) != 4:
+        return None
+    x1, y1, x2, y2 = bbox
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+def _point_in_bbox(x: float, y: float, bbox: list[float] | None) -> bool:
+    if not bbox or len(bbox) != 4:
+        return False
+    x1, y1, x2, y2 = bbox
+    return x1 <= x <= x2 and y1 <= y <= y2
+
+def _location_summary(now: float) -> dict:
+    top = sorted(locations, key=lambda entry: entry["count"], reverse=True)[:5]
+    top_summary = []
+    for loc in top:
+        top_summary.append({
+            "id": loc["id"],
+            "visits": loc["count"],
+            "last_seen_sec": int(max(0.0, now - loc["last_ts"])),
+        })
+    window_total = len(location_window)
+    new_rate = sum(1 for val in location_window if val) / window_total if window_total else 0.0
+    current_age = -1
+    if last_location_started:
+        current_age = int(max(0.0, now - last_location_started))
+    return {
+        "count": len(locations),
+        "unique": len(locations),
+        "assignments": sum(loc["count"] for loc in locations),
+        "new_rate": round(new_rate, 3),
+        "revisit_rate": round(1.0 - new_rate, 3) if window_total else 0.0,
+        "current_id": last_location_id,
+        "current_similarity": round(last_location_similarity, 3),
+        "current_age_sec": current_age,
+        "transitions": sum(transition_counts.values()),
+        "top": top_summary,
+    }
+
+def _assign_location(vec: list, now: float) -> tuple[dict, bool, float]:
+    global location_id_counter, last_location_id, last_location_started, last_location_similarity
+    best_loc = None
+    best_sim = -1.0
+    for loc in locations:
+        sim = _dot(loc["vec"], vec)
+        if sim > best_sim:
+            best_sim = sim
+            best_loc = loc
+    is_new = False
+    prev_location = last_location_id
+    if best_loc and best_sim >= LOCATION_SIM_THRESHOLD:
+        best_loc["vec"] = _normalize_embedding([
+            (1.0 - LOCATION_EMA_ALPHA) * a + LOCATION_EMA_ALPHA * b
+            for a, b in zip(best_loc["vec"], vec)
+        ]) or best_loc["vec"]
+    else:
+        location_id_counter += 1
+        best_loc = {
+            "id": location_id_counter,
+            "vec": vec,
+            "count": 0,
+            "first_ts": now,
+            "last_ts": now,
+            "object_vocab": set(),
+            "ocr_vocab": set(),
+            "object_known_avg": None,
+            "ocr_known_avg": None,
+            "novel_objects": 0,
+            "novel_ocr": 0,
+        }
+        locations.append(best_loc)
+        is_new = True
+        if len(locations) > LOCATION_MAX:
+            oldest = min(locations, key=lambda entry: entry["last_ts"])
+            if oldest in locations:
+                locations.remove(oldest)
+        best_sim = 1.0
+    best_loc["count"] += 1
+    best_loc["last_ts"] = now
+    last_location_similarity = best_sim
+    if prev_location is None or best_loc["id"] != prev_location:
+        if prev_location is not None:
+            key = f"{prev_location}->{best_loc['id']}"
+            transition_counts[key] = transition_counts.get(key, 0) + 1
+        last_location_id = best_loc["id"]
+        last_location_started = now
+    location_window.append(is_new)
+    return best_loc, is_new, best_sim
+
+def _update_location_vocab(location: dict, labels: list[str], tokens: list[str]) -> None:
+    global object_new_rate_avg, ocr_new_rate_avg, last_new_objects, last_new_tokens
+    new_objects = []
+    if labels:
+        known = 0
+        for label in labels:
+            if label in location["object_vocab"]:
+                known += 1
+            elif len(location["object_vocab"]) < LOCATION_VOCAB_MAX:
+                location["object_vocab"].add(label)
+                new_objects.append(label)
+        known_ratio = known / max(1, len(labels))
+        location["object_known_avg"] = _ema(location["object_known_avg"], known_ratio, 0.2)
+        location["novel_objects"] += len(new_objects)
+    new_tokens = []
+    if tokens:
+        known = 0
+        for token in tokens:
+            if token in location["ocr_vocab"]:
+                known += 1
+            elif len(location["ocr_vocab"]) < LOCATION_VOCAB_MAX:
+                location["ocr_vocab"].add(token)
+                new_tokens.append(token)
+        known_ratio = known / max(1, len(tokens))
+        location["ocr_known_avg"] = _ema(location["ocr_known_avg"], known_ratio, 0.2)
+        location["novel_ocr"] += len(new_tokens)
+    if labels:
+        new_global = []
+        for label in labels:
+            if label not in object_vocab_global:
+                object_vocab_global.add(label)
+                new_global.append(label)
+        object_new_rate_avg = _ema(object_new_rate_avg, len(new_global) / max(1, len(labels)), 0.2)
+        last_new_objects = new_global[:8]
+    if tokens:
+        new_global = []
+        for token in tokens:
+            if token not in ocr_vocab_global:
+                ocr_vocab_global.add(token)
+                new_global.append(token)
+        ocr_new_rate_avg = _ema(ocr_new_rate_avg, len(new_global) / max(1, len(tokens)), 0.2)
+        last_new_tokens = new_global[:8]
+
+def _update_understanding_state(now: float) -> None:
+    summary = _location_summary(now)
+    with lock:
+        state["understanding"]["locations"] = summary
+        state["understanding"]["objects"] = {
+            "vocab_size": len(object_vocab_global),
+            "new_rate": round(object_new_rate_avg or 0.0, 3),
+            "last_new": last_new_objects,
+            "last_count": len(_extract_labels(last_scene_objects)),
+        }
+        state["understanding"]["ocr"] = {
+            "vocab_size": len(ocr_vocab_global),
+            "new_rate": round(ocr_new_rate_avg or 0.0, 3),
+            "last_new": last_new_tokens,
+            "last_count": len(_extract_tokens([state.get("scene_desc", "")])),
+        }
+        hit_rate = (grounding_stats["hits"] / grounding_stats["clicks"]) if grounding_stats["clicks"] else 0.0
+        state["understanding"]["grounding"] = {
+            "clicks": grounding_stats["clicks"],
+            "hits": grounding_stats["hits"],
+            "hit_rate": round(hit_rate, 3),
+            "targeted_clicks": grounding_stats["targeted_clicks"],
+            "cursor_clicks": grounding_stats["cursor_clicks"],
+            "last_hit": grounding_stats["last_hit"],
+            "last_reason": grounding_stats["last_reason"],
+        }
+
 # --- MQTT ---
 def on_connect(client, userdata, flags, rc):
-    topics = [(REWARD_TOPIC, 0), (SCENE_TOPIC, 0), (OBJECT_TOPIC, 0), (OCR_TOPIC, 0), (SIMPLE_OCR_TOPIC, 0)]
+    topics = [
+        (REWARD_TOPIC, 0),
+        (SCENE_TOPIC, 0),
+        (OBJECT_TOPIC, 0),
+        (OCR_TOPIC, 0),
+        (SIMPLE_OCR_TOPIC, 0),
+        (ACT_CMD_TOPIC, 0),
+        (CURSOR_TOPIC, 0),
+    ]
     client.subscribe(topics)
     logger.info("Connected to MQTT")
 
@@ -77,9 +383,37 @@ def on_message(client, userdata, msg):
                 
         elif msg.topic == SCENE_TOPIC:
             txt = payload.get("text", [])
+            objects = payload.get("objects") or []
+            targets = payload.get("targets") or []
+            embedding = payload.get("embeddings") or payload.get("embedding")
+            now = _now()
             with lock:
                 state["scene_desc"] = " ".join(txt)[:200]
-                state["scene_ts"] = payload.get("timestamp", _now())
+                state["scene_ts"] = payload.get("timestamp", now)
+            if isinstance(objects, list):
+                global last_scene_objects, last_scene_targets, last_scene_ts, last_scene_emb_ts
+                last_scene_objects = objects
+                last_scene_targets = targets if isinstance(targets, list) else []
+                last_scene_ts = now
+                last_scene_emb_ts = payload.get("embeddings_ts", 0.0) or payload.get("embedding_ts", 0.0) or 0.0
+            if isinstance(embedding, list):
+                global last_embed_processed
+                if (now - last_embed_processed) >= UNDERSTANDING_EMBED_SAMPLE_SEC:
+                    last_embed_processed = now
+                    vec = _normalize_embedding(embedding)
+                    if vec is not None:
+                        labels = _extract_labels(objects)
+                        ocr_texts = []
+                        with lock:
+                            ocr_texts.append(state.get("scene_desc", ""))
+                            if state.get("ocr", {}).get("text"):
+                                ocr_texts.append(state["ocr"]["text"])
+                            if state.get("simple_ocr", {}).get("text"):
+                                ocr_texts.append(state["simple_ocr"]["text"])
+                        tokens = _extract_tokens(ocr_texts)
+                        loc, is_new, sim = _assign_location(vec, now)
+                        _update_location_vocab(loc, labels, tokens)
+                        _update_understanding_state(now)
         elif msg.topic == OBJECT_TOPIC:
             objects = payload.get("objects") or []
             labels = []
@@ -101,6 +435,73 @@ def on_message(client, userdata, msg):
             txt = payload.get("text") if isinstance(payload, dict) else payload
             with lock:
                 state["simple_ocr"] = {"text": str(txt)[:200], "ts": _now()}
+        elif msg.topic == CURSOR_TOPIC:
+            ok = bool(payload.get("ok")) if isinstance(payload, dict) else False
+            x_norm = payload.get("x_norm") if isinstance(payload, dict) else None
+            y_norm = payload.get("y_norm") if isinstance(payload, dict) else None
+            if ok and x_norm is not None and y_norm is not None:
+                try:
+                    last_cursor["ok"] = True
+                    last_cursor["x_norm"] = float(x_norm)
+                    last_cursor["y_norm"] = float(y_norm)
+                    last_cursor["ts"] = _now()
+                except (TypeError, ValueError):
+                    pass
+            with lock:
+                state["cursor"] = dict(last_cursor)
+        elif msg.topic == ACT_CMD_TOPIC:
+            action = payload.get("action") or payload.get("label") or payload.get("act")
+            action = str(action).strip().lower()
+            if action in ("click_primary", "click_secondary", "click_middle", "mouse_click"):
+                click_pos = None
+                if isinstance(payload.get("target_norm"), (list, tuple)) and len(payload["target_norm"]) == 2:
+                    try:
+                        click_pos = (float(payload["target_norm"][0]), float(payload["target_norm"][1]))
+                    except (TypeError, ValueError):
+                        click_pos = None
+                    grounding_stats["targeted_clicks"] += 1
+                elif payload.get("x_norm") is not None and payload.get("y_norm") is not None:
+                    try:
+                        click_pos = (float(payload["x_norm"]), float(payload["y_norm"]))
+                    except (TypeError, ValueError):
+                        click_pos = None
+                elif last_cursor.get("ok") and (_now() - last_cursor.get("ts", 0.0)) <= CURSOR_STALE_SEC:
+                    click_pos = (last_cursor.get("x_norm"), last_cursor.get("y_norm"))
+                    grounding_stats["cursor_clicks"] += 1
+                hit = None
+                reason = "no_targets"
+                if click_pos and (last_scene_targets or last_scene_objects):
+                    x, y = click_pos
+                    hit = False
+                    for entry in (last_scene_targets or []) + (last_scene_objects or []):
+                        bbox = _extract_bbox(entry)
+                        if bbox and _point_in_bbox(x, y, bbox):
+                            hit = True
+                            reason = "bbox"
+                            break
+                    if hit is False:
+                        best_dist = None
+                        for entry in (last_scene_targets or []) + (last_scene_objects or []):
+                            bbox = _extract_bbox(entry)
+                            center = entry.get("center") or _center_from_bbox(bbox)
+                            if not center:
+                                continue
+                            dx = x - center[0]
+                            dy = y - center[1]
+                            dist = math.sqrt(dx * dx + dy * dy)
+                            if best_dist is None or dist < best_dist:
+                                best_dist = dist
+                        if best_dist is not None and best_dist <= GROUNDING_RADIUS:
+                            hit = True
+                            reason = "center"
+                        else:
+                            reason = "miss"
+                grounding_stats["clicks"] += 1
+                if hit:
+                    grounding_stats["hits"] += 1
+                grounding_stats["last_hit"] = hit
+                grounding_stats["last_reason"] = reason
+                _update_understanding_state(_now())
                 
     except Exception as e:
         pass
@@ -178,6 +579,31 @@ def monitor_loop():
         else:
             with lock: state["status"] = "OK"
 
+def publish_loop():
+    while True:
+        time.sleep(max(1.0, UNDERSTANDING_PUBLISH_SEC))
+        payload = {}
+        with lock:
+            payload = {
+                "ok": True,
+                "event": "progress_status",
+                "timestamp": _now(),
+                "status": state.get("status"),
+                "total_reward": round(state.get("total_reward", 0.0), 4),
+                "last_reward_age": _age(state.get("last_reward_time", 0.0)),
+                "scene_age": _age(state.get("scene_ts", 0.0)),
+                "understanding": state.get("understanding", {}),
+            }
+        if PROGRESS_TOPIC:
+            mqtt_client.publish(PROGRESS_TOPIC, json.dumps(payload))
+        if UNDERSTANDING_TOPIC:
+            mqtt_client.publish(UNDERSTANDING_TOPIC, json.dumps({
+                "ok": True,
+                "event": "understanding_update",
+                "timestamp": _now(),
+                "understanding": payload.get("understanding", {}),
+            }))
+
 # --- LOG READER ---
 def read_thought_log(n=5):
     log_path = "/app/logs/thought_process.log"
@@ -206,6 +632,7 @@ def dashboard():
         obj_age = _age(obj_state.get("ts", 0))
         ocr_age = _age(s.get("ocr", {}).get("ts", 0))
         simple_age = _age(s.get("simple_ocr", {}).get("ts", 0))
+        understanding = s.get("understanding", {})
     
     thoughts = read_thought_log()
     color = "green" if s["status"] == "OK" else "red"
@@ -251,6 +678,24 @@ def dashboard():
                 <div class="label">Simple OCR (age {{ simple_age }}s)</div>
                 <div>{{ s.simple_ocr.text if s.simple_ocr else "" }}</div>
             </div>
+            <div class="box">
+                <div class="label">Locations</div>
+                <div>Current: {{ understanding.locations.current_id }} (sim {{ understanding.locations.current_similarity }})</div>
+                <div>Unique: {{ understanding.locations.unique }}</div>
+                <div>New rate: {{ understanding.locations.new_rate }}</div>
+                <div>Revisit rate: {{ understanding.locations.revisit_rate }}</div>
+            </div>
+            <div class="box">
+                <div class="label">Object / OCR novelty</div>
+                <div>Objects vocab: {{ understanding.objects.vocab_size }} | new rate {{ understanding.objects.new_rate }}</div>
+                <div>OCR vocab: {{ understanding.ocr.vocab_size }} | new rate {{ understanding.ocr.new_rate }}</div>
+            </div>
+            <div class="box">
+                <div class="label">Grounding</div>
+                <div>Hit rate: {{ understanding.grounding.hit_rate }}</div>
+                <div>Clicks: {{ understanding.grounding.clicks }} | Hits: {{ understanding.grounding.hits }}</div>
+                <div>Last: {{ understanding.grounding.last_reason }}</div>
+            </div>
         </div>
         
         <div class="box">
@@ -288,6 +733,8 @@ def main():
     
     t = threading.Thread(target=monitor_loop, daemon=True)
     t.start()
+    p = threading.Thread(target=publish_loop, daemon=True)
+    p.start()
     
     app.run(host='0.0.0.0', port=HTTP_PORT)
 
