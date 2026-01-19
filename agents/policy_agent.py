@@ -121,6 +121,11 @@ POLICY_GAME_KEYWORDS = _parse_env_list(
     os.getenv("POLICY_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map")
 )
 POLICY_REQUIRE_IN_GAME = os.getenv("POLICY_REQUIRE_IN_GAME", "0") != "0"
+POLICY_REQUIRE_EMBEDDINGS = os.getenv("POLICY_REQUIRE_EMBEDDINGS", "0") != "0"
+POLICY_EMBED_MAX_AGE_SEC = float(os.getenv("POLICY_EMBED_MAX_AGE_SEC", "5.0"))
+POLICY_MEANINGFUL_FALLBACK = os.getenv("POLICY_MEANINGFUL_FALLBACK", "0") != "0"
+POLICY_RANDOM_FALLBACK = os.getenv("POLICY_RANDOM_FALLBACK", "1") != "0"
+POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
 RESPAWN_TEXTS = _parse_env_list(
     os.getenv("RESPAWN_TRIGGER_TEXTS", "resurrect at checkpoint,resurrect in town,resurrect")
 )
@@ -838,26 +843,32 @@ class PolicyAgent:
             if action is None:
                 if self.stage0_enabled:
                     return None
-                if self.last_label == "mouse_move":
-                    # Random exploration: sometimes click, sometimes hold to run
-                    if self.rng.random() < 0.3:
-                        # Run!
-                        dx = self._random_delta()
-                        dy = self._random_delta()
-                        action = {"label": "mouse_hold", "button": "left", "dx": dx, "dy": dy, "confidence": 1.0}
-                        # We need to release later, but for now let's just hold. 
-                        # The next action will likely be a move or click which overrides hold state logic in host_master 
-                        # (or we should send release). For simple exploration, hold+move is good.
+                meaningful = self._meaningful_fallback_action(state)
+                if meaningful:
+                    action = meaningful
+                elif POLICY_RANDOM_FALLBACK:
+                    if self.last_label == "mouse_move":
+                        # Random exploration: sometimes click, sometimes hold to run
+                        if self.rng.random() < 0.3:
+                            # Run!
+                            dx = self._random_delta()
+                            dy = self._random_delta()
+                            action = {"label": "mouse_hold", "button": "left", "dx": dx, "dy": dy, "confidence": 1.0}
+                            # We need to release later, but for now let's just hold.
+                            # The next action will likely be a move or click which overrides hold state logic in host_master
+                            # (or we should send release). For simple exploration, hold+move is good.
+                        else:
+                            action = {"label": "click_primary", "confidence": min(1.0, mean_val / THRESH)}
                     else:
-                        action = {"label": "click_primary", "confidence": min(1.0, mean_val / THRESH)}
+                        # If we just clicked or held, move or release
+                        if self.last_label == "mouse_hold":
+                            action = {"label": "mouse_release", "button": "left", "confidence": 1.0}
+                        else:
+                            dx = self._random_delta()
+                            dy = self._random_delta()
+                            action = {"label": "mouse_move", "dx": dx, "dy": dy, "confidence": min(1.0, mean_val / THRESH)}
                 else:
-                    # If we just clicked or held, move or release
-                    if self.last_label == "mouse_hold":
-                         action = {"label": "mouse_release", "button": "left", "confidence": 1.0}
-                    else:
-                        dx = self._random_delta()
-                        dy = self._random_delta()
-                        action = {"label": "mouse_move", "dx": dx, "dy": dy, "confidence": min(1.0, mean_val / THRESH)}
+                    action = {"label": "wait"}
         self.last_action_ts = now
         return action
 
@@ -880,6 +891,8 @@ class PolicyAgent:
         flags = state.get("flags") or {}
         if POLICY_REQUIRE_IN_GAME and flags.get("in_game") is False:
             return False, "not_in_game"
+        if POLICY_REQUIRE_EMBEDDINGS and not self._embeddings_fresh(state):
+            return False, "no_embeddings"
         if flags.get("death"):
             return True, None
         texts = self._collect_scene_texts(state)
@@ -1041,6 +1054,124 @@ class PolicyAgent:
             abs(self.cursor_x_norm - x_norm) <= CURSOR_TOLERANCE
             and abs(self.cursor_y_norm - y_norm) <= CURSOR_TOLERANCE
         )
+
+    def _embeddings_fresh(self, state: dict) -> bool:
+        if not EMBED_FEATURE_ENABLED:
+            return False
+        embedding = state.get("embeddings") or state.get("embedding")
+        if not isinstance(embedding, (list, tuple)) or not embedding:
+            return False
+        if EMBED_FEATURE_SOURCE_DIM and len(embedding) < EMBED_FEATURE_SOURCE_DIM:
+            return False
+        ts = state.get("embeddings_ts") or state.get("embedding_ts")
+        if ts is None or POLICY_EMBED_MAX_AGE_SEC <= 0:
+            return True
+        try:
+            return (time.time() - float(ts)) <= POLICY_EMBED_MAX_AGE_SEC
+        except (TypeError, ValueError):
+            return True
+
+    @staticmethod
+    def _center_from_bbox(bbox: Optional[List[float]]) -> Optional[List[float]]:
+        if not bbox or len(bbox) != 4:
+            return None
+        try:
+            x1, y1, x2, y2 = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            return None
+        if max(x1, y1, x2, y2) > 1.5:
+            return None
+        cx = max(0.0, min(1.0, (x1 + x2) / 2.0))
+        cy = max(0.0, min(1.0, (y1 + y2) / 2.0))
+        return [cx, cy]
+
+    def _pick_object_target(self, objects: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
+        best_center = None
+        best_label = None
+        best_score = -1.0
+        for obj in objects:
+            center = obj.get("center") or self._center_from_bbox(obj.get("bbox") or obj.get("box"))
+            if not center:
+                continue
+            try:
+                score = float(obj.get("confidence") or obj.get("score") or 0.0)
+            except (TypeError, ValueError):
+                score = 0.0
+            if score > best_score:
+                best_score = score
+                best_center = center
+                best_label = str(obj.get("label") or obj.get("class") or "")
+        if not best_center:
+            return None
+        return best_center, best_label
+
+    def _pick_text_target(self, targets: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
+        best_center = None
+        best_label = None
+        best_len = 0
+        for target in targets:
+            label = str(target.get("label") or "").strip()
+            center = target.get("center") or self._center_from_bbox(target.get("bbox"))
+            if not label or not center:
+                continue
+            if len(label) > best_len:
+                best_len = len(label)
+                best_center = center
+                best_label = label
+        if not best_center:
+            return None
+        return best_center, best_label
+
+    def _move_or_click_target(self, center: List[float], label: Optional[str]) -> Dict[str, object]:
+        try:
+            x_norm = float(center[0])
+            y_norm = float(center[1])
+        except (TypeError, ValueError, IndexError):
+            return {"label": "wait"}
+        x_norm = max(0.0, min(1.0, x_norm))
+        y_norm = max(0.0, min(1.0, y_norm))
+        if self._cursor_near_target(x_norm, y_norm):
+            if self._click_ready():
+                payload = {"label": "click_primary", "target_norm": [x_norm, y_norm]}
+                if label:
+                    payload["target_label"] = label
+                return payload
+            return {"label": "wait"}
+        move = self._teacher_target_move([x_norm, y_norm])
+        if move:
+            return move
+        return {"label": "wait"}
+
+    def _meaningful_fallback_action(self, state: dict) -> Optional[Dict[str, object]]:
+        if not POLICY_MEANINGFUL_FALLBACK:
+            return None
+        if POLICY_REQUIRE_EMBEDDINGS and not self._embeddings_fresh(state):
+            return None
+
+        if self.active_target and time.time() <= self.active_target_expires:
+            center = self.active_target.get("center") or self.active_target.get("target_norm")
+            if center:
+                return self._move_or_click_target(center, self.active_target.get("label"))
+
+        enemies = state.get("enemies") or []
+        target = self._pick_object_target(enemies)
+        if target:
+            center, label = target
+            return self._move_or_click_target(center, label)
+
+        if POLICY_USE_OCR_TARGETS:
+            targets = state.get("targets") or []
+            target = self._pick_text_target(targets)
+            if target:
+                center, label = target
+                return self._move_or_click_target(center, label)
+
+        objects = state.get("objects") or []
+        target = self._pick_object_target(objects)
+        if target:
+            center, label = target
+            return self._move_or_click_target(center, label)
+        return None
 
     def _hover_confirms_target(self, task: Dict[str, object], target: Dict[str, object]) -> bool:
         if not HOVER_VERIFY_ENABLED:

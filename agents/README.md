@@ -27,6 +27,7 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 
 `policy_agent.py` now blends its heuristic actions with the teacher's recommendations. A linear annealing coefficient `teacher_alpha` (configurable via `TEACHER_ALPHA_START` and `TEACHER_ALPHA_DECAY_STEPS`) starts at 1.0, prioritising teacher advice, then decays to rely on the learned policy. The final action is emitted on both `control/keys` and `act/cmd`, preserving the previous behaviour.
 Set `POLICY_LAZY_LOAD=1` (default) to load policy weights on first observation instead of at startup (use `0` to preload). Use `POLICY_LAZY_RETRY_SEC` to retry lazy-load after a failure (default 120s).
+To make VL-JEPA embeddings the primary gate, set `POLICY_REQUIRE_EMBEDDINGS=1` and tune `POLICY_EMBED_MAX_AGE_SEC`. To reduce random exploration, set `POLICY_MEANINGFUL_FALLBACK=1` and `POLICY_RANDOM_FALLBACK=0` (optional: `POLICY_USE_OCR_TARGETS=0` to ignore OCR targets).
 
 ## Shared Strategy State (Optional)
 
