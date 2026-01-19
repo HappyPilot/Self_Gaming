@@ -86,12 +86,22 @@ state = {
             "last_new": [],
             "last_count": 0,
         },
+        "embeddings": {
+            "delta_last": None,
+            "delta_avg": None,
+        },
         "grounding": {
             "clicks": 0,
             "hits": 0,
             "hit_rate": 0.0,
             "targeted_clicks": 0,
             "cursor_clicks": 0,
+            "clicks_with_targets": 0,
+            "clicks_with_objects": 0,
+            "hits_on_targets": 0,
+            "hits_on_objects": 0,
+            "target_hit_rate": 0.0,
+            "object_hit_rate": 0.0,
             "last_hit": None,
             "last_reason": "",
         },
@@ -109,6 +119,9 @@ last_location_id = None
 last_location_started = 0.0
 last_location_similarity = 0.0
 last_embed_processed = 0.0
+last_embedding_vec = None
+embedding_delta_avg = None
+embedding_delta_last = None
 object_vocab_global = set()
 ocr_vocab_global = set()
 object_new_rate_avg = None
@@ -127,6 +140,10 @@ grounding_stats = {
     "last_reason": "",
     "targeted_clicks": 0,
     "cursor_clicks": 0,
+    "clicks_with_targets": 0,
+    "clicks_with_objects": 0,
+    "hits_on_targets": 0,
+    "hits_on_objects": 0,
 }
 
 def _now() -> float:
@@ -343,13 +360,25 @@ def _update_understanding_state(now: float) -> None:
             "last_new": last_new_tokens,
             "last_count": len(_extract_tokens([state.get("scene_desc", "")])),
         }
+        state["understanding"]["embeddings"] = {
+            "delta_last": round(embedding_delta_last, 4) if embedding_delta_last is not None else None,
+            "delta_avg": round(embedding_delta_avg, 4) if embedding_delta_avg is not None else None,
+        }
         hit_rate = (grounding_stats["hits"] / grounding_stats["clicks"]) if grounding_stats["clicks"] else 0.0
+        target_hit_rate = (grounding_stats["hits_on_targets"] / grounding_stats["clicks_with_targets"]) if grounding_stats["clicks_with_targets"] else 0.0
+        object_hit_rate = (grounding_stats["hits_on_objects"] / grounding_stats["clicks_with_objects"]) if grounding_stats["clicks_with_objects"] else 0.0
         state["understanding"]["grounding"] = {
             "clicks": grounding_stats["clicks"],
             "hits": grounding_stats["hits"],
             "hit_rate": round(hit_rate, 3),
             "targeted_clicks": grounding_stats["targeted_clicks"],
             "cursor_clicks": grounding_stats["cursor_clicks"],
+            "clicks_with_targets": grounding_stats["clicks_with_targets"],
+            "clicks_with_objects": grounding_stats["clicks_with_objects"],
+            "hits_on_targets": grounding_stats["hits_on_targets"],
+            "hits_on_objects": grounding_stats["hits_on_objects"],
+            "target_hit_rate": round(target_hit_rate, 3),
+            "object_hit_rate": round(object_hit_rate, 3),
             "last_hit": grounding_stats["last_hit"],
             "last_reason": grounding_stats["last_reason"],
         }
@@ -402,6 +431,12 @@ def on_message(client, userdata, msg):
                     last_embed_processed = now
                     vec = _normalize_embedding(embedding)
                     if vec is not None:
+                        global last_embedding_vec, embedding_delta_avg, embedding_delta_last
+                        if last_embedding_vec is not None:
+                            delta = 1.0 - _dot(vec, last_embedding_vec)
+                            embedding_delta_last = delta
+                            embedding_delta_avg = _ema(embedding_delta_avg, delta, 0.2)
+                        last_embedding_vec = vec
                         labels = _extract_labels(objects)
                         ocr_texts = []
                         with lock:
@@ -470,18 +505,35 @@ def on_message(client, userdata, msg):
                     grounding_stats["cursor_clicks"] += 1
                 hit = None
                 reason = "no_targets"
+                has_targets = bool(last_scene_targets)
+                has_objects = bool(last_scene_objects)
+                if has_targets:
+                    grounding_stats["clicks_with_targets"] += 1
+                if has_objects:
+                    grounding_stats["clicks_with_objects"] += 1
                 if click_pos and (last_scene_targets or last_scene_objects):
                     x, y = click_pos
                     hit = False
-                    for entry in (last_scene_targets or []) + (last_scene_objects or []):
+                    for entry in (last_scene_targets or []):
                         bbox = _extract_bbox(entry)
                         if bbox and _point_in_bbox(x, y, bbox):
                             hit = True
-                            reason = "bbox"
+                            reason = "target_bbox"
+                            grounding_stats["hits_on_targets"] += 1
                             break
-                    if hit is False:
+                    if not hit:
+                        for entry in (last_scene_objects or []):
+                            bbox = _extract_bbox(entry)
+                            if bbox and _point_in_bbox(x, y, bbox):
+                                hit = True
+                                reason = "object_bbox"
+                                grounding_stats["hits_on_objects"] += 1
+                                break
+                    if not hit:
+                        combined = (last_scene_targets or []) + (last_scene_objects or [])
                         best_dist = None
-                        for entry in (last_scene_targets or []) + (last_scene_objects or []):
+                        best_entry = None
+                        for entry in combined:
                             bbox = _extract_bbox(entry)
                             center = entry.get("center") or _center_from_bbox(bbox)
                             if not center:
@@ -491,9 +543,15 @@ def on_message(client, userdata, msg):
                             dist = math.sqrt(dx * dx + dy * dy)
                             if best_dist is None or dist < best_dist:
                                 best_dist = dist
+                                best_entry = entry
                         if best_dist is not None and best_dist <= GROUNDING_RADIUS:
                             hit = True
-                            reason = "center"
+                            if best_entry in (last_scene_targets or []):
+                                grounding_stats["hits_on_targets"] += 1
+                                reason = "target_center"
+                            else:
+                                grounding_stats["hits_on_objects"] += 1
+                                reason = "object_center"
                         else:
                             reason = "miss"
                 grounding_stats["clicks"] += 1

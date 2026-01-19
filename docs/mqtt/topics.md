@@ -255,6 +255,10 @@ Location memory + grounding metrics (game-agnostic).
       "transitions": 36,
       "top": [{"id": 3, "visits": 120, "last_seen_sec": 4}]
     },
+    "embeddings": {
+      "delta_last": 0.0123,
+      "delta_avg": 0.0345
+    },
     "objects": {
       "vocab_size": 58,
       "new_rate": 0.07,
@@ -273,6 +277,12 @@ Location memory + grounding metrics (game-agnostic).
       "hit_rate": 0.325,
       "targeted_clicks": 210,
       "cursor_clicks": 45,
+      "clicks_with_targets": 180,
+      "clicks_with_objects": 260,
+      "hits_on_targets": 90,
+      "hits_on_objects": 50,
+      "target_hit_rate": 0.5,
+      "object_hit_rate": 0.192,
       "last_hit": true,
       "last_reason": "bbox"
     }
