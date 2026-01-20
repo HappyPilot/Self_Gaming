@@ -66,6 +66,7 @@ REQUEST_LLM_GAME_ID = os.getenv("ONBOARD_REQUEST_LLM_GAME_ID", "1") != "0"
 LLM_CONF_MIN_KEYS = int(os.getenv("LLM_CONF_MIN_KEYS", "1"))
 DISABLE_PROBES = os.getenv("ONBOARD_DISABLE_PROBES", "1") == "1"
 SAFE_KEY_BLACKLIST = {k.strip().lower() for k in os.getenv("ONBOARD_SAFE_KEY_BLACKLIST", "m,tab,i,esc").split(",") if k.strip()}
+FORCE_MOUSE_MOVE = os.getenv("ONBOARD_FORCE_MOUSE_MOVE", "1") != "0"
 
 def _as_int(code) -> int:
     try:
@@ -388,6 +389,9 @@ class GameOnboardingAgent:
                 if llm_profile:
                     llm_profile.setdefault("game_id", self.game_id)
                     llm_profile.setdefault("profile_version", 1)
+                    if FORCE_MOUSE_MOVE and not llm_profile.get("allow_mouse_move", True):
+                        llm_profile["allow_mouse_move"] = True
+                        llm_profile.setdefault("notes", []).append("allow_mouse_move forced")
                     self.profile = llm_profile
                     self.profile_status = "llm_generated"
                     upsert_profile(llm_profile)
