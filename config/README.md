@@ -48,6 +48,15 @@ touch /mnt/ssd/logs/llm_pause
 rm /mnt/ssd/logs/llm_pause
 ```
 
+## LLM queue service (serialized requests)
+Run the local queue and point agents at it:
+```bash
+LLM_ENDPOINT=http://127.0.0.1:9010/v1/chat/completions
+TEACHER_LOCAL_ENDPOINT=http://127.0.0.1:9010/v1/chat/completions
+LLM_QUEUE_UPSTREAM=http://10.0.0.230:11434/v1/chat/completions
+```
+Start the queue service with Docker Compose (`llm_queue`).
+
 ## OCR language defaults
 `OCR_LANGS` defaults to `en` to reduce OCR latency and false positives.
 Enable more languages by overriding `OCR_LANGS` in your local env file.
