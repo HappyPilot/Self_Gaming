@@ -11,7 +11,7 @@ import random
 import re
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Set, Tuple
 
@@ -52,6 +52,10 @@ def _parse_env_list(value: str) -> Set[str]:
     return {item.strip().lower() for item in value.split(",") if item.strip()}
 
 
+def _parse_action_list(value: str) -> List[str]:
+    return [item.strip().lower() for item in value.split(",") if item.strip()]
+
+
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 OBS_TOPIC = os.getenv("OBS_TOPIC", "vision/obs")
@@ -61,6 +65,8 @@ CONTROL_TOPIC = os.getenv("ACT_TOPIC", "control/keys")
 ACT_CMD_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
 TEACHER_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action")
 CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
+PROGRESS_TOPIC = os.getenv("PROGRESS_TOPIC", "progress/status")
+REWARD_TOPIC = os.getenv("REWARD_TOPIC", "train/reward")
 THRESH = float(os.getenv("THRESH", "120.0"))
 DEBOUNCE = float(os.getenv("DEBOUNCE", "0.25"))
 SLA_STAGE_POLICY_MS = get_sla_ms("SLA_STAGE_POLICY_MS")
@@ -89,6 +95,9 @@ BACKBONE_PATH = Path(os.getenv("POLICY_BACKBONE_PATH", "/mnt/ssd/models/backbone
 POLICY_HEAD_PATH = Path(os.getenv("POLICY_HEAD_PATH", "/mnt/ssd/models/heads/ppo/policy_head.pt"))
 VALUE_HEAD_PATH = Path(os.getenv("POLICY_VALUE_HEAD_PATH", "/mnt/ssd/models/heads/ppo/value_head.pt"))
 LABEL_MAP_PATH = Path(os.getenv("POLICY_LABEL_MAP_PATH", "/mnt/ssd/models/heads/ppo/label_map.json"))
+POLICY_LABEL_MAP_OPTIONAL = os.getenv("POLICY_LABEL_MAP_OPTIONAL", "1") != "0"
+POLICY_LABEL_MAP_FALLBACK_PATH = Path(os.getenv("POLICY_LABEL_MAP_FALLBACK_PATH", "config/label_map.default.json"))
+POLICY_DEFAULT_ACTIONS = _parse_action_list(os.getenv("POLICY_DEFAULT_ACTIONS", ""))
 HOT_RELOAD_ENABLED = os.getenv("POLICY_HOT_RELOAD", "1") != "0"
 POLICY_LAZY_LOAD = os.getenv("POLICY_LAZY_LOAD", "1") != "0"
 POLICY_LAZY_RETRY_SEC = float(os.getenv("POLICY_LAZY_RETRY_SEC", "120"))
@@ -148,6 +157,41 @@ HOVER_DEBUG = os.getenv("POLICY_HOVER_DEBUG", "0") != "0"
 TEACHER_TARGET_COORD_RE = re.compile(r"target\s*=\s*\(\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)", re.IGNORECASE)
 TEACHER_TARGET_LABEL_RE = re.compile(r"target_hint\s*:?\s*([^|\n\r]+)", re.IGNORECASE)
 
+POLICY_EXPLORATION_ENABLED = os.getenv("POLICY_EXPLORATION_ENABLED", "1") != "0"
+POLICY_EXPLORATION_REWARD_TIMEOUT_SEC = float(os.getenv("POLICY_EXPLORATION_REWARD_TIMEOUT_SEC", "180"))
+POLICY_EXPLORATION_MIN_REWARD = float(os.getenv("POLICY_EXPLORATION_MIN_REWARD", "0.05"))
+POLICY_EXPLORATION_LOCATION_AGE_SEC = float(os.getenv("POLICY_EXPLORATION_LOCATION_AGE_SEC", "90"))
+POLICY_EXPLORATION_OBJECT_NEW_RATE_MAX = float(os.getenv("POLICY_EXPLORATION_OBJECT_NEW_RATE_MAX", "0.02"))
+POLICY_EXPLORATION_REPEAT_WINDOW = max(1, int(os.getenv("POLICY_EXPLORATION_REPEAT_WINDOW", "8")))
+POLICY_EXPLORATION_REPEAT_MIN = max(1, int(os.getenv("POLICY_EXPLORATION_REPEAT_MIN", "6")))
+POLICY_EXPLORATION_COOLDOWN_SEC = float(os.getenv("POLICY_EXPLORATION_COOLDOWN_SEC", "120"))
+POLICY_EXPLORATION_BURST_ACTIONS = int(os.getenv("POLICY_EXPLORATION_BURST_ACTIONS", "6"))
+POLICY_EXPLORATION_ALLOW_CLICK = os.getenv("POLICY_EXPLORATION_ALLOW_CLICK", "0") != "0"
+POLICY_EXPLORATION_KEYS = _parse_env_list(os.getenv("POLICY_EXPLORATION_KEYS", ""))
+POLICY_EXPLORATION_MARGIN = float(os.getenv("POLICY_EXPLORATION_MARGIN", "0.08"))
+POLICY_EXPLORATION_MOUSE_RANGE = int(os.getenv("POLICY_EXPLORATION_MOUSE_RANGE", str(MOUSE_RANGE * 2)))
+
+DEFAULT_ACTIONS = [
+    "wait",
+    "mouse_move",
+    "click_primary",
+    "click_secondary",
+    "mouse_hold",
+    "mouse_release",
+    "key_w",
+    "key_a",
+    "key_s",
+    "key_d",
+    "key_q",
+    "key_e",
+    "key_r",
+    "key_f",
+    "key_space",
+    "key_tab",
+    "key_enter",
+    "key_escape",
+]
+
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EMBED_PROJECTOR = (
@@ -184,6 +228,78 @@ def compute_cursor_motion(
     )
     delta = (target_px[0] - cursor_px[0], target_px[1] - cursor_px[1])
     return target_px, cursor_px, delta
+
+
+def _coerce_label_map(raw: object) -> Dict[str, int]:
+    if isinstance(raw, dict):
+        mapping = {}
+        for action, idx in raw.items():
+            try:
+                mapping[str(action)] = int(idx)
+            except (TypeError, ValueError):
+                continue
+        return mapping
+    if isinstance(raw, list):
+        mapping = {}
+        for idx, action in enumerate(raw):
+            if action:
+                mapping[str(action)] = idx
+        return mapping
+    return {}
+
+
+def _load_label_map_from_path(path: Optional[Path]) -> Tuple[Dict[str, int], str]:
+    if not path:
+        return {}, "missing"
+    if not path.exists():
+        return {}, f"missing:{path}"
+    try:
+        raw = json.loads(path.read_text())
+    except Exception as exc:
+        logger.warning("Failed to load label_map from %s: %s", path, exc)
+        return {}, f"invalid:{path}"
+    label_map = _coerce_label_map(raw)
+    if not label_map:
+        return {}, f"empty:{path}"
+    return label_map, f"path:{path}"
+
+
+def _fallback_actions(num_classes: Optional[int]) -> Tuple[List[str], str]:
+    if POLICY_DEFAULT_ACTIONS:
+        actions = list(POLICY_DEFAULT_ACTIONS)
+        source = "env"
+    else:
+        actions = []
+        source = "builtin"
+        if POLICY_LABEL_MAP_FALLBACK_PATH.exists():
+            label_map, origin = _load_label_map_from_path(POLICY_LABEL_MAP_FALLBACK_PATH)
+            if label_map:
+                actions = [action for action, _idx in sorted(label_map.items(), key=lambda item: item[1])]
+                source = origin
+        if not actions:
+            actions = list(DEFAULT_ACTIONS)
+            source = "builtin"
+    if num_classes is not None and num_classes > 0:
+        if len(actions) < num_classes:
+            actions.extend([f"action_{idx}" for idx in range(len(actions), num_classes)])
+        elif len(actions) > num_classes:
+            actions = actions[:num_classes]
+    return actions, source
+
+
+def _build_idx_to_action(label_map: Dict[str, int], num_classes: int) -> Dict[int, str]:
+    idx_to_action: Dict[int, str] = {}
+    for action, idx in label_map.items():
+        try:
+            idx_int = int(idx)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx_int < num_classes:
+            idx_to_action[idx_int] = action
+    for idx in range(num_classes):
+        if idx not in idx_to_action:
+            idx_to_action[idx] = f"action_{idx}"
+    return idx_to_action
 
 OBJECT_CLASS_BUCKETS = {
     "enemy_melee": 0,
@@ -337,6 +453,11 @@ class PolicyAgent:
         self.control_ready_window: Deque[int] = deque(maxlen=CONTROL_READY_WINDOW)
         self.control_tick_count = 0
         self.last_control_action: Optional[dict] = None
+        self.progress_state: Dict[str, object] = {}
+        self.last_reward_ts = 0.0
+        self.exploration_queue: Deque[Dict[str, object]] = deque()
+        self.exploration_cooldown_until = 0.0
+        self.recent_action_labels: Deque[str] = deque(maxlen=POLICY_EXPLORATION_REPEAT_WINDOW)
         if self.hot_reload_enabled and not self.lazy_load_enabled:
             self._initial_model_load()
             self.model_load_attempted = True
@@ -354,30 +475,52 @@ class PolicyAgent:
             SCREEN_WIDTH,
             SCREEN_HEIGHT,
         )
+        logger.info(
+            "Policy checkpoints | backbone=%s policy_head=%s label_map=%s exists=%s",
+            BACKBONE_PATH,
+            POLICY_HEAD_PATH,
+            LABEL_MAP_PATH,
+            LABEL_MAP_PATH.exists(),
+        )
 
     # ------------------------------------------------------------------ Model
     def _initial_model_load(self):
-        if BACKBONE_PATH.exists() and POLICY_HEAD_PATH.exists() and LABEL_MAP_PATH.exists():
+        if BACKBONE_PATH.exists() and POLICY_HEAD_PATH.exists():
             logger.info("Attempting initial model load from %s", POLICY_HEAD_PATH.parent)
             self._reload_worker(
                 {
                     "backbone_path": str(BACKBONE_PATH),
                     "policy_head_path": str(POLICY_HEAD_PATH),
                     "value_head_path": str(VALUE_HEAD_PATH),
-                    "label_map_path": str(LABEL_MAP_PATH),
+                    "label_map_path": str(LABEL_MAP_PATH) if LABEL_MAP_PATH.exists() else None,
                 }
             )
         else:
             logger.warning("Policy hot reload enabled but no initial checkpoint found")
 
     def _build_model(self, paths: Dict) -> Dict:
+        policy_state = torch.load(paths.get("policy_head_path"), map_location=DEVICE)
+        weight = policy_state.get("weight")
+        if weight is None or not hasattr(weight, "shape"):
+            raise ValueError("policy_head missing weight tensor")
+        num_classes = int(weight.shape[0])
+
         label_map_path = Path(paths.get("label_map_path") or LABEL_MAP_PATH)
-        with label_map_path.open("r", encoding="utf-8") as f:
-            label_map = json.load(f)
-        idx_to_action = {int(idx): action for action, idx in label_map.items()}
-        num_classes = len(idx_to_action)
-        if num_classes == 0:
+        label_map, source = _load_label_map_from_path(label_map_path if label_map_path else None)
+        if not label_map and POLICY_LABEL_MAP_OPTIONAL:
+            actions, source = _fallback_actions(num_classes)
+            label_map = {action: idx for idx, action in enumerate(actions)}
+            logger.warning("Label map missing; using fallback (%s) with %s actions", source, len(label_map))
+        if not label_map:
             raise ValueError("label_map is empty")
+
+        if num_classes != len(label_map):
+            logger.warning(
+                "Label map size (%s) does not match policy head classes (%s); reconciling",
+                len(label_map),
+                num_classes,
+            )
+        idx_to_action = _build_idx_to_action(label_map, num_classes)
 
         backbone = Backbone(frame_shape=FRAME_SHAPE, non_visual_dim=NON_VISUAL_DIM).to(DEVICE)
         policy_head = nn.Linear(backbone.output_dim, num_classes).to(DEVICE)
@@ -385,7 +528,6 @@ class PolicyAgent:
 
         backbone_state = torch.load(paths.get("backbone_path"), map_location=DEVICE)
         backbone.load_state_dict(backbone_state)
-        policy_state = torch.load(paths.get("policy_head_path"), map_location=DEVICE)
         policy_head.load_state_dict(policy_state)
         value_state_path = paths.get("value_head_path")
         if value_state_path and Path(value_state_path).exists():
@@ -399,10 +541,11 @@ class PolicyAgent:
             "policy_head": policy_head,
             "value_head": value_head,
             "idx_to_action": idx_to_action,
+            "label_map_source": source,
         }
 
     def _schedule_model_reload(self, paths: Dict):
-        required = ["backbone_path", "policy_head_path", "label_map_path"]
+        required = ["backbone_path", "policy_head_path"]
         if not all(paths.get(key) for key in required):
             logger.warning("Checkpoint missing required paths: %s", paths)
             return
@@ -420,7 +563,9 @@ class PolicyAgent:
             if signature is not None:
                 self.last_checkpoint_signature = signature
             logger.info(
-                "Policy model reloaded from %s",
+                "Policy model reloaded | actions=%s label_map=%s path=%s",
+                len(model.get("idx_to_action", {})),
+                model.get("label_map_source"),
                 paths.get("policy_head_path"),
             )
         except Exception as exc:
@@ -433,10 +578,11 @@ class PolicyAgent:
             return self.model
 
     def _checkpoint_signature(self) -> Optional[Tuple[Tuple[float, int], ...]]:
-        paths = [BACKBONE_PATH, POLICY_HEAD_PATH, LABEL_MAP_PATH]
-        for path in paths:
-            if not path.exists():
-                return None
+        if not BACKBONE_PATH.exists() or not POLICY_HEAD_PATH.exists():
+            return None
+        paths = [BACKBONE_PATH, POLICY_HEAD_PATH]
+        if LABEL_MAP_PATH.exists():
+            paths.append(LABEL_MAP_PATH)
         signature = []
         for path in paths:
             stat = path.stat()
@@ -450,7 +596,12 @@ class PolicyAgent:
         if self.auto_reload_delay_sec <= 0:
             return True
         now = time.time()
-        for path in (BACKBONE_PATH, POLICY_HEAD_PATH, LABEL_MAP_PATH, VALUE_HEAD_PATH):
+        paths = [BACKBONE_PATH, POLICY_HEAD_PATH]
+        if LABEL_MAP_PATH.exists():
+            paths.append(LABEL_MAP_PATH)
+        if VALUE_HEAD_PATH.exists():
+            paths.append(VALUE_HEAD_PATH)
+        for path in paths:
             if not path.exists():
                 continue
             stat = path.stat()
@@ -496,6 +647,10 @@ class PolicyAgent:
             subscriptions.append((GOAP_TOPIC, 0))
         if CHECKPOINT_TOPIC:
             subscriptions.append((CHECKPOINT_TOPIC, 0))
+        if PROGRESS_TOPIC:
+            subscriptions.append((PROGRESS_TOPIC, 0))
+        if REWARD_TOPIC:
+            subscriptions.append((REWARD_TOPIC, 0))
         if CURSOR_TOPIC:
             subscriptions.append((CURSOR_TOPIC, 0))
         if rc == 0:
@@ -583,6 +738,12 @@ class PolicyAgent:
             elif CHECKPOINT_TOPIC and msg.topic == CHECKPOINT_TOPIC and self.hot_reload_enabled:
                 if isinstance(data, dict):
                     self._schedule_model_reload(data)
+            elif PROGRESS_TOPIC and msg.topic == PROGRESS_TOPIC:
+                if isinstance(data, dict):
+                    self._handle_progress_status(data)
+            elif REWARD_TOPIC and msg.topic == REWARD_TOPIC:
+                if isinstance(data, dict):
+                    self._handle_reward(data)
             elif CURSOR_TOPIC and msg.topic == CURSOR_TOPIC:
                 if isinstance(data, dict):
                     self._handle_cursor_message(data)
@@ -836,6 +997,9 @@ class PolicyAgent:
 
         if self._maybe_inject_respawn(state):
             pass
+        exploration_action = self._maybe_exploration_action(state)
+        if exploration_action is not None:
+            return exploration_action
         if self.current_task:
             action = self._action_from_task(state)
         else:
@@ -1044,6 +1208,33 @@ class PolicyAgent:
         else:
             self.cursor_detected_ts = 0.0
 
+    def _handle_progress_status(self, payload: Dict[str, object]) -> None:
+        understanding = payload.get("understanding") or {}
+        locations = understanding.get("locations") or {}
+        objects = understanding.get("objects") or {}
+        last_reward_age = payload.get("last_reward_age")
+        try:
+            last_reward_age = float(last_reward_age) if last_reward_age is not None else None
+        except (TypeError, ValueError):
+            last_reward_age = None
+        self.progress_state = {
+            "last_reward_age": last_reward_age,
+            "locations_current_age_sec": locations.get("current_age_sec"),
+            "locations_new_rate": locations.get("new_rate"),
+            "objects_new_rate": objects.get("new_rate"),
+            "objects_vocab_size": objects.get("vocab_size"),
+            "timestamp": payload.get("timestamp", time.time()),
+        }
+
+    def _handle_reward(self, payload: Dict[str, object]) -> None:
+        reward = payload.get("reward")
+        try:
+            reward_val = float(reward)
+        except (TypeError, ValueError):
+            return
+        if abs(reward_val) >= POLICY_EXPLORATION_MIN_REWARD:
+            self.last_reward_ts = time.time()
+
     def _cursor_is_fresh(self) -> bool:
         return self.cursor_detected_ts > 0 and (time.time() - self.cursor_detected_ts) <= CURSOR_TIMEOUT_SEC
 
@@ -1070,6 +1261,112 @@ class PolicyAgent:
             return (time.time() - float(ts)) <= POLICY_EMBED_MAX_AGE_SEC
         except (TypeError, ValueError):
             return True
+
+    def _reward_age_sec(self) -> Optional[float]:
+        age = self.progress_state.get("last_reward_age")
+        if isinstance(age, (int, float)):
+            return float(age)
+        if self.last_reward_ts:
+            return time.time() - self.last_reward_ts
+        return None
+
+    def _actions_repeating(self) -> bool:
+        if len(self.recent_action_labels) < POLICY_EXPLORATION_REPEAT_WINDOW:
+            return False
+        counts = Counter(self.recent_action_labels)
+        min_needed = min(POLICY_EXPLORATION_REPEAT_MIN, POLICY_EXPLORATION_REPEAT_WINDOW)
+        return max(counts.values()) >= min_needed
+
+    def _exploration_targets(self) -> List[Tuple[float, float]]:
+        margin = max(0.01, min(0.3, POLICY_EXPLORATION_MARGIN))
+        return [
+            (margin, margin),
+            (1.0 - margin, margin),
+            (margin, 1.0 - margin),
+            (1.0 - margin, 1.0 - margin),
+            (0.5, margin),
+            (0.5, 1.0 - margin),
+            (margin, 0.5),
+            (1.0 - margin, 0.5),
+            (0.5, 0.5),
+        ]
+
+    def _exploration_move_action(self, x_norm: float, y_norm: float) -> Dict[str, object]:
+        target_px, cursor_px, (delta_x, delta_y) = compute_cursor_motion(
+            x_norm,
+            y_norm,
+            self.cursor_x_norm,
+            self.cursor_y_norm,
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
+            CURSOR_OFFSET_X,
+            CURSOR_OFFSET_Y,
+        )
+        if abs(delta_x) < MIN_MOUSE_DELTA and abs(delta_y) < MIN_MOUSE_DELTA:
+            delta_x = self.rng.randint(-POLICY_EXPLORATION_MOUSE_RANGE, POLICY_EXPLORATION_MOUSE_RANGE)
+            delta_y = self.rng.randint(-POLICY_EXPLORATION_MOUSE_RANGE, POLICY_EXPLORATION_MOUSE_RANGE)
+        return {
+            "label": "mouse_move",
+            "dx": int(delta_x),
+            "dy": int(delta_y),
+            "target_norm": [x_norm, y_norm],
+            "target_px": target_px,
+            "cursor_px": cursor_px,
+            "source": "exploration",
+        }
+
+    def _queue_exploration_burst(self) -> None:
+        now = time.time()
+        if now < self.exploration_cooldown_until:
+            return
+        targets = self._exploration_targets()
+        self.rng.shuffle(targets)
+        actions: List[Dict[str, object]] = []
+        for target in targets:
+            if len(actions) >= max(1, POLICY_EXPLORATION_BURST_ACTIONS):
+                break
+            actions.append(self._exploration_move_action(target[0], target[1]))
+        if POLICY_EXPLORATION_ALLOW_CLICK and actions:
+            actions.append({"label": "click_primary", "source": "exploration"})
+        if POLICY_EXPLORATION_KEYS:
+            if self.rng.random() < 0.3:
+                key = self.rng.choice(sorted(POLICY_EXPLORATION_KEYS))
+                actions.append({"label": "key_press", "key": key, "source": "exploration"})
+        if actions:
+            self.exploration_queue.extend(actions)
+            self.exploration_cooldown_until = now + POLICY_EXPLORATION_COOLDOWN_SEC
+            logger.info(
+                "Exploration burst queued | actions=%s reward_age=%.1fs loc_age=%s obj_new_rate=%s",
+                len(actions),
+                self._reward_age_sec() or -1,
+                self.progress_state.get("locations_current_age_sec"),
+                self.progress_state.get("objects_new_rate"),
+            )
+
+    def _maybe_exploration_action(self, state: dict) -> Optional[Dict[str, object]]:
+        if self.exploration_queue:
+            return self.exploration_queue.popleft()
+        if not POLICY_EXPLORATION_ENABLED:
+            return None
+        if self.current_task or self.respawn_macro_active or self.respawn_pending:
+            return None
+        if self._scene_is_forbidden():
+            return None
+        reward_age = self._reward_age_sec()
+        if reward_age is None or reward_age < POLICY_EXPLORATION_REWARD_TIMEOUT_SEC:
+            return None
+        loc_age = self.progress_state.get("locations_current_age_sec")
+        if isinstance(loc_age, (int, float)) and float(loc_age) < POLICY_EXPLORATION_LOCATION_AGE_SEC:
+            return None
+        obj_rate = self.progress_state.get("objects_new_rate")
+        if isinstance(obj_rate, (int, float)) and float(obj_rate) > POLICY_EXPLORATION_OBJECT_NEW_RATE_MAX:
+            return None
+        if not self._actions_repeating():
+            return None
+        self._queue_exploration_burst()
+        if self.exploration_queue:
+            return self.exploration_queue.popleft()
+        return None
 
     @staticmethod
     def _center_from_bbox(bbox: Optional[List[float]]) -> Optional[List[float]]:
@@ -1891,6 +2188,8 @@ class PolicyAgent:
         if label and str(label).startswith("click"):
             self.last_click_ts = time.time()
         self.last_label = label
+        if label:
+            self.recent_action_labels.append(str(label))
         if self.stage0_enabled and label and label != "wait":
             self.stage0_pending = True
             self.stage0_reference = self.stage0_last_signature

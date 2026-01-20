@@ -28,6 +28,8 @@ The teacher agent will POST the same JSON payload it would send to OpenAI, so an
 `policy_agent.py` now blends its heuristic actions with the teacher's recommendations. A linear annealing coefficient `teacher_alpha` (configurable via `TEACHER_ALPHA_START` and `TEACHER_ALPHA_DECAY_STEPS`) starts at 1.0, prioritising teacher advice, then decays to rely on the learned policy. The final action is emitted on both `control/keys` and `act/cmd`, preserving the previous behaviour.
 Set `POLICY_LAZY_LOAD=1` (default) to load policy weights on first observation instead of at startup (use `0` to preload). Use `POLICY_LAZY_RETRY_SEC` to retry lazy-load after a failure (default 120s).
 To make VL-JEPA embeddings the primary gate, set `POLICY_REQUIRE_EMBEDDINGS=1` and tune `POLICY_EMBED_MAX_AGE_SEC`. On Jetson CPU, embeddings can arrive every ~5s; set `POLICY_EMBED_MAX_AGE_SEC` to 10-15s to avoid action pauses when the encoder lags. To reduce random exploration, set `POLICY_MEANINGFUL_FALLBACK=1` and `POLICY_RANDOM_FALLBACK=0` (optional: `POLICY_USE_OCR_TARGETS=0` to ignore OCR targets).
+If `label_map.json` is missing, `policy_agent` can still load checkpoints by enabling `POLICY_LABEL_MAP_OPTIONAL=1` (default). It falls back to `POLICY_DEFAULT_ACTIONS` or `config/label_map.default.json` and logs the action count on load.
+Exploration bursts can be enabled when the agent is stuck (no reward + stale location) by configuring `POLICY_EXPLORATION_*` (timeout, cooldown, burst size, optional keys/clicks).
 
 ## Shared Strategy State (Optional)
 
@@ -81,7 +83,7 @@ export OBJECT_DEVICE=cpu
 ```
 
 The `scene_agent` now fuses OCR, mean luminance, and the most recent detection payload so downstream agents receive `objects` with `(class, confidence, box)` triples in every `scene/state` update.
-OCR-derived `targets` can be filtered with `OCR_TARGET_MIN_CONF`, `OCR_TARGET_MIN_LEN`, `OCR_TARGET_MIN_ALPHA_RATIO`, and `OCR_TARGET_EXCLUDE_REGEX` to reduce noisy UI hints.
+OCR-derived `targets` can be filtered with `OCR_TARGET_MIN_CONF`, `OCR_TARGET_MIN_LEN`, `OCR_TARGET_MIN_ALPHA_RATIO`, and `OCR_TARGET_EXCLUDE_REGEX` to reduce noisy UI hints. Add stability gating with `OCR_TARGET_STABLE_FRAMES` / `OCR_TARGET_CONSECUTIVE_MIN` so only persistent tokens are used as targets.
 
 ## DeepStream Perception Bridge
 

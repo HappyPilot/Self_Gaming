@@ -42,6 +42,8 @@ OCR_TARGET_MIN_CONF = float(os.getenv("OCR_TARGET_MIN_CONF", "0.55"))
 OCR_TARGET_MIN_ALPHA_RATIO = float(os.getenv("OCR_TARGET_MIN_ALPHA_RATIO", "0.3"))
 OCR_TARGET_EXCLUDE_REGEX = os.getenv("OCR_TARGET_EXCLUDE_REGEX", "").strip()
 OCR_TARGET_EXCLUDE = re.compile(OCR_TARGET_EXCLUDE_REGEX) if OCR_TARGET_EXCLUDE_REGEX else None
+OCR_TARGET_STABLE_FRAMES = max(1, int(os.getenv("OCR_TARGET_STABLE_FRAMES", "2")))
+OCR_TARGET_CONSECUTIVE_MIN = max(1, int(os.getenv("OCR_TARGET_CONSECUTIVE_MIN", "2")))
 TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
 DEATH_SYMBOLS = [sym.strip() for sym in os.getenv("SCENE_DEATH_SYMBOLS", "*,†,+,☠").split(",") if sym.strip()]
@@ -98,6 +100,13 @@ def _target_text_valid(text: str, zone: dict) -> bool:
     if (alpha / max(1, len(trimmed))) < OCR_TARGET_MIN_ALPHA_RATIO:
         return False
     return True
+
+
+def _normalize_target_text(text: str) -> str:
+    if not text:
+        return ""
+    normalized = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.lower())
+    return " ".join(normalized.split())
 
 
 def _normalize_xyxy(
@@ -211,6 +220,8 @@ class SceneAgent:
         }
         self._last_embed_publish_ts = 0.0
         self._symbolic_candidate_since = 0.0
+        self._ocr_token_history = deque(maxlen=OCR_TARGET_STABLE_FRAMES)
+        self._ocr_token_consecutive: Dict[str, int] = {}
 
     def _symbolic_text_only(self, entries):
         lines = 0
@@ -223,6 +234,28 @@ class SceneAgent:
             else:
                 return False
         return lines >= DEATH_SYMBOL_LINES
+
+    def _update_ocr_stability(self, tokens: List[str]) -> None:
+        if OCR_TARGET_STABLE_FRAMES <= 1 and OCR_TARGET_CONSECUTIVE_MIN <= 1:
+            return
+        normalized = {token for token in tokens if token}
+        self._ocr_token_history.append(normalized)
+        consecutive = {}
+        for token in normalized:
+            consecutive[token] = self._ocr_token_consecutive.get(token, 0) + 1
+        self._ocr_token_consecutive = consecutive
+
+    def _ocr_target_is_stable(self, token: str) -> bool:
+        if OCR_TARGET_STABLE_FRAMES <= 1 and OCR_TARGET_CONSECUTIVE_MIN <= 1:
+            return True
+        if OCR_TARGET_CONSECUTIVE_MIN > 1:
+            if self._ocr_token_consecutive.get(token, 0) >= OCR_TARGET_CONSECUTIVE_MIN:
+                return True
+        if OCR_TARGET_STABLE_FRAMES > 1 and len(self._ocr_token_history) >= OCR_TARGET_STABLE_FRAMES:
+            history = list(self._ocr_token_history)[-OCR_TARGET_STABLE_FRAMES:]
+            if all(token in frame for frame in history):
+                return True
+        return False
 
     def _normalize_text(self, entry: str) -> str:
         return entry.translate(TEXT_TRANSLATION) if isinstance(entry, str) else entry
@@ -332,14 +365,21 @@ class SceneAgent:
             bbox = player_entry["bbox"]
             payload["player_center"] = [round((bbox[0] + bbox[2]) / 2.0, 4), round((bbox[1] + bbox[3]) / 2.0, 4)]
         targets = []
+        seen_targets = set()
         for name, zone in (text_zones or {}).items():
             text, bbox = str(zone.get("text") or "").strip(), zone.get("bbox") or zone.get("box")
             if not text or not bbox: continue
+            normalized = _normalize_target_text(text)
+            if not normalized or normalized in seen_targets:
+                continue
             if not _target_text_valid(text, zone):
+                continue
+            if not self._ocr_target_is_stable(normalized):
                 continue
             norm_bbox = self._normalize_bbox(bbox)
             if not norm_bbox: continue
             targets.append({"label": text, "zone": name, "bbox": norm_bbox, "center": [round((norm_bbox[0] + norm_bbox[2]) / 2.0, 4), round((norm_bbox[1] + norm_bbox[3]) / 2.0, 4)]})
+            seen_targets.add(normalized)
         if targets: payload["targets"] = targets
         lower_text = " ".join(text_payload).lower()
         if (lower_text and any(kw in lower_text for kw in DEATH_KEYWORDS)) or self._object_matches(objects):
@@ -397,7 +437,15 @@ class SceneAgent:
                 if isinstance(data.get("yolo_objects"), list):
                     self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], time.time()
                     self.state["objects_source"] = "observation"
-                if isinstance(data.get("text_zones"), dict): self.state["text_zones"] = data["text_zones"]
+                if isinstance(data.get("text_zones"), dict):
+                    self.state["text_zones"] = data["text_zones"]
+                    tokens = []
+                    for zone in data["text_zones"].values():
+                        text = str(zone.get("text") or "").strip()
+                        normalized = _normalize_target_text(text)
+                        if normalized:
+                            tokens.append(normalized)
+                    self._update_ocr_stability(tokens)
                 if self.state["text_zones"]: self.state["easy_text"] = "\n".join([str(z.get("text") or "") for z in self.state["text_zones"].values() if z.get("text")])
                 if self._sanitize_player(data.get("player_candidate")): self.state["player_candidate"], self.state["player_candidate_ts"] = self._sanitize_player(data["player_candidate"]), time.time()
         elif SCENE_FLAGS_TOPIC and msg.topic == SCENE_FLAGS_TOPIC:
@@ -424,6 +472,13 @@ class SceneAgent:
                             "confidence": res.get("conf", 1.0)
                         }
                     self.state["text_zones"] = new_zones
+                    tokens = []
+                    for zone in new_zones.values():
+                        text = str(zone.get("text") or "").strip()
+                        normalized = _normalize_target_text(text)
+                        if normalized:
+                            tokens.append(normalized)
+                    self._update_ocr_stability(tokens)
             else:
                 self.state["easy_text"] = str(data).strip()
         elif msg.topic == SIMPLE_OCR_TOPIC:

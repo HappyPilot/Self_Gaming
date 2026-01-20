@@ -109,7 +109,11 @@ state = {
 }
 lock = threading.Lock()
 
-TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
+OCR_TOKEN_MIN_LEN = int(os.getenv("OCR_TARGET_MIN_LEN", "2"))
+OCR_TOKEN_MIN_ALPHA_RATIO = float(os.getenv("OCR_TARGET_MIN_ALPHA_RATIO", "0.6"))
+OCR_TOKEN_EXCLUDE_REGEX = os.getenv("OCR_TARGET_EXCLUDE_REGEX", "").strip()
+OCR_TOKEN_EXCLUDE = re.compile(OCR_TOKEN_EXCLUDE_REGEX) if OCR_TOKEN_EXCLUDE_REGEX else None
 
 locations = []
 location_id_counter = 0
@@ -187,7 +191,15 @@ def _extract_tokens(texts: list[str]) -> list[str]:
     for entry in texts:
         if not entry:
             continue
-        tokens.extend(TOKEN_RE.findall(entry.lower()))
+        for token in TOKEN_RE.findall(entry.lower()):
+            if len(token) < OCR_TOKEN_MIN_LEN:
+                continue
+            if OCR_TOKEN_EXCLUDE and OCR_TOKEN_EXCLUDE.search(token):
+                continue
+            alpha = sum(1 for ch in token if ch.isalpha())
+            if (alpha / max(1, len(token))) < OCR_TOKEN_MIN_ALPHA_RATIO:
+                continue
+            tokens.append(token)
     return tokens
 
 def _extract_labels(objects: list[dict]) -> list[str]:

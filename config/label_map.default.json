@@ -1,0 +1,20 @@
+[
+  "wait",
+  "mouse_move",
+  "click_primary",
+  "click_secondary",
+  "mouse_hold",
+  "mouse_release",
+  "key_w",
+  "key_a",
+  "key_s",
+  "key_d",
+  "key_q",
+  "key_e",
+  "key_r",
+  "key_f",
+  "key_space",
+  "key_tab",
+  "key_enter",
+  "key_escape"
+]
