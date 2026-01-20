@@ -76,6 +76,7 @@ PREFER_LOCAL_PROFILE = os.getenv("ONBOARD_PREFER_LOCAL_PROFILE", "1") != "0"
 EXTENDED_PROBE = os.getenv("ONBOARD_EXTENDED_PROBE", "1") != "0"
 GAME_ID_OVERRIDE = os.getenv("ONBOARD_GAME_ID_OVERRIDE", "").strip()
 GAME_IDENTITY_TOPIC = os.getenv("GAME_IDENTITY_TOPIC", "game/identity")
+IDENTITY_WAIT_SEC = float(os.getenv("ONBOARD_IDENTITY_WAIT_SEC", "2.0"))
 
 def _as_int(code) -> int:
     try:
@@ -149,6 +150,7 @@ class GameOnboardingAgent:
         self.profile_status: str = "unknown"
         self.game_id: str = "unknown_game"
         self.llm_status: str = "not_requested"
+        self.identity_game_id: Optional[str] = None
 
     # MQTT wiring -------------------------------------------------------------
     def _on_connect(self, client, _userdata, _flags, rc):
@@ -193,6 +195,7 @@ class GameOnboardingAgent:
                     normalized = _normalize_game_id(str(raw_id))
                     if normalized and normalized != "unknown_game":
                         self.game_id = normalized
+                        self.identity_game_id = normalized
 
     # Analysis ----------------------------------------------------------------
     def _collect_phase_a(self):
@@ -242,6 +245,12 @@ class GameOnboardingAgent:
         """Infer game_id from state text or LLM."""
         if GAME_ID_OVERRIDE:
             self.game_id = _normalize_game_id(GAME_ID_OVERRIDE)
+            return
+        deadline = time.time() + max(0.0, IDENTITY_WAIT_SEC)
+        while not self.identity_game_id and time.time() < deadline:
+            time.sleep(0.2)
+        if self.identity_game_id and self.identity_game_id != "unknown_game":
+            self.game_id = self.identity_game_id
             return
         # Prefer explicit game_id if present
         with self.lock:
