@@ -1700,9 +1700,21 @@ class PolicyAgent:
         alpha = self.teacher_alpha_start * (1.0 - progress)
         return max(self.teacher_min_alpha, min(1.0, alpha))
 
+    @staticmethod
+    def _is_respawn_task(task: Optional[Dict[str, object]]) -> bool:
+        if not isinstance(task, dict):
+            return False
+        for field in ("task_id", "goal_id", "action_type"):
+            value = str(task.get(field) or "").lower()
+            if "respawn" in value:
+                return True
+        return False
+
     def _blend_with_teacher(self, policy_action: Dict[str, object]) -> Optional[Dict[str, object]]:
         teacher_alpha = self._current_alpha()
         teacher_action = self._teacher_to_action()
+        if self.respawn_macro_active or self.respawn_pending or self._is_respawn_task(self.current_task):
+            teacher_action = None
         if self.stage0_enabled and self.current_task:
             if teacher_action:
                 logger.info(
