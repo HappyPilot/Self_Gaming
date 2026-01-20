@@ -158,7 +158,7 @@ POLICY_SCENE_BRIGHT_THRESHOLD = float(os.getenv("POLICY_SCENE_BRIGHT_THRESHOLD",
 POLICY_FORBIDDEN_COOLDOWN = float(os.getenv("POLICY_FORBIDDEN_COOLDOWN", "3.0"))
 HOVER_DEBUG = os.getenv("POLICY_HOVER_DEBUG", "0") != "0"
 TEACHER_TARGET_COORD_RE = re.compile(
-    r"(?:target|coord(?:inate)?s?)\s*[:=]?\s*\(?\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)?",
+    r"(?:target|coord(?:inate)?s?)\s*[:=]?\s*[\(\[]?\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*[\)\]]?",
     re.IGNORECASE,
 )
 TEACHER_PAREN_COORD_RE = re.compile(r"\(\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)")
