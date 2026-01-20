@@ -236,8 +236,10 @@ class GameOnboardingAgent:
             explicit = self.latest_state.get("game_id")
             texts = list(self.latest_state.get("text") or [])[:20]
         if explicit:
-            self.game_id = _normalize_game_id(str(explicit))
-            return
+            normalized = _normalize_game_id(str(explicit))
+            if normalized not in {"unknown_game", "unknown"}:
+                self.game_id = normalized
+                return
         # Quick heuristic: look for known tokens in text
         joined = " ".join(texts).lower()
         if "path of exile" in joined or "dying exile" in joined:
