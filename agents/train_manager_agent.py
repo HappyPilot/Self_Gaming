@@ -93,16 +93,8 @@ def _normalize_game_id(value: str) -> str:
     if not value:
         return "unknown_game"
     lowered = str(value).strip().lower()
-    aliases = {
-        "poe": "path_of_exile",
-        "pathofexile": "path_of_exile",
-        "path of exile": "path_of_exile",
-        "path-of-exile": "path_of_exile",
-    }
-    if lowered in aliases:
-        return aliases[lowered]
     slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
-    return aliases.get(slug, slug or "unknown_game")
+    return slug or "unknown_game"
 
 class EpisodeDataset(Dataset):
     def __init__(self, tensor_dict):
@@ -132,13 +124,22 @@ class TrainManagerAgent:
                 reply_topic=MEM_RESPONSE_TOPIC,
             )
             response = mem.query({"key": "game_schema"}, timeout=1.0) or {}
-            mem.close()
             schema = response.get("value") or {}
             game_id = schema.get("game_id") or (schema.get("profile") or {}).get("game_id")
             if game_id:
+                mem.close()
+                return _normalize_game_id(game_id)
+            response = mem.query({"key": "game_identity"}, timeout=1.0) or {}
+            identity = response.get("value") or {}
+            game_id = identity.get("game_id") or identity.get("app_name") or identity.get("window_title")
+            mem.close()
+            if game_id:
                 return _normalize_game_id(game_id)
         except Exception:
-            pass
+            try:
+                mem.close()
+            except Exception:
+                pass
         return _normalize_game_id(env_value)
 
     def _publish_status(self, payload):

@@ -75,6 +75,7 @@ FORCE_MOUSE_MOVE = os.getenv("ONBOARD_FORCE_MOUSE_MOVE", "1") != "0"
 PREFER_LOCAL_PROFILE = os.getenv("ONBOARD_PREFER_LOCAL_PROFILE", "1") != "0"
 EXTENDED_PROBE = os.getenv("ONBOARD_EXTENDED_PROBE", "1") != "0"
 GAME_ID_OVERRIDE = os.getenv("ONBOARD_GAME_ID_OVERRIDE", "").strip()
+GAME_IDENTITY_TOPIC = os.getenv("GAME_IDENTITY_TOPIC", "game/identity")
 
 def _as_int(code) -> int:
     try:
@@ -86,16 +87,8 @@ def _normalize_game_id(value: str) -> str:
     if not value:
         return "unknown_game"
     lowered = str(value).strip().lower()
-    aliases = {
-        "poe": "path_of_exile",
-        "pathofexile": "path_of_exile",
-        "path of exile": "path_of_exile",
-        "path-of-exile": "path_of_exile",
-    }
-    if lowered in aliases:
-        return aliases[lowered]
     slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
-    return aliases.get(slug, slug or "unknown_game")
+    return slug or "unknown_game"
 
 def _normalize_keys(keys) -> List[str]:
     if not keys:
@@ -161,6 +154,8 @@ class GameOnboardingAgent:
     def _on_connect(self, client, _userdata, _flags, rc):
         if _as_int(rc) == 0:
             topics = [(FRAME_TOPIC, 0), (SCENE_TOPIC, 0), (CURSOR_TOPIC, 0)]
+            if GAME_IDENTITY_TOPIC:
+                topics.append((GAME_IDENTITY_TOPIC, 0))
             client.subscribe(topics)
             logger.info("Onboarding connected, topics: %s", [t for t, _ in topics])
         else:
@@ -188,6 +183,16 @@ class GameOnboardingAgent:
                     return
                 if isinstance(data, dict):
                     self.latest_cursor = data
+            elif GAME_IDENTITY_TOPIC and msg.topic == GAME_IDENTITY_TOPIC:
+                try:
+                    data = json.loads(msg.payload.decode("utf-8", "ignore"))
+                except Exception:
+                    return
+                if isinstance(data, dict):
+                    raw_id = data.get("game_id") or data.get("app_name") or data.get("window_title") or ""
+                    normalized = _normalize_game_id(str(raw_id))
+                    if normalized and normalized != "unknown_game":
+                        self.game_id = normalized
 
     # Analysis ----------------------------------------------------------------
     def _collect_phase_a(self):
@@ -247,14 +252,6 @@ class GameOnboardingAgent:
             if normalized not in {"unknown_game", "unknown"}:
                 self.game_id = normalized
                 return
-        # Quick heuristic: look for known tokens in text
-        joined = " ".join(texts).lower()
-        if "path of exile" in joined or "dying exile" in joined:
-            self.game_id = "path_of_exile"
-            return
-        if "diablo" in joined:
-            self.game_id = "diablo"
-            return
         if REQUEST_LLM_GAME_ID:
             guessed, status = guess_game_id(self.game_id, texts)
             if guessed:

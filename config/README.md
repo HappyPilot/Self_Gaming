@@ -30,6 +30,10 @@ export SG_LOCAL_ENV_FILE="$(pwd)/config/local.env"
 Set `CONTROL_PROFILE_GAME_ID=auto` to let training use the last onboarded `game_schema` game_id.
 Use `ONBOARD_GAME_ID_OVERRIDE=path_of_exile` to force a specific game during onboarding (optional).
 
+## Game identity (window/process)
+On the Mac host, run `tools/mac/game_identity_publisher.py` to publish the frontmost app/window to MQTT.
+Jetson listens on `GAME_IDENTITY_TOPIC=game/identity` and stores `game_identity` in memory for onboarding/training.
+
 ## LLM endpoint overrides
 Point Jetson agents at a remote LLM server by overriding these:
 ```bash
