@@ -67,6 +67,7 @@ TEACHER_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action")
 CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
 PROGRESS_TOPIC = os.getenv("PROGRESS_TOPIC", "progress/status")
 REWARD_TOPIC = os.getenv("REWARD_TOPIC", "train/reward")
+GAME_SCHEMA_TOPIC = os.getenv("GAME_SCHEMA_TOPIC", "game/schema")
 THRESH = float(os.getenv("THRESH", "120.0"))
 DEBOUNCE = float(os.getenv("DEBOUNCE", "0.25"))
 SLA_STAGE_POLICY_MS = get_sla_ms("SLA_STAGE_POLICY_MS")
@@ -174,6 +175,7 @@ POLICY_EXPLORATION_COOLDOWN_SEC = float(os.getenv("POLICY_EXPLORATION_COOLDOWN_S
 POLICY_EXPLORATION_BURST_ACTIONS = int(os.getenv("POLICY_EXPLORATION_BURST_ACTIONS", "6"))
 POLICY_EXPLORATION_ALLOW_CLICK = os.getenv("POLICY_EXPLORATION_ALLOW_CLICK", "0") != "0"
 POLICY_EXPLORATION_KEYS = _parse_env_list(os.getenv("POLICY_EXPLORATION_KEYS", ""))
+POLICY_EXPLORATION_KEYS_FROM_PROFILE = os.getenv("POLICY_EXPLORATION_KEYS_FROM_PROFILE", "0") != "0"
 POLICY_EXPLORATION_MARGIN = float(os.getenv("POLICY_EXPLORATION_MARGIN", "0.08"))
 POLICY_EXPLORATION_MOUSE_RANGE = int(os.getenv("POLICY_EXPLORATION_MOUSE_RANGE", str(MOUSE_RANGE * 2)))
 
@@ -409,6 +411,7 @@ class PolicyAgent:
         self.teacher_min_alpha = max(0.0, MIN_ALPHA)
         self.steps = 0
         self.last_label: Optional[str] = None
+        self.profile_allowed_keys: Set[str] = set()
         self.last_click_ts = 0.0
         self.rng = random.Random()
         self.model_lock = threading.Lock()
@@ -657,6 +660,8 @@ class PolicyAgent:
             subscriptions.append((PROGRESS_TOPIC, 0))
         if REWARD_TOPIC:
             subscriptions.append((REWARD_TOPIC, 0))
+        if GAME_SCHEMA_TOPIC:
+            subscriptions.append((GAME_SCHEMA_TOPIC, 0))
         if CURSOR_TOPIC:
             subscriptions.append((CURSOR_TOPIC, 0))
         if rc == 0:
@@ -750,6 +755,18 @@ class PolicyAgent:
             elif REWARD_TOPIC and msg.topic == REWARD_TOPIC:
                 if isinstance(data, dict):
                     self._handle_reward(data)
+            elif GAME_SCHEMA_TOPIC and msg.topic == GAME_SCHEMA_TOPIC:
+                schema = data.get("schema") if isinstance(data, dict) else None
+                if not isinstance(schema, dict):
+                    schema = data if isinstance(data, dict) else None
+                if isinstance(schema, dict):
+                    profile = schema.get("profile")
+                    allowed = profile.get("allowed_keys") if isinstance(profile, dict) else None
+                    if isinstance(allowed, list):
+                        keys = {str(k).lower() for k in allowed if k}
+                        if keys and keys != self.profile_allowed_keys:
+                            self.profile_allowed_keys = keys
+                            logger.info("Policy loaded allowed_keys from game schema: %s", sorted(keys))
             elif CURSOR_TOPIC and msg.topic == CURSOR_TOPIC:
                 if isinstance(data, dict):
                     self._handle_cursor_message(data)
@@ -1352,9 +1369,12 @@ class PolicyAgent:
             actions.append(self._exploration_move_action(target[0], target[1]))
         if POLICY_EXPLORATION_ALLOW_CLICK and actions:
             actions.append({"label": "click_primary", "source": "exploration"})
-        if POLICY_EXPLORATION_KEYS:
+        explore_keys = POLICY_EXPLORATION_KEYS
+        if not explore_keys and POLICY_EXPLORATION_KEYS_FROM_PROFILE:
+            explore_keys = self.profile_allowed_keys
+        if explore_keys:
             if self.rng.random() < 0.3:
-                key = self.rng.choice(sorted(POLICY_EXPLORATION_KEYS))
+                key = self.rng.choice(sorted(explore_keys))
                 actions.append({"label": "key_press", "key": key, "source": "exploration"})
         if actions:
             self.exploration_queue.extend(actions)

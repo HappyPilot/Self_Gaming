@@ -79,6 +79,13 @@ RESPAWN_TRIGGER_TEXTS=respawn,revive,resurrect,resurrect at checkpoint
 `POLICY_PREFER_TARGETS` lets OCR/object targets override a pure mouse_move.
 `TEACHER_TARGET_PRIORITY` makes teacher actions with explicit coordinates take priority over mouse_move.
 
+## Exploration keys (safe keyboard probing)
+To let exploration use whitelisted keys from the onboarding profile:
+```bash
+POLICY_EXPLORATION_KEYS_FROM_PROFILE=1
+```
+This pulls `allowed_keys` from `game/schema` and keeps key presses constrained to known-safe inputs.
+
 ## Demonstrator key actions
 The demonstrator defaults to clicks; allow key presses only if whitelisted:
 ```bash
