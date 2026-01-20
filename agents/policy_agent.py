@@ -77,6 +77,7 @@ CONTROL_METRIC_SAMPLE_EVERY = max(1, int(os.getenv("CONTROL_METRIC_SAMPLE_EVERY"
 TEACHER_ALPHA_START = float(os.getenv("TEACHER_ALPHA_START", "1.0"))
 TEACHER_DECAY_STEPS = int(os.getenv("TEACHER_ALPHA_DECAY_STEPS", "500"))
 MIN_ALPHA = float(os.getenv("TEACHER_ALPHA_MIN", "0.0"))
+TEACHER_TARGET_PRIORITY = os.getenv("TEACHER_TARGET_PRIORITY", "1") != "0"
 MOUSE_RANGE = int(os.getenv("POLICY_MOUSE_RANGE", "60"))
 MIN_MOUSE_DELTA = int(os.getenv("POLICY_MIN_MOUSE_DELTA", "8"))
 CLICK_COOLDOWN = float(os.getenv("POLICY_CLICK_COOLDOWN", "0.75"))
@@ -133,6 +134,7 @@ POLICY_REQUIRE_IN_GAME = os.getenv("POLICY_REQUIRE_IN_GAME", "0") != "0"
 POLICY_REQUIRE_EMBEDDINGS = os.getenv("POLICY_REQUIRE_EMBEDDINGS", "0") != "0"
 POLICY_EMBED_MAX_AGE_SEC = float(os.getenv("POLICY_EMBED_MAX_AGE_SEC", "5.0"))
 POLICY_MEANINGFUL_FALLBACK = os.getenv("POLICY_MEANINGFUL_FALLBACK", "0") != "0"
+POLICY_PREFER_TARGETS = os.getenv("POLICY_PREFER_TARGETS", "1") != "0"
 POLICY_RANDOM_FALLBACK = os.getenv("POLICY_RANDOM_FALLBACK", "1") != "0"
 POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
 RESPAWN_TEXTS = _parse_env_list(
@@ -154,7 +156,10 @@ MIN_TARGET_DELTA = float(os.getenv("POLICY_TARGET_MIN_DELTA", "2.0"))
 POLICY_SCENE_BRIGHT_THRESHOLD = float(os.getenv("POLICY_SCENE_BRIGHT_THRESHOLD", "0.65"))
 POLICY_FORBIDDEN_COOLDOWN = float(os.getenv("POLICY_FORBIDDEN_COOLDOWN", "3.0"))
 HOVER_DEBUG = os.getenv("POLICY_HOVER_DEBUG", "0") != "0"
-TEACHER_TARGET_COORD_RE = re.compile(r"target\s*=\s*\(\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)", re.IGNORECASE)
+TEACHER_TARGET_COORD_RE = re.compile(
+    r"(?:target|coord(?:inate)?s?)\s*[:=]?\s*\(?\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)?",
+    re.IGNORECASE,
+)
 TEACHER_TARGET_LABEL_RE = re.compile(r"target_hint\s*:?\s*([^|\n\r]+)", re.IGNORECASE)
 
 POLICY_EXPLORATION_ENABLED = os.getenv("POLICY_EXPLORATION_ENABLED", "1") != "0"
@@ -752,11 +757,18 @@ class PolicyAgent:
         if not payload:
             return
         reasoning = str(payload.get('reasoning') or '')
-        if not reasoning:
+        text = str(payload.get('text') or '')
+        if not reasoning and not text:
             payload.pop('target_norm', None)
             payload.pop('target_label', None)
             return
-        match = TEACHER_TARGET_COORD_RE.search(reasoning)
+        match = None
+        for candidate in (reasoning, text):
+            if not candidate:
+                continue
+            match = TEACHER_TARGET_COORD_RE.search(candidate)
+            if match:
+                break
         if match:
             try:
                 x_norm = max(0.0, min(1.0, float(match.group(1))))
@@ -766,7 +778,7 @@ class PolicyAgent:
                 payload.pop('target_norm', None)
         else:
             payload.pop('target_norm', None)
-        hint_match = TEACHER_TARGET_LABEL_RE.search(reasoning)
+        hint_match = TEACHER_TARGET_LABEL_RE.search(reasoning) or TEACHER_TARGET_LABEL_RE.search(text)
         if hint_match:
             payload['target_label'] = hint_match.group(1).strip().strip('"')
         elif 'target_label' in payload:
@@ -1004,6 +1016,14 @@ class PolicyAgent:
             action = self._action_from_task(state)
         else:
             action = self._action_from_model(state)
+            if (
+                action
+                and POLICY_PREFER_TARGETS
+                and action.get("label") == "mouse_move"
+            ):
+                target_action = self._meaningful_fallback_action(state)
+                if target_action and (target_action.get("target_norm") or target_action.get("target_label")):
+                    action = target_action
             if action is None:
                 if self.stage0_enabled:
                     return None
@@ -1669,6 +1689,14 @@ class PolicyAgent:
             teacher_action = None
 
         chosen = None
+        if (
+            teacher_action
+            and TEACHER_TARGET_PRIORITY
+            and policy_action
+            and policy_action.get("label") == "mouse_move"
+            and (teacher_action.get("target_norm") or teacher_action.get("target_label"))
+        ):
+            chosen = teacher_action
         if self.stage0_enabled and teacher_action:
             chosen = teacher_action
         elif teacher_action and teacher_alpha > 0:

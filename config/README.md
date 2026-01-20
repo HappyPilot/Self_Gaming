@@ -68,3 +68,19 @@ Start the queue service with Docker Compose (`llm_queue`).
 ## OCR language defaults
 `OCR_LANGS` defaults to `en` to reduce OCR latency and false positives.
 Enable more languages by overriding `OCR_LANGS` in your local env file.
+
+## Policy targeting overrides
+Use these when the policy gets stuck on generic mouse_move actions:
+```bash
+POLICY_PREFER_TARGETS=1
+TEACHER_TARGET_PRIORITY=1
+RESPAWN_TRIGGER_TEXTS=respawn,revive,resurrect,resurrect at checkpoint
+```
+`POLICY_PREFER_TARGETS` lets OCR/object targets override a pure mouse_move.
+`TEACHER_TARGET_PRIORITY` makes teacher actions with explicit coordinates take priority over mouse_move.
+
+## Demonstrator key actions
+The demonstrator defaults to clicks; allow key presses only if whitelisted:
+```bash
+DEMO_ALLOW_KEYS=0
+```

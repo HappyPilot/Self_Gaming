@@ -173,7 +173,7 @@ services:
     - SHOP_SUPPRESS_DEATH_ONLY=1
     - POLICY_HOVER_VERIFY=1
     - POLICY_HOVER_DEBUG=1
-    - RESPAWN_TRIGGER_TEXTS=respawn,revive,restart,try again,game over,you died,continue,loading
+    - RESPAWN_TRIGGER_TEXTS=respawn,revive,resurrect,resurrect at checkpoint,resurrect in town,restart,try again,game over,you died,continue,loading,checkpoint
     - RESPAWN_FUZZY_THRESHOLD=0.6
     - RESPAWN_DEBUG=0
     - THRESH=120.0
