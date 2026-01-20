@@ -395,6 +395,14 @@ class GameOnboardingAgent:
                     self.profile = llm_profile
                     self.profile_status = "llm_generated"
                     upsert_profile(llm_profile)
+                    logger.info(
+                        "LLM profile loaded status=%s keys=%s allow_mouse_move=%s",
+                        status,
+                        len(llm_profile.get("allowed_keys") or []),
+                        llm_profile.get("allow_mouse_move"),
+                    )
+                else:
+                    logger.warning("LLM profile unavailable status=%s", status)
                     allowed_keys = llm_profile.get("allowed_keys") or []
                     llm_confident = len(allowed_keys) >= LLM_CONF_MIN_KEYS
             if not llm_confident:
