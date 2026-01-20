@@ -12,6 +12,8 @@ LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://127.0.0.1:8000/v1/chat/completi
 LLM_MODEL = os.getenv("LLM_MODEL", "llama")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "dummy")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "8.0"))
+LLM_PROFILE_MAX_TOKENS = int(os.getenv("LLM_PROFILE_MAX_TOKENS", "240"))
+LLM_GAME_ID_MAX_TOKENS = int(os.getenv("LLM_GAME_ID_MAX_TOKENS", "30"))
 LLM_DETECT_GAME = os.getenv("LLM_DETECT_GAME", "1") != "0"
 _RESOLVED_MODEL: Optional[str] = None
 
@@ -61,7 +63,15 @@ def _extract_json(text: str) -> Optional[dict]:
     try:
         return json.loads(candidate)
     except Exception:
+        pass
+    try:
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(candidate[start : end + 1])
+    except Exception:
         return None
+    return None
 
 
 def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple[Optional[dict], str]:
@@ -76,19 +86,16 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
         "  \"allow_mouse_move\": bool,\n"
         "  \"allow_primary\": bool,\n"
         "  \"allow_secondary\": bool,\n"
-        "  \"controls\": [\n"
-        "    {\"input\": \"key_w\", \"description\": \"move forward\", \"when_to_use\": \"movement\", \"risk_level\": \"low\", \"required\": true, \"safe_to_probe\": true},\n"
-        "    ...\n"
-        "  ],\n"
+        "  \"allowed_keys\": [\"w\", \"a\", \"s\", \"d\", \"space\", ...],\n"
         "  \"forbidden_keys\": [\"alt+f4\", ...],\n"
         "  \"max_actions_per_window\": int,\n"
         "  \"window_sec\": float,\n"
         "  \"notes\": [\"...\"],\n"
         "  \"confidence\": 0.0-1.0\n"
         "}\n"
-        "Rules: be conservative; describe purpose and context in `description` and `when_to_use`; mark risky/system keys as forbidden; set `safe_to_probe=false` for anything that can open menus or exit.\n"
+        "Rules: be conservative; avoid menu/system keys; keep allowed_keys short and game-safe.\n"
         f"Game hint: {game_hint or 'unknown'}.\n"
-        f"On-screen texts: {texts[:15]}.\n"
+        f"On-screen texts: {texts[:12]}.\n"
         "JSON only, no prose."
     )
     headers = {
@@ -102,7 +109,7 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 400,
+        "max_tokens": max(64, LLM_PROFILE_MAX_TOKENS),
     }
     try:
         resp = requests.post(LLM_ENDPOINT, headers=headers, json=body, timeout=LLM_TIMEOUT)
@@ -143,7 +150,7 @@ def guess_game_id(game_hint: str, texts: Optional[list] = None) -> Tuple[Optiona
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
-        "max_tokens": 30,
+        "max_tokens": max(12, LLM_GAME_ID_MAX_TOKENS),
     }
     try:
         resp = requests.post(LLM_ENDPOINT, headers=headers, json=body, timeout=LLM_TIMEOUT)
