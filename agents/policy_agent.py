@@ -160,6 +160,7 @@ TEACHER_TARGET_COORD_RE = re.compile(
     r"(?:target|coord(?:inate)?s?)\s*[:=]?\s*\(?\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)?",
     re.IGNORECASE,
 )
+TEACHER_PAREN_COORD_RE = re.compile(r"\(\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)")
 TEACHER_TARGET_LABEL_RE = re.compile(r"target_hint\s*:?\s*([^|\n\r]+)", re.IGNORECASE)
 
 POLICY_EXPLORATION_ENABLED = os.getenv("POLICY_EXPLORATION_ENABLED", "1") != "0"
@@ -767,6 +768,9 @@ class PolicyAgent:
             if not candidate:
                 continue
             match = TEACHER_TARGET_COORD_RE.search(candidate)
+            if match:
+                break
+            match = TEACHER_PAREN_COORD_RE.search(candidate)
             if match:
                 break
         if match:
