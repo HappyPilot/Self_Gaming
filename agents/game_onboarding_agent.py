@@ -441,7 +441,7 @@ class GameOnboardingAgent:
                     llm_profile, status = fetch_control_profile(self.game_id, texts)
                     self.llm_status = status
                     if llm_profile:
-                        llm_profile.setdefault("game_id", self.game_id)
+                        llm_profile["game_id"] = self.game_id
                         llm_profile.setdefault("profile_version", 1)
                         if FORCE_MOUSE_MOVE and not llm_profile.get("allow_mouse_move", True):
                             llm_profile["allow_mouse_move"] = True

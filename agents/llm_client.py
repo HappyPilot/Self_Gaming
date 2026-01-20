@@ -144,8 +144,8 @@ def guess_game_id(game_hint: str, texts: Optional[list] = None) -> Tuple[Optiona
         return None, "llm_gate_busy"
     texts = texts or []
     prompt = (
-        "Identify the PC game title from the hints. Reply with only a short identifier (slug or name), "
-        "no prose.\n"
+        "Identify the PC game title from the hints. Reply with only a short lowercase identifier (slug), "
+        "no prose. If unsure, reply 'unknown_game'.\n"
         f"Hint: {game_hint or 'unknown'}\n"
         f"On-screen texts: {texts[:15]}"
     )
