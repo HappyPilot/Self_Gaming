@@ -60,6 +60,18 @@ def _slugify(value: str) -> str:
 
 def main() -> None:
     client = mqtt.Client(client_id="game_identity_publisher", protocol=mqtt.MQTTv311)
+    connected = {"ok": False}
+
+    def _on_connect(_client, _userdata, _flags, rc):
+        connected["ok"] = rc == 0
+        logger.info("connected rc=%s", rc)
+
+    def _on_disconnect(_client, _userdata, rc):
+        connected["ok"] = False
+        logger.warning("disconnected rc=%s", rc)
+
+    client.on_connect = _on_connect
+    client.on_disconnect = _on_disconnect
     client.connect(JETSON_IP, MQTT_PORT, 30)
     client.loop_start()
     logger.info("publishing to %s:%s topic=%s", JETSON_IP, MQTT_PORT, TOPIC)
@@ -83,6 +95,12 @@ def main() -> None:
                 "source": "front_app",
             }
             now = time.time()
+            if not connected["ok"]:
+                try:
+                    client.reconnect()
+                except Exception:
+                    time.sleep(1.0)
+                    continue
             if payload != last_payload or (now - last_publish) >= PUBLISH_SEC:
                 client.publish(TOPIC, json.dumps(payload))
                 last_publish = now
