@@ -55,6 +55,9 @@ CONTROL_PROBES = [
     ("MOUSE_RIGHT", {"action": "click_secondary"}, "alt_attack"),
 ]
 
+# Default skill/flask keys for click-to-move ARPGs.
+ARPG_DEFAULT_KEYS = ["q", "w", "e", "r", "t", "1", "2", "3", "4", "5", "space"]
+
 # Safe probes used only when LLM/profile is low-confidence: avoid risky/system keys.
 SAFE_PROBES = [
     ("MOUSE_MOVE", {"action": "mouse_move", "dx": 0, "dy": 0}, "mouse_move"),
@@ -71,6 +74,7 @@ SAFE_KEY_BLACKLIST = {k.strip().lower() for k in os.getenv("ONBOARD_SAFE_KEY_BLA
 FORCE_MOUSE_MOVE = os.getenv("ONBOARD_FORCE_MOUSE_MOVE", "1") != "0"
 PREFER_LOCAL_PROFILE = os.getenv("ONBOARD_PREFER_LOCAL_PROFILE", "1") != "0"
 EXTENDED_PROBE = os.getenv("ONBOARD_EXTENDED_PROBE", "1") != "0"
+GAME_ID_OVERRIDE = os.getenv("ONBOARD_GAME_ID_OVERRIDE", "").strip()
 
 def _as_int(code) -> int:
     try:
@@ -231,6 +235,9 @@ class GameOnboardingAgent:
 
     def _detect_game_id(self):
         """Infer game_id from state text or LLM."""
+        if GAME_ID_OVERRIDE:
+            self.game_id = _normalize_game_id(GAME_ID_OVERRIDE)
+            return
         # Prefer explicit game_id if present
         with self.lock:
             explicit = self.latest_state.get("game_id")
@@ -450,6 +457,16 @@ class GameOnboardingAgent:
                         extended_keys = _normalize_keys(llm_profile.get("allowed_keys_extended") or [])
                         safe_keys = [k for k in safe_keys if k not in SAFE_KEY_BLACKLIST]
                         extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
+                        mouse_mode = str(llm_profile.get("mouse_mode") or "").lower()
+                        if mouse_mode == "click_to_move":
+                            if safe_keys and all(k in {"w", "a", "s", "d"} for k in safe_keys):
+                                extended_keys = _dedupe_keys(extended_keys + safe_keys)
+                                safe_keys = []
+                            if not safe_keys and extended_keys:
+                                promote = [k for k in extended_keys if k in ARPG_DEFAULT_KEYS]
+                                if promote:
+                                    safe_keys = promote
+                                    extended_keys = [k for k in extended_keys if k not in promote]
                         llm_profile["allowed_keys"] = _dedupe_keys(safe_keys)
                         llm_profile["allowed_keys_extended"] = _dedupe_keys(extended_keys)
                         self.profile = llm_profile

@@ -28,6 +28,7 @@ export SG_LOCAL_ENV_FILE="$(pwd)/config/local.env"
 
 ## Control profiles (auto game_id)
 Set `CONTROL_PROFILE_GAME_ID=auto` to let training use the last onboarded `game_schema` game_id.
+Use `ONBOARD_GAME_ID_OVERRIDE=path_of_exile` to force a specific game during onboarding (optional).
 
 ## LLM endpoint overrides
 Point Jetson agents at a remote LLM server by overriding these:
