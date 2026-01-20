@@ -5,11 +5,12 @@ import logging
 import math
 import os
 import random
+import re
 import signal
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import paho.mqtt.client as mqtt
@@ -18,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
+from control_profile import load_profile, safe_profile
 from models.backbone import Backbone
 from utils.embedding_projector import EmbeddingProjector
 
@@ -50,6 +52,9 @@ BACKBONE_PATH = Path(os.getenv("BACKBONE_WEIGHTS_PATH", "/mnt/ssd/models/backbon
 POLICY_HEAD_PATH = Path(os.getenv("POLICY_HEAD_WEIGHTS_PATH", "/mnt/ssd/models/heads/ppo/policy_head.pt"))
 VALUE_HEAD_PATH = Path(os.getenv("VALUE_HEAD_WEIGHTS_PATH", "/mnt/ssd/models/heads/ppo/value_head.pt"))
 LABEL_MAP_PATH = Path(os.getenv("POLICY_LABEL_MAP_PATH", "/mnt/ssd/models/heads/ppo/label_map.json"))
+CONTROL_PROFILE_GAME_ID = os.getenv("CONTROL_PROFILE_GAME_ID") or os.getenv("RECORDER_GAME_ID") or os.getenv("GAME_ID") or "unknown_game"
+CONTROL_PROFILE_INCLUDE_WAIT = os.getenv("CONTROL_PROFILE_INCLUDE_WAIT", "1") != "0"
+CONTROL_PROFILE_MIN_KEYS = int(os.getenv("CONTROL_PROFILE_MIN_KEYS", "0"))
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EMBED_PROJECTOR = (
     EmbeddingProjector(
@@ -69,6 +74,8 @@ stop_event = threading.Event()
 
 for p in [MODEL_DIR, RECORDER_DIR, BACKBONE_PATH.parent, POLICY_HEAD_PATH.parent, VALUE_HEAD_PATH.parent, LABEL_MAP_PATH.parent]:
     p.mkdir(parents=True, exist_ok=True)
+
+KEY_HINT_RE = re.compile(r"\b([a-z0-9]|space|tab|enter|escape|esc)\b", re.IGNORECASE)
 
 def _as_int(code) -> int:
     try:
@@ -134,7 +141,8 @@ class TrainManagerAgent:
         try:
             dataset_id = job.get("dataset")
             files = self._load_samples(dataset_id)
-            dataset, label_map = self._prepare_dataset(files)
+            seed_label_map, profile_info = self._seed_label_map()
+            dataset, label_map = self._prepare_dataset(files, seed_label_map)
             if dataset is None:
                 raise RuntimeError("Insufficient data after preparation")
 
@@ -154,7 +162,18 @@ class TrainManagerAgent:
 
             dataloader = DataLoader(EpisodeDataset(dataset), batch_size=BATCH_SIZE, shuffle=True)
             mode = job.get("mode", "ppo_baseline")
-            self._publish_status({"ok": True, "event": "job_started", "job_id": job_id, "samples": num_samples, "mode": mode})
+            self._publish_status(
+                {
+                    "ok": True,
+                    "event": "job_started",
+                    "job_id": job_id,
+                    "samples": num_samples,
+                    "mode": mode,
+                    "label_map_size": num_classes,
+                    "label_map_seeded": profile_info.get("seeded", 0),
+                    "control_profile_source": profile_info.get("source"),
+                }
+            )
             logger.info("Job %s started: samples=%s labels=%s mode=%s", job_id, num_samples, num_classes, mode)
             
             global_step = 0
@@ -196,8 +215,18 @@ class TrainManagerAgent:
             torch.save(value_head.state_dict(), VALUE_HEAD_PATH)
             LABEL_MAP_PATH.write_text(json.dumps(label_map))
             self._publish_status({"ok": True, "event": "job_finished", "job_id": job_id, "model": str(POLICY_HEAD_PATH)})
-            self._publish_checkpoint({"job_id": job_id, "backbone_path": str(BACKBONE_PATH), "policy_head_path": str(POLICY_HEAD_PATH),
-                                      "value_head_path": str(VALUE_HEAD_PATH), "label_map_path": str(LABEL_MAP_PATH), "timestamp": time.time()})
+            self._publish_checkpoint(
+                {
+                    "job_id": job_id,
+                    "backbone_path": str(BACKBONE_PATH),
+                    "policy_head_path": str(POLICY_HEAD_PATH),
+                    "value_head_path": str(VALUE_HEAD_PATH),
+                    "label_map_path": str(LABEL_MAP_PATH),
+                    "timestamp": time.time(),
+                    "label_map_size": len(label_map),
+                    "control_profile_source": profile_info.get("source"),
+                }
+            )
             logger.info("Job %s finished; checkpoints saved to %s", job_id, POLICY_HEAD_PATH.parent)
 
         except Exception as e:
@@ -224,21 +253,22 @@ class TrainManagerAgent:
         logger.info("Loaded %s samples (limited to %s)", len(limited), max_samples)
         return limited
 
-    def _prepare_dataset(self, files):
-        features, labels, teacher_labels, rewards, label_map = [], [], [], [], {}
+    def _prepare_dataset(self, files, seed_label_map=None):
+        features, labels, teacher_labels, rewards = [], [], [], []
+        label_map = dict(seed_label_map or {})
         for path in files:
             try:
                 data = json.loads(path.read_text())
                 scene, action_payload = data.get("scene", {}), data.get("action")
-                action = str(action_payload.get("action") or action_payload) if isinstance(action_payload, dict) else str(action_payload)
+                action = self._action_label(action_payload)
                 if not action: continue
                 
                 features.append(self._encode_scene(scene))
                 labels.append(label_map.setdefault(action, len(label_map)))
                 
                 teacher_meta = data.get("teacher", {})
-                teacher_action = teacher_meta.get("action") or teacher_meta.get("text")
-                teacher_labels.append(label_map.setdefault(str(teacher_action), len(label_map)) if teacher_action else -1)
+                teacher_action = self._teacher_action_label(teacher_meta.get("action") or teacher_meta.get("text"))
+                teacher_labels.append(label_map.setdefault(teacher_action, len(label_map)) if teacher_action else -1)
                 
                 reward_value = data.get("reward", {}).get("value", 0.0)
                 rewards.append(float(reward_value))
@@ -252,6 +282,79 @@ class TrainManagerAgent:
                    "teacher": np.asarray(teacher_labels, dtype=np.int64), "rewards": np.asarray(rewards, dtype=np.float32)}
         logger.info("Prepared dataset with %s samples, %s distinct labels", len(features), len(label_map))
         return dataset, label_map
+
+    def _seed_label_map(self):
+        profile = load_profile(CONTROL_PROFILE_GAME_ID)
+        if not profile:
+            profile = safe_profile(CONTROL_PROFILE_GAME_ID)
+        actions = self._actions_from_profile(profile)
+        if profile.get("source") == "safe_default" and CONTROL_PROFILE_MIN_KEYS > 0:
+            logger.warning("Control profile is safe_default; onboarding may not have run.")
+        label_map = {action: idx for idx, action in enumerate(actions)}
+        info = {
+            "source": profile.get("source", "unknown"),
+            "seeded": len(label_map),
+            "game_id": profile.get("game_id", CONTROL_PROFILE_GAME_ID),
+        }
+        logger.info("Seeding label_map with %s actions (source=%s)", len(label_map), info["source"])
+        return label_map, info
+
+    def _actions_from_profile(self, profile: dict) -> List[str]:
+        actions = []
+        if profile.get("allow_mouse_move", True):
+            actions.append("mouse_move")
+        if profile.get("allow_primary", True):
+            actions.append("click_primary")
+        if profile.get("allow_secondary", False):
+            actions.append("click_secondary")
+        for key in profile.get("allowed_keys", []) or []:
+            if key:
+                actions.append(f"key_{str(key).lower()}")
+        if CONTROL_PROFILE_INCLUDE_WAIT:
+            actions.append("wait")
+        seen = set()
+        ordered = []
+        for action in actions:
+            if action in seen:
+                continue
+            seen.add(action)
+            ordered.append(action)
+        return ordered
+
+    def _action_label(self, action_payload) -> Optional[str]:
+        if isinstance(action_payload, dict):
+            action_name = action_payload.get("action") or action_payload.get("label") or action_payload.get("action_type")
+            if action_name == "key_press":
+                key = action_payload.get("key")
+                if key:
+                    return f"key_{str(key).lower()}"
+            if action_name:
+                return str(action_name)
+            return None
+        if action_payload is None:
+            return None
+        return str(action_payload)
+
+    def _teacher_action_label(self, teacher_action) -> Optional[str]:
+        if not teacher_action:
+            return None
+        raw = str(teacher_action).strip().lower()
+        if not raw:
+            return None
+        if raw in {"mouse_move", "click_primary", "click_secondary", "wait"}:
+            return raw
+        if "click" in raw:
+            return "click_secondary" if "right" in raw or "secondary" in raw else "click_primary"
+        if "move" in raw or "cursor" in raw or "hover" in raw:
+            return "mouse_move"
+        if "press" in raw or "key" in raw:
+            match = KEY_HINT_RE.search(raw)
+            if match:
+                key = match.group(1)
+                if key == "esc":
+                    key = "escape"
+                return f"key_{key}"
+        return None
 
     def _encode_scene(self, scene):
         vector = np.zeros(NON_VISUAL_DIM, dtype=np.float32)

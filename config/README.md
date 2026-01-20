@@ -32,6 +32,7 @@ Point Jetson agents at a remote LLM server by overriding these:
 LLM_ENDPOINT=http://10.0.0.230:11434/v1/chat/completions
 TEACHER_LOCAL_ENDPOINT=http://10.0.0.230:11434/v1/chat/completions
 ```
+`LLM_MODEL` must match a model ID returned by `GET /v1/models` on that endpoint. If you are unsure, set `LLM_MODEL=auto` and the onboarding client will pick the first available model.
 
 ## OCR language defaults
 `OCR_LANGS` defaults to `en` to reduce OCR latency and false positives.

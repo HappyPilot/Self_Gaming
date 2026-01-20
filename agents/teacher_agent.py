@@ -24,6 +24,7 @@ try:
     from .mem_rpc import MemRPC
 except ImportError:
     from mem_rpc import MemRPC
+from control_profile import load_profile, safe_profile
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("TEACHER_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -67,6 +68,8 @@ TARGET_HINT_INSTRUCTIONS = ("Always identify the on-screen UI element the next a
                           "Estimate normalized screen coordinates in the [0.0, 1.0] range (0,0 is top-left). "
                           "End your reasoning with a line formatted exactly as 'TARGET_HINT: <short label> | target=(x.xx,y.yy)'. "
                           "If no pointer target is relevant, use label 'none' and target=(0.50,0.50).")
+TEACHER_INCLUDE_CONTROLS = os.getenv("TEACHER_INCLUDE_CONTROLS", "1") != "0"
+CONTROL_PROFILE_GAME_ID = os.getenv("TEACHER_CONTROL_PROFILE_GAME_ID") or os.getenv("CONTROL_PROFILE_GAME_ID") or os.getenv("RECORDER_GAME_ID") or os.getenv("GAME_ID") or "unknown_game"
 
 def _as_int(code) -> int:
     try:
@@ -337,7 +340,32 @@ class TeacherAgent:
                 for entry in recent_critical
             )
             parts.append(f"Recent critical:\n{crit_text}")
+        if TEACHER_INCLUDE_CONTROLS:
+            controls_note = self._format_control_summary(scene)
+            if controls_note:
+                parts.append(f"Controls: {controls_note}")
         return "\n".join(parts)
+
+    def _format_control_summary(self, scene: dict) -> str:
+        game_id = scene.get("game_id") or self.game_id or CONTROL_PROFILE_GAME_ID
+        profile = load_profile(str(game_id)) or load_profile("unknown_game") or safe_profile(str(game_id))
+        controls = []
+        if profile.get("allow_mouse_move", True):
+            controls.append("mouse_move")
+        if profile.get("allow_primary", True):
+            controls.append("click_primary")
+        if profile.get("allow_secondary", False):
+            controls.append("click_secondary")
+        keys = [str(k).lower() for k in profile.get("allowed_keys", []) if k]
+        if keys:
+            controls.append(f"keys: {', '.join(sorted(keys))}")
+        forbidden = [str(k).lower() for k in profile.get("forbidden_keys", []) if k]
+        if forbidden:
+            controls.append(f"forbidden: {', '.join(sorted(forbidden))}")
+        mouse_mode = profile.get("mouse_mode")
+        if mouse_mode:
+            controls.append(f"mouse_mode={mouse_mode}")
+        return "; ".join(controls)
 
     def _maybe_refresh_context(self, client, llm: BaseChatClient, scene: dict, scope: str) -> Optional[dict]:
         if not hasattr(llm, "describe_environment"):

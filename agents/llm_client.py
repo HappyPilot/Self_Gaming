@@ -13,6 +13,41 @@ LLM_MODEL = os.getenv("LLM_MODEL", "llama")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "dummy")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "8.0"))
 LLM_DETECT_GAME = os.getenv("LLM_DETECT_GAME", "1") != "0"
+_RESOLVED_MODEL: Optional[str] = None
+
+
+def _models_endpoint() -> str:
+    if "/v1/chat/completions" in LLM_ENDPOINT:
+        return LLM_ENDPOINT.replace("/v1/chat/completions", "/v1/models")
+    if LLM_ENDPOINT.endswith("/v1"):
+        return f"{LLM_ENDPOINT}/models"
+    return f"{LLM_ENDPOINT.rstrip('/')}/models"
+
+
+def _resolve_model() -> str:
+    global _RESOLVED_MODEL
+    if _RESOLVED_MODEL:
+        return _RESOLVED_MODEL
+    model = (LLM_MODEL or "").strip()
+    if model and model.lower() != "auto":
+        _RESOLVED_MODEL = model
+        return model
+    try:
+        headers = {"Authorization": f"Bearer {LLM_API_KEY}"} if LLM_API_KEY else {}
+        resp = requests.get(_models_endpoint(), headers=headers, timeout=min(LLM_TIMEOUT, 5.0))
+        if resp.status_code == 200:
+            payload = resp.json()
+            candidates = payload.get("models") or payload.get("data") or []
+            if isinstance(candidates, list) and candidates:
+                first = candidates[0]
+                name = first.get("id") or first.get("name") or first.get("model")
+                if name:
+                    _RESOLVED_MODEL = str(name)
+                    return _RESOLVED_MODEL
+    except Exception:
+        pass
+    _RESOLVED_MODEL = model or "llama"
+    return _RESOLVED_MODEL
 
 
 def _extract_json(text: str) -> Optional[dict]:
@@ -61,7 +96,7 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
         "Authorization": f"Bearer {LLM_API_KEY}",
     }
     body = {
-        "model": LLM_MODEL,
+        "model": _resolve_model(),
         "messages": [
             {"role": "system", "content": "You are a concise assistant that outputs only JSON."},
             {"role": "user", "content": prompt},
@@ -102,7 +137,7 @@ def guess_game_id(game_hint: str, texts: Optional[list] = None) -> Tuple[Optiona
         "Authorization": f"Bearer {LLM_API_KEY}",
     }
     body = {
-        "model": LLM_MODEL,
+        "model": _resolve_model(),
         "messages": [
             {"role": "system", "content": "Return only the game title or slug."},
             {"role": "user", "content": prompt},
