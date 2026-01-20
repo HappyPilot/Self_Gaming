@@ -401,10 +401,11 @@ class GameOnboardingAgent:
                         len(llm_profile.get("allowed_keys") or []),
                         llm_profile.get("allow_mouse_move"),
                     )
-                else:
-                    logger.warning("LLM profile unavailable status=%s", status)
                     allowed_keys = llm_profile.get("allowed_keys") or []
                     llm_confident = len(allowed_keys) >= LLM_CONF_MIN_KEYS
+                else:
+                    logger.warning("LLM profile unavailable status=%s", status)
+                    llm_confident = False
             if not llm_confident:
                 loaded = load_profile(self.game_id)
                 if loaded:
