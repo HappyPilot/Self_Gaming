@@ -66,6 +66,16 @@ To make it generic for any game, set `INPUT_FRONT_APP=auto` and start the bridge
 while the game is in focus. You can also call `/set_front_app` from the control
 panel to bind to the current front app.
 
+## Publish game identity (recommended)
+You can have the input bridge publish the front app/window to Jetson so
+`game_identity_agent` can set `scene/flags.in_game`:
+
+```bash
+INPUT_PUBLISH_IDENTITY=1
+INPUT_IDENTITY_TOPIC=game/identity
+INPUT_IDENTITY_PUBLISH_SEC=5.0
+```
+
 ## MQTT control (optional)
 
 ```bash

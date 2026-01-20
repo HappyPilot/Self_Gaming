@@ -4,6 +4,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import socketserver
 import subprocess
 import threading
@@ -50,6 +51,10 @@ FRONT_APP_REQUIRED = os.environ.get("INPUT_REQUIRE_FRONT_APP", "0").strip().lowe
 FRONT_APP_NAMES_CFG = os.environ.get("INPUT_FRONT_APP") or os.environ.get("INPUT_FRONT_APPS", "")
 FRONT_APP_CHECK_SEC = float(os.environ.get("INPUT_FRONT_APP_CHECK_SEC", "1.0"))
 FRONT_APP_GRACE_SEC = float(os.environ.get("INPUT_FRONT_APP_GRACE_SEC", "2.0"))
+PUBLISH_IDENTITY = os.environ.get("INPUT_PUBLISH_IDENTITY", "0").strip().lower() not in ("0", "false", "no", "")
+IDENTITY_TOPIC = os.environ.get("INPUT_IDENTITY_TOPIC", "game/identity")
+IDENTITY_PUBLISH_SEC = float(os.environ.get("INPUT_IDENTITY_PUBLISH_SEC", "5.0"))
+IDENTITY_SOURCE = os.environ.get("INPUT_IDENTITY_SOURCE", "front_app")
 
 pyautogui.FAILSAFE = False
 
@@ -109,6 +114,8 @@ if FRONT_APP_REQUIRED:
         logger.warning("front app guard enabled but INPUT_FRONT_APP is empty")
     else:
         logger.info("front app guard enabled: %s", FRONT_APP_NAMES)
+if PUBLISH_IDENTITY:
+    logger.info("identity publisher enabled: topic=%s interval=%.1fs", IDENTITY_TOPIC, IDENTITY_PUBLISH_SEC)
 
 state_lock = threading.Lock()
 last_msg_ts = 0.0
@@ -125,6 +132,10 @@ last_front_app_ok_ts = 0.0
 last_front_app_allowed = None
 last_front_app_allowed_ts = 0.0
 last_front_app_error_log = 0.0
+last_front_window_title = None
+last_front_bundle_id = None
+last_identity_payload = None
+last_identity_publish = 0.0
 recent_action_ids = collections.deque()
 recent_action_id_set = set()
 recent_fingerprints = collections.deque(maxlen=256)
@@ -247,9 +258,9 @@ def _maybe_update_front_app_allowed(name: str):
     if not last_front_app_allowed and name:
         _set_front_app_allowed(name, "auto_first_seen")
 
-def _get_front_app_name():
+def _run_osascript(script: str):
     result = subprocess.run(
-        ["/usr/bin/osascript", "-e", 'tell application "System Events" to get name of first application process whose frontmost is true'],
+        ["/usr/bin/osascript", "-e", script],
         capture_output=True,
         text=True,
         timeout=2,
@@ -259,16 +270,65 @@ def _get_front_app_name():
         raise RuntimeError(err or f"osascript exit {result.returncode}")
     return result.stdout.strip() or None
 
+def _get_front_app_name():
+    return _run_osascript(
+        'tell application "System Events" to get name of first application process whose frontmost is true'
+    )
+
+def _get_front_window_title():
+    script = (
+        'tell application "System Events" to tell (first application process whose frontmost is true) '
+        'if (count of windows) > 0 then get name of front window'
+    )
+    return _run_osascript(script)
+
+def _get_front_bundle_id():
+    return _run_osascript(
+        'tell application "System Events" to get bundle identifier of first application process whose frontmost is true'
+    )
+
+def _slugify(value: str):
+    if not value:
+        return "unknown_game"
+    lowered = str(value).strip().lower()
+    return re.sub(r"[^a-z0-9]+", "_", lowered).strip("_") or "unknown_game"
+
+def _maybe_publish_identity(now: float, name: str, title: str, bundle: str):
+    global last_identity_payload, last_identity_publish
+    if not PUBLISH_IDENTITY or not IDENTITY_TOPIC:
+        return
+    raw = name or title or bundle or ""
+    payload = {
+        "ok": True,
+        "timestamp": now,
+        "app_name": name,
+        "window_title": title,
+        "bundle_id": bundle,
+        "game_id": _slugify(raw) if raw else "unknown_game",
+        "source": IDENTITY_SOURCE,
+    }
+    if payload == last_identity_payload and (now - last_identity_publish) < IDENTITY_PUBLISH_SEC:
+        return
+    cli.publish(IDENTITY_TOPIC, json.dumps(payload))
+    last_identity_payload = payload
+    last_identity_publish = now
+
 def _front_app_loop():
     global last_front_app, last_front_app_ts, last_front_app_ok_ts, last_front_app_error_log
-    if not FRONT_APP_REQUIRED:
+    global last_front_window_title, last_front_bundle_id
+    if not FRONT_APP_REQUIRED and not PUBLISH_IDENTITY:
         return
     sleep_sec = max(0.2, FRONT_APP_CHECK_SEC)
     while True:
         time.sleep(sleep_sec)
         name = None
+        title = None
+        bundle = None
         try:
             name = _get_front_app_name()
+            if PUBLISH_IDENTITY:
+                title = _get_front_window_title()
+                bundle = _get_front_bundle_id()
         except Exception as exc:
             now = time.time()
             if now - last_front_app_error_log > 10:
@@ -281,6 +341,11 @@ def _front_app_loop():
             _maybe_update_front_app_allowed(name)
             if name and _front_app_matches(name):
                 last_front_app_ok_ts = now
+            if PUBLISH_IDENTITY:
+                last_front_window_title = title
+                last_front_bundle_id = bundle
+        if PUBLISH_IDENTITY:
+            _maybe_publish_identity(now, name, title, bundle)
 
 def _update_auto_pause():
     global auto_paused, auto_pause_reason

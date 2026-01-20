@@ -31,8 +31,17 @@ Set `CONTROL_PROFILE_GAME_ID=auto` to let training use the last onboarded `game_
 Use `ONBOARD_GAME_ID_OVERRIDE=path_of_exile` to force a specific game during onboarding (optional).
 
 ## Game identity (window/process)
-On the Mac host, run `tools/mac/game_identity_publisher.py` to publish the frontmost app/window to MQTT.
-Jetson listens on `GAME_IDENTITY_TOPIC=game/identity` and stores `game_identity` in memory for onboarding/training.
+On the Mac host, run `tools/mac/game_identity_publisher.py` (or enable `INPUT_PUBLISH_IDENTITY=1` in the input bridge)
+to publish the frontmost app/window to MQTT. Jetson listens on `GAME_IDENTITY_TOPIC=game/identity` and stores
+`game_identity` in memory for onboarding/training.
+
+To gate actions when the front app is not the game:
+```bash
+GAME_IDENTITY_PUBLISH_FLAGS=1
+GAME_IDENTITY_BIND_MODE=auto
+GAME_IDENTITY_GRACE_SEC=2.0
+```
+`GAME_IDENTITY_BIND_MODE=auto` binds to the first non-unknown app and marks `scene/flags.in_game` true only for that app.
 
 ## LLM endpoint overrides
 Point Jetson agents at a remote LLM server by overriding these:
@@ -78,6 +87,16 @@ RESPAWN_TRIGGER_TEXTS=respawn,revive,resurrect,resurrect at checkpoint
 ```
 `POLICY_PREFER_TARGETS` lets OCR/object targets override a pure mouse_move.
 `TEACHER_TARGET_PRIORITY` makes teacher actions with explicit coordinates take priority over mouse_move.
+
+To require a positive `scene/flags.in_game` signal before any actions:
+```bash
+POLICY_REQUIRE_IN_GAME=1
+POLICY_REQUIRE_IN_GAME_STRICT=1
+TEACHER_REQUIRE_IN_GAME=1
+TEACHER_REQUIRE_IN_GAME_STRICT=1
+DEMO_REQUIRE_IN_GAME=1
+DEMO_REQUIRE_IN_GAME_STRICT=1
+```
 
 ## Exploration keys (safe keyboard probing)
 To let exploration use whitelisted keys from the onboarding profile:

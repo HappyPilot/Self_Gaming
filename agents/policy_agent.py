@@ -132,6 +132,7 @@ POLICY_GAME_KEYWORDS = _parse_env_list(
     os.getenv("POLICY_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map")
 )
 POLICY_REQUIRE_IN_GAME = os.getenv("POLICY_REQUIRE_IN_GAME", "0") != "0"
+POLICY_REQUIRE_IN_GAME_STRICT = os.getenv("POLICY_REQUIRE_IN_GAME_STRICT", "0") != "0"
 POLICY_REQUIRE_EMBEDDINGS = os.getenv("POLICY_REQUIRE_EMBEDDINGS", "0") != "0"
 POLICY_EMBED_MAX_AGE_SEC = float(os.getenv("POLICY_EMBED_MAX_AGE_SEC", "5.0"))
 POLICY_MEANINGFUL_FALLBACK = os.getenv("POLICY_MEANINGFUL_FALLBACK", "0") != "0"
@@ -1094,8 +1095,13 @@ class PolicyAgent:
         if now < self.forbidden_until:
             return False, "forbidden_cooldown"
         flags = state.get("flags") or {}
-        if POLICY_REQUIRE_IN_GAME and flags.get("in_game") is False:
-            return False, "not_in_game"
+        if POLICY_REQUIRE_IN_GAME:
+            in_game = flags.get("in_game")
+            if POLICY_REQUIRE_IN_GAME_STRICT:
+                if in_game is not True:
+                    return False, "not_in_game"
+            elif in_game is False:
+                return False, "not_in_game"
         if POLICY_REQUIRE_EMBEDDINGS and not self._embeddings_fresh(state):
             return False, "no_embeddings"
         if flags.get("death"):

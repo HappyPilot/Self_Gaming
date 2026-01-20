@@ -154,6 +154,7 @@ Quick setup:
 - Collect samples by running with `EMBEDDING_GUARD_MODE=collect_game` and `collect_non`.
 - Store centroids under `/mnt/ssd/models/embedding_guard`.
 - Enable gating with `POLICY_REQUIRE_IN_GAME=1` and `TEACHER_REQUIRE_IN_GAME=1`.
+  - For strict gating (pause unless `in_game=true`), set `POLICY_REQUIRE_IN_GAME_STRICT=1` and `TEACHER_REQUIRE_IN_GAME_STRICT=1`.
 
 ## Reward Manager
 

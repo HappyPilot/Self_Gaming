@@ -30,6 +30,7 @@ RULES_ENV = os.getenv("DEMO_RULES", "")
 MOUSE_RANGE = int(os.getenv("DEMO_MOUSE_RANGE", "80"))
 MIN_MOUSE_DELTA = int(os.getenv("DEMO_MOUSE_MIN_DELTA", "10"))
 DEMO_REQUIRE_IN_GAME = os.getenv("DEMO_REQUIRE_IN_GAME", "0") != "0"
+DEMO_REQUIRE_IN_GAME_STRICT = os.getenv("DEMO_REQUIRE_IN_GAME_STRICT", "0") != "0"
 DEMO_ALLOW_KEYS = os.getenv("DEMO_ALLOW_KEYS", "0") != "0"
 
 stop_event = threading.Event()
@@ -164,7 +165,10 @@ class Demonstrator:
             return None
         if DEMO_REQUIRE_IN_GAME:
             flags = scene.get("flags") or {}
-            if flags.get("in_game") is False:
+            if DEMO_REQUIRE_IN_GAME_STRICT:
+                if flags.get("in_game") is not True:
+                    return None
+            elif flags.get("in_game") is False:
                 return None
         text_entries = scene.get("text") or []
         text_blob = " ".join(str(item) for item in text_entries)
