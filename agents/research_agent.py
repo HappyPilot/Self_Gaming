@@ -19,6 +19,10 @@ try:
     from .mem_rpc import MemRPC  # type: ignore
 except ImportError:  # pragma: no cover - script invocation fallback
     from mem_rpc import MemRPC
+try:
+    from .llm_gate import blocked_reason
+except ImportError:  # pragma: no cover - script invocation fallback
+    from llm_gate import blocked_reason
 
 logging.basicConfig(level=os.getenv("RESEARCH_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("research_agent")
@@ -153,6 +157,11 @@ class ResearchAgent:
             return
         now = time.time()
         if now < self._next_reflection:
+            return
+        reason = blocked_reason()
+        if reason:
+            logger.info("LLM blocked (%s); skipping reflection", reason)
+            self._next_reflection = time.time() + REFLECTION_INTERVAL
             return
         scope = REFLECTION_SCOPES[self._reflection_index % len(REFLECTION_SCOPES)]
         self._reflection_index += 1

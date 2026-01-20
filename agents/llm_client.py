@@ -8,6 +8,8 @@ from typing import Dict, Optional, Tuple
 
 import requests
 
+from llm_gate import acquire_gate, release_gate
+
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://127.0.0.1:8000/v1/chat/completions")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "dummy")
@@ -76,6 +78,9 @@ def _extract_json(text: str) -> Optional[dict]:
 
 def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple[Optional[dict], str]:
     """Ask LLM for a control profile with descriptions/usage. Returns (profile, status)."""
+    gate_acquired = acquire_gate("control_profile")
+    if not gate_acquired:
+        return None, "llm_gate_busy"
     texts = texts or []
     prompt = (
         "Given a PC game, propose a safe control profile for autonomous agents.\n"
@@ -113,25 +118,27 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
     }
     try:
         resp = requests.post(LLM_ENDPOINT, headers=headers, json=body, timeout=LLM_TIMEOUT)
-    except Exception as exc:
-        return None, f"llm_request_failed: {exc}"
-    if resp.status_code != 200:
-        return None, f"llm_http_{resp.status_code}"
-    try:
+        if resp.status_code != 200:
+            return None, f"llm_http_{resp.status_code}"
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
-    except Exception:
-        return None, "llm_bad_response"
-    parsed = _extract_json(content)
-    if not isinstance(parsed, dict):
-        return None, "llm_parse_failed"
-    return parsed, "llm_ok"
+        parsed = _extract_json(content)
+        if not isinstance(parsed, dict):
+            return None, "llm_parse_failed"
+        return parsed, "llm_ok"
+    except Exception as exc:
+        return None, f"llm_request_failed: {exc}"
+    finally:
+        release_gate()
 
 
 def guess_game_id(game_hint: str, texts: Optional[list] = None) -> Tuple[Optional[str], str]:
     """Ask LLM to guess a short game id/name from visible text."""
     if not LLM_DETECT_GAME:
         return None, "llm_detect_disabled"
+    gate_acquired = acquire_gate("game_id")
+    if not gate_acquired:
+        return None, "llm_gate_busy"
     texts = texts or []
     prompt = (
         "Identify the PC game title from the hints. Reply with only a short identifier (slug or name), "
@@ -154,15 +161,14 @@ def guess_game_id(game_hint: str, texts: Optional[list] = None) -> Tuple[Optiona
     }
     try:
         resp = requests.post(LLM_ENDPOINT, headers=headers, json=body, timeout=LLM_TIMEOUT)
-    except Exception as exc:
-        return None, f"llm_request_failed: {exc}"
-    if resp.status_code != 200:
-        return None, f"llm_http_{resp.status_code}"
-    try:
+        if resp.status_code != 200:
+            return None, f"llm_http_{resp.status_code}"
         data = resp.json()
         content = data["choices"][0]["message"]["content"].strip()
-    except Exception:
-        return None, "llm_bad_response"
-    # Clean minimal slug
-    slug = content.strip().strip('"').replace("\n", " ").strip()
-    return (slug or None), "llm_ok"
+        # Clean minimal slug
+        slug = content.strip().strip('"').replace("\n", " ").strip()
+        return (slug or None), "llm_ok"
+    except Exception as exc:
+        return None, f"llm_request_failed: {exc}"
+    finally:
+        release_gate()

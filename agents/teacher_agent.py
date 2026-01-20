@@ -25,6 +25,10 @@ try:
 except ImportError:
     from mem_rpc import MemRPC
 from control_profile import load_profile, safe_profile
+try:
+    from .llm_gate import blocked_reason
+except ImportError:
+    from llm_gate import blocked_reason
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("TEACHER_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -42,6 +46,7 @@ TEACHER_PROVIDER, OPENAI_MODEL = os.getenv("TEACHER_PROVIDER", "openai").lower()
 LOCAL_ENDPOINT, LOCAL_TIMEOUT = os.getenv("TEACHER_LOCAL_ENDPOINT"), float(os.getenv("TEACHER_LOCAL_TIMEOUT", "20"))
 MAX_HISTORY, REQUEST_INTERVAL = int(os.getenv("TEACHER_HISTORY", "6")), float(os.getenv("TEACHER_INTERVAL_SEC", "2.0"))
 MAX_ATTEMPTS, TEMPERATURE = int(os.getenv("TEACHER_MAX_ATTEMPTS", "3")), float(os.getenv("TEACHER_TEMPERATURE", "0.2"))
+LLM_GATE_LOG_SEC = float(os.getenv("LLM_GATE_LOG_SEC", "15"))
 LEARNING_STAGE = int(os.getenv("LEARNING_STAGE", "1"))
 DEATH_ACTION_TEXT = os.getenv("TEACHER_DEATH_ACTION", "Click 'Resurrect at Checkpoint'")
 DEATH_GOAL_HINT, DEATH_GOAL_TYPE = os.getenv("TEACHER_DEATH_HINT", "Death dialog detected; respawn immediately."), os.getenv("TEACHER_DEATH_GOAL_TYPE", "respawn")
@@ -212,6 +217,7 @@ class TeacherAgent:
         self._context_cache, self._context_text_fingerprint, self._context_refresh_times, self._context_force_refresh = {}, {}, {}, set()
         self._watchdog_last: Dict[str, float] = {}
         self.game_id: Optional[str] = None
+        self._last_gate_log = 0.0
 
     def _ensure_mem_rpc(self):
         if self.mem_rpc:
@@ -415,6 +421,12 @@ class TeacherAgent:
         now = time.time()
         if self._inflight: return
         if now - self._last_request < REQUEST_INTERVAL: return
+        reason = blocked_reason()
+        if reason:
+            if now - self._last_gate_log >= LLM_GATE_LOG_SEC:
+                logger.info("LLM blocked (%s); skipping request", reason)
+                self._last_gate_log = now
+            return
         
         self._inflight = True
         self._last_request = now

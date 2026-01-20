@@ -206,6 +206,7 @@ services:
     - /app/game_onboarding_agent.py
     volumes:
     - ./agents:/app
+    - /mnt/ssd/logs:/mnt/ssd/logs
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -723,6 +724,7 @@ services:
     working_dir: /app
     volumes:
     - ./agents:/app
+    - /mnt/ssd/logs:/mnt/ssd/logs
     env_file: *id001
     entrypoint:
     - python3

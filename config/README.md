@@ -34,6 +34,20 @@ TEACHER_LOCAL_ENDPOINT=http://10.0.0.230:11434/v1/chat/completions
 ```
 `LLM_MODEL` must match a model ID returned by `GET /v1/models` on that endpoint. If you are unsure, set `LLM_MODEL=auto` and the onboarding client will pick the first available model.
 
+## LLM gating (prevent concurrent requests)
+To avoid multiple agents competing for the LLM, a shared gate file can be used:
+```bash
+LLM_GATE_FILE=/mnt/ssd/logs/llm_gate.lock
+LLM_GATE_WAIT_S=60
+LLM_GATE_TTL_S=120
+```
+When the onboarding agent runs, it acquires the gate so other agents skip LLM calls.
+To pause LLM calls across agents manually:
+```bash
+touch /mnt/ssd/logs/llm_pause
+rm /mnt/ssd/logs/llm_pause
+```
+
 ## OCR language defaults
 `OCR_LANGS` defaults to `en` to reduce OCR latency and false positives.
 Enable more languages by overriding `OCR_LANGS` in your local env file.

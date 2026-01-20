@@ -15,6 +15,7 @@ import requests
 from collections import deque
 from flask import Flask, jsonify, render_template_string
 import paho.mqtt.client as mqtt
+from llm_gate import blocked_reason
 
 # --- CONFIG ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
@@ -28,6 +29,7 @@ ACT_CMD_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
 CURSOR_TOPIC = os.getenv("CURSOR_TOPIC", "cursor/state")
 LLM_ENDPOINT = os.getenv("TEACHER_LOCAL_ENDPOINT", "http://10.0.0.230:11434/v1/chat/completions")
 LLM_MODEL = os.getenv("TEACHER_OPENAI_MODEL", "gpt-4o-mini")
+LLM_GATE_LOG_SEC = float(os.getenv("LLM_GATE_LOG_SEC", "15"))
 
 STUCK_THRESHOLD_SEC = 300  # 5 minutes without significant reward
 MIN_REWARD_THRESHOLD = 0.05 # What counts as "good" reward
@@ -108,6 +110,7 @@ state = {
     },
 }
 lock = threading.Lock()
+last_gate_log = 0.0
 
 TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 OCR_TOKEN_MIN_LEN = int(os.getenv("OCR_TARGET_MIN_LEN", "2"))
@@ -583,6 +586,14 @@ mqtt_client.on_message = on_message
 # --- LLM INTERVENTION ---
 def consult_oracle():
     """Asks LLM what to do when stuck."""
+    global last_gate_log
+    reason = blocked_reason()
+    if reason:
+        now = time.time()
+        if now - last_gate_log >= LLM_GATE_LOG_SEC:
+            logger.info("LLM blocked (%s); skipping intervention", reason)
+            last_gate_log = now
+        return None
     try:
         with lock:
             scene = state["scene_desc"]
