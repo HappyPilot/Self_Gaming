@@ -30,7 +30,7 @@ Set `POLICY_LAZY_LOAD=1` (default) to load policy weights on first observation i
 To make VL-JEPA embeddings the primary gate, set `POLICY_REQUIRE_EMBEDDINGS=1` and tune `POLICY_EMBED_MAX_AGE_SEC`. On Jetson CPU, embeddings can arrive every ~5s; set `POLICY_EMBED_MAX_AGE_SEC` to 10-15s to avoid action pauses when the encoder lags. To reduce random exploration, set `POLICY_MEANINGFUL_FALLBACK=1` and `POLICY_RANDOM_FALLBACK=0` (optional: `POLICY_USE_OCR_TARGETS=0` to ignore OCR targets).
 If `label_map.json` is missing, `policy_agent` can still load checkpoints by enabling `POLICY_LABEL_MAP_OPTIONAL=1` (default). It falls back to `POLICY_DEFAULT_ACTIONS` or `config/label_map.default.json` and logs the action count on load.
 Exploration bursts can be enabled when the agent is stuck (no reward + stale location) by configuring `POLICY_EXPLORATION_*` (timeout, cooldown, burst size, optional keys/clicks).
-The control profile created by `game_onboarding_agent.py` is now used to seed the training label map, so run onboarding once per game to unlock keys/clicks in `label_map.json`.
+The control profile created by `game_onboarding_agent.py` is now used to seed the training label map, so run onboarding once per game to unlock keys/clicks in `label_map.json`. Profiles can include `allowed_keys_safe` (immediate use) plus `allowed_keys_extended` (validated via control probes before activation).
 
 ## Shared Strategy State (Optional)
 

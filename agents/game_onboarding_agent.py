@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 import signal
+import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Deque, Dict, List, Optional, Tuple
@@ -39,6 +40,7 @@ VARIANCE_THRESHOLD = float(os.getenv("ONBOARD_VARIANCE_THRESHOLD", "35.0"))
 HUD_AREA_MIN = float(os.getenv("ONBOARD_HUD_AREA_MIN", "0.01"))
 HUD_AREA_MAX = float(os.getenv("ONBOARD_HUD_AREA_MAX", "0.2"))
 CONTROL_DIFF_THRESHOLD = float(os.getenv("ONBOARD_CONTROL_DIFF", "8.0"))
+EXTENDED_DIFF_MIN = float(os.getenv("ONBOARD_EXTENDED_DIFF_MIN", str(CONTROL_DIFF_THRESHOLD)))
 
 CONTROL_PROBES = [
     ("KEY_W", {"action": "key_press", "key": "w"}, "move_forward"),
@@ -67,12 +69,53 @@ LLM_CONF_MIN_KEYS = int(os.getenv("LLM_CONF_MIN_KEYS", "1"))
 DISABLE_PROBES = os.getenv("ONBOARD_DISABLE_PROBES", "1") == "1"
 SAFE_KEY_BLACKLIST = {k.strip().lower() for k in os.getenv("ONBOARD_SAFE_KEY_BLACKLIST", "m,tab,i,esc").split(",") if k.strip()}
 FORCE_MOUSE_MOVE = os.getenv("ONBOARD_FORCE_MOUSE_MOVE", "1") != "0"
+PREFER_LOCAL_PROFILE = os.getenv("ONBOARD_PREFER_LOCAL_PROFILE", "1") != "0"
+EXTENDED_PROBE = os.getenv("ONBOARD_EXTENDED_PROBE", "1") != "0"
 
 def _as_int(code) -> int:
     try:
         if hasattr(code, "value"): return int(code.value)
         return int(code)
     except (TypeError, ValueError): return 0
+
+def _normalize_game_id(value: str) -> str:
+    if not value:
+        return "unknown_game"
+    lowered = str(value).strip().lower()
+    aliases = {
+        "poe": "path_of_exile",
+        "pathofexile": "path_of_exile",
+        "path of exile": "path_of_exile",
+        "path-of-exile": "path_of_exile",
+    }
+    if lowered in aliases:
+        return aliases[lowered]
+    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    return aliases.get(slug, slug or "unknown_game")
+
+def _normalize_keys(keys) -> List[str]:
+    if not keys:
+        return []
+    if isinstance(keys, str):
+        keys = [keys]
+    normalized = []
+    for key in keys:
+        if key is None:
+            continue
+        value = str(key).strip().lower()
+        if value:
+            normalized.append(value)
+    return normalized
+
+def _dedupe_keys(keys: List[str]) -> List[str]:
+    seen = set()
+    ordered = []
+    for key in keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return ordered
 
 @dataclass
 class FrameRecord:
@@ -133,7 +176,7 @@ class GameOnboardingAgent:
                 if isinstance(data, dict):
                     self.latest_state = data
                     if data.get("game_id"):
-                        self.game_id = str(data.get("game_id"))
+                        self.game_id = _normalize_game_id(str(data.get("game_id")))
             elif msg.topic == CURSOR_TOPIC:
                 try:
                     data = json.loads(msg.payload.decode("utf-8", "ignore"))
@@ -193,7 +236,7 @@ class GameOnboardingAgent:
             explicit = self.latest_state.get("game_id")
             texts = list(self.latest_state.get("text") or [])[:20]
         if explicit:
-            self.game_id = str(explicit)
+            self.game_id = _normalize_game_id(str(explicit))
             return
         # Quick heuristic: look for known tokens in text
         joined = " ".join(texts).lower()
@@ -206,8 +249,9 @@ class GameOnboardingAgent:
         if REQUEST_LLM_GAME_ID:
             guessed, status = guess_game_id(self.game_id, texts)
             if guessed:
-                self.game_id = guessed
+                self.game_id = _normalize_game_id(guessed)
                 self.llm_status = status
+        self.game_id = _normalize_game_id(self.game_id)
 
     def _mask_to_bbox(self, mask: np.ndarray) -> Dict[str, float]:
         coords = cv2.findNonZero(mask)
@@ -240,9 +284,10 @@ class GameOnboardingAgent:
     def _probe_controls(self, probes=None):
         logger.info("Control probe start")
         probes = probes or CONTROL_PROBES
+        results = []
         for name, action, label in probes:
             if stop_event.is_set():
-                return
+                return results
             before = self._latest_frame_gray()
             baseline = self._capture_state_snapshot()
             self._publish_action(action)
@@ -257,8 +302,10 @@ class GameOnboardingAgent:
             }
             result.update(baseline)
             self.control_results.append(result)
+            results.append(result)
             logger.info("Control probe result: %s", result)
             time.sleep(POST_PROBE_SEC)
+        return results
 
     def _frame_difference(self, before: Optional[np.ndarray], after: Optional[np.ndarray]) -> float:
         if before is None or after is None:
@@ -378,43 +425,60 @@ class GameOnboardingAgent:
             layout = self._compute_layout()
             if stop_event.is_set(): return
             self._detect_game_id()
-            # LLM-first attempt to get a schema/profile
+            # Resolve control profile
             llm_confident = False
             texts = []
             with self.lock:
                 texts = list(self.latest_state.get("text") or [])[:20]
-            if REQUEST_LLM_PROFILE:
-                llm_profile, status = fetch_control_profile(self.game_id, texts)
-                self.llm_status = status
-                if llm_profile:
-                    llm_profile.setdefault("game_id", self.game_id)
-                    llm_profile.setdefault("profile_version", 1)
-                    if FORCE_MOUSE_MOVE and not llm_profile.get("allow_mouse_move", True):
-                        llm_profile["allow_mouse_move"] = True
-                        llm_profile.setdefault("notes", []).append("allow_mouse_move forced")
-                    self.profile = llm_profile
-                    self.profile_status = "llm_generated"
-                    upsert_profile(llm_profile)
-                    logger.info(
-                        "LLM profile loaded status=%s keys=%s allow_mouse_move=%s",
-                        status,
-                        len(llm_profile.get("allowed_keys") or []),
-                        llm_profile.get("allow_mouse_move"),
-                    )
-                    allowed_keys = llm_profile.get("allowed_keys") or []
-                    llm_confident = len(allowed_keys) >= LLM_CONF_MIN_KEYS
-                else:
-                    logger.warning("LLM profile unavailable status=%s", status)
-                    llm_confident = False
-            if not llm_confident:
-                loaded = load_profile(self.game_id)
-                if loaded:
-                    self.profile = loaded
-                    self.profile_status = "loaded"
-                else:
-                    self.profile = safe_profile(self.game_id)
-                    self.profile_status = "safe_fallback"
-                    upsert_profile(self.profile)
+            local_profile = load_profile(self.game_id)
+            if PREFER_LOCAL_PROFILE and local_profile:
+                self.profile = local_profile
+                self.profile_status = "loaded"
+            else:
+                if REQUEST_LLM_PROFILE:
+                    llm_profile, status = fetch_control_profile(self.game_id, texts)
+                    self.llm_status = status
+                    if llm_profile:
+                        llm_profile.setdefault("game_id", self.game_id)
+                        llm_profile.setdefault("profile_version", 1)
+                        if FORCE_MOUSE_MOVE and not llm_profile.get("allow_mouse_move", True):
+                            llm_profile["allow_mouse_move"] = True
+                            llm_profile.setdefault("notes", []).append("allow_mouse_move forced")
+                        safe_keys = _normalize_keys(llm_profile.get("allowed_keys_safe") or llm_profile.get("allowed_keys") or [])
+                        extended_keys = _normalize_keys(llm_profile.get("allowed_keys_extended") or [])
+                        safe_keys = [k for k in safe_keys if k not in SAFE_KEY_BLACKLIST]
+                        extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
+                        llm_profile["allowed_keys"] = _dedupe_keys(safe_keys)
+                        llm_profile["allowed_keys_extended"] = _dedupe_keys(extended_keys)
+                        self.profile = llm_profile
+                        self.profile_status = "llm_generated"
+                        logger.info(
+                            "LLM profile loaded status=%s safe_keys=%s extended_keys=%s allow_mouse_move=%s",
+                            status,
+                            len(llm_profile.get("allowed_keys") or []),
+                            len(llm_profile.get("allowed_keys_extended") or []),
+                            llm_profile.get("allow_mouse_move"),
+                        )
+                        llm_confident = len(llm_profile.get("allowed_keys") or []) >= LLM_CONF_MIN_KEYS
+                    else:
+                        logger.warning("LLM profile unavailable status=%s", status)
+                        llm_confident = False
+                if not llm_confident:
+                    if local_profile:
+                        self.profile = local_profile
+                        self.profile_status = "loaded"
+                    else:
+                        self.profile = safe_profile(self.game_id)
+                        self.profile_status = "safe_fallback"
+
+            # Normalize profile keys
+            safe_keys = _normalize_keys(self.profile.get("allowed_keys") or [])
+            extended_keys = _normalize_keys(self.profile.get("allowed_keys_extended") or [])
+            safe_keys = [k for k in safe_keys if k not in SAFE_KEY_BLACKLIST]
+            extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
+            self.profile["allowed_keys"] = _dedupe_keys(safe_keys)
+            if extended_keys:
+                self.profile["allowed_keys_extended"] = _dedupe_keys(extended_keys)
 
             # Probe only if we lack a confident schema/profile; use the safe subset.
             should_probe = (
@@ -429,7 +493,7 @@ class GameOnboardingAgent:
             # If we have a confident profile (loaded or LLM) and allowed_keys, run a limited validation
             validate_keys = (
                 not DISABLE_PROBES
-                and llm_confident or self.profile_status in {"loaded", "llm_generated"}
+                and (llm_confident or self.profile_status in {"loaded", "llm_generated"})
             )
             allowed_keys = [k.lower() for k in self.profile.get("allowed_keys", []) if k]
             allowed_keys = [k for k in allowed_keys if k not in SAFE_KEY_BLACKLIST]
@@ -437,6 +501,26 @@ class GameOnboardingAgent:
                 key_probes = [("KEY_" + k.upper(), {"action": "key_press", "key": k}, f"key_{k}") for k in allowed_keys]
                 probes = SAFE_PROBES + key_probes
                 self._probe_controls(probes)
+            # Validate extended keys via probes before activating them
+            if EXTENDED_PROBE and validate_keys:
+                extended_keys = [k for k in self.profile.get("allowed_keys_extended", []) if k]
+                extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
+                extended_keys = [k for k in extended_keys if k not in allowed_keys]
+                if extended_keys:
+                    ext_probes = [("KEY_" + k.upper(), {"action": "key_press", "key": k}, f"key_{k}") for k in extended_keys]
+                    results = self._probe_controls(ext_probes)
+                    verified = []
+                    for result in results or []:
+                        if float(result.get("diff_score") or 0.0) < EXTENDED_DIFF_MIN:
+                            continue
+                        label = str(result.get("label") or "")
+                        if label.startswith("key_"):
+                            verified.append(label.replace("key_", "", 1))
+                    verified = _dedupe_keys([k for k in verified if k])
+                    if verified:
+                        self.profile["allowed_keys"] = _dedupe_keys(self.profile.get("allowed_keys", []) + verified)
+                    self.profile["allowed_keys_extended_verified"] = verified
+            upsert_profile(self.profile)
             if stop_event.is_set(): return
             self._build_schema(layout)
         finally:

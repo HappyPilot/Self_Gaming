@@ -20,6 +20,10 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from control_profile import load_profile, safe_profile
+try:
+    from .mem_rpc import MemRPC
+except ImportError:
+    from mem_rpc import MemRPC
 from models.backbone import Backbone
 from utils.embedding_projector import EmbeddingProjector
 
@@ -29,6 +33,8 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 TRAIN_JOB_TOPIC = os.getenv("TRAIN_JOB_TOPIC", "train/jobs")
 TRAIN_STATUS_TOPIC = os.getenv("TRAIN_STATUS_TOPIC", "train/status")
 CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
+MEM_QUERY_TOPIC = os.getenv("MEM_QUERY_TOPIC", "mem/query")
+MEM_RESPONSE_TOPIC = os.getenv("MEM_RESPONSE_TOPIC", "mem/response")
 RECORDER_DIR = Path(os.getenv("RECORDER_DIR", "/mnt/ssd/datasets/episodes"))
 MAX_SAMPLES = int(os.getenv("TRAIN_MAX_SAMPLES", "2000"))
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/mnt/ssd/models"))
@@ -83,6 +89,21 @@ def _as_int(code) -> int:
         return int(code)
     except (TypeError, ValueError): return 0
 
+def _normalize_game_id(value: str) -> str:
+    if not value:
+        return "unknown_game"
+    lowered = str(value).strip().lower()
+    aliases = {
+        "poe": "path_of_exile",
+        "pathofexile": "path_of_exile",
+        "path of exile": "path_of_exile",
+        "path-of-exile": "path_of_exile",
+    }
+    if lowered in aliases:
+        return aliases[lowered]
+    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    return aliases.get(slug, slug or "unknown_game")
+
 class EpisodeDataset(Dataset):
     def __init__(self, tensor_dict):
         self.features = torch.from_numpy(tensor_dict["features"])
@@ -98,6 +119,27 @@ class TrainManagerAgent:
         self.client = mqtt.Client(client_id="train_manager", protocol=mqtt.MQTTv311)
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
+
+    def _resolve_profile_game_id(self) -> str:
+        env_value = CONTROL_PROFILE_GAME_ID or "unknown_game"
+        if env_value and env_value.lower() not in {"auto", "unknown_game"}:
+            return _normalize_game_id(env_value)
+        try:
+            mem = MemRPC(
+                host=MQTT_HOST,
+                port=MQTT_PORT,
+                query_topic=MEM_QUERY_TOPIC,
+                reply_topic=MEM_RESPONSE_TOPIC,
+            )
+            response = mem.query({"key": "game_schema"}, timeout=1.0) or {}
+            mem.close()
+            schema = response.get("value") or {}
+            game_id = schema.get("game_id") or (schema.get("profile") or {}).get("game_id")
+            if game_id:
+                return _normalize_game_id(game_id)
+        except Exception:
+            pass
+        return _normalize_game_id(env_value)
 
     def _publish_status(self, payload):
         logger.debug("publish_status: %s", payload)
@@ -284,9 +326,10 @@ class TrainManagerAgent:
         return dataset, label_map
 
     def _seed_label_map(self):
-        profile = load_profile(CONTROL_PROFILE_GAME_ID)
+        game_id = self._resolve_profile_game_id()
+        profile = load_profile(game_id)
         if not profile:
-            profile = safe_profile(CONTROL_PROFILE_GAME_ID)
+            profile = safe_profile(game_id)
         actions = self._actions_from_profile(profile)
         if profile.get("source") == "safe_default" and CONTROL_PROFILE_MIN_KEYS > 0:
             logger.warning("Control profile is safe_default; onboarding may not have run.")
@@ -294,7 +337,7 @@ class TrainManagerAgent:
         info = {
             "source": profile.get("source", "unknown"),
             "seeded": len(label_map),
-            "game_id": profile.get("game_id", CONTROL_PROFILE_GAME_ID),
+            "game_id": profile.get("game_id", game_id),
         }
         logger.info("Seeding label_map with %s actions (source=%s)", len(label_map), info["source"])
         return label_map, info

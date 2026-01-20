@@ -7,19 +7,29 @@ from pathlib import Path
 from typing import Dict, Optional
 
 DEFAULT_PROFILE_PATH = Path(os.getenv("CONTROL_PROFILE_PATH", "/app/data/control_profiles.json"))
+EXAMPLE_PROFILE_PATH = Path(__file__).resolve().parent / "data" / "control_profiles.example.json"
 
 
 def _read_all_profiles(path: Path = DEFAULT_PROFILE_PATH) -> Dict[str, dict]:
+    profiles: Dict[str, dict] = {}
+    if EXAMPLE_PROFILE_PATH.exists():
+        try:
+            data = json.loads(EXAMPLE_PROFILE_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                profiles.update(data)
+        except Exception:
+            pass
     if not path.exists():
-        return {}
+        return profiles
     try:
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            return data
+            profiles.update(data)
+            return profiles
     except Exception:
-        return {}
-    return {}
+        return profiles
+    return profiles
 
 
 def _write_all_profiles(profiles: Dict[str, dict], path: Path = DEFAULT_PROFILE_PATH) -> None:
@@ -42,6 +52,7 @@ def safe_profile(game_id: str = "unknown_game") -> dict:
         "allow_primary": True,
         "allow_secondary": False,
         "allowed_keys": [],
+        "allowed_keys_extended": [],
         "forbidden_keys": [],
         "max_actions_per_window": 6,
         "window_sec": 10.0,

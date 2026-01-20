@@ -26,6 +26,9 @@ If you need host-specific endpoints, copy `config/local.env.example` to
 export SG_LOCAL_ENV_FILE="$(pwd)/config/local.env"
 ```
 
+## Control profiles (auto game_id)
+Set `CONTROL_PROFILE_GAME_ID=auto` to let training use the last onboarded `game_schema` game_id.
+
 ## LLM endpoint overrides
 Point Jetson agents at a remote LLM server by overriding these:
 ```bash

@@ -8,9 +8,49 @@
     "allow_primary": true,
     "allow_secondary": false,
     "allowed_keys": [],
+    "allowed_keys_extended": [],
     "forbidden_keys": [],
     "max_actions_per_window": 6,
     "window_sec": 10.0,
     "notes": ["Example profile"]
+  },
+  "path_of_exile": {
+    "game_id": "path_of_exile",
+    "source": "curated",
+    "profile_version": 1,
+    "mouse_mode": "click_to_move",
+    "allow_mouse_move": true,
+    "allow_primary": true,
+    "allow_secondary": true,
+    "allowed_keys": [
+      "q",
+      "w",
+      "e",
+      "r",
+      "t",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "allowed_keys_extended": [
+      "space",
+      "tab",
+      "i",
+      "c",
+      "p",
+      "m"
+    ],
+    "forbidden_keys": [
+      "alt+f4",
+      "cmd+q"
+    ],
+    "max_actions_per_window": 6,
+    "window_sec": 0.8,
+    "notes": [
+      "Curated defaults for Path of Exile: QWERT skills, 1-5 flasks.",
+      "Menu keys are in allowed_keys_extended and should be validated before use."
+    ]
   }
 }
