@@ -153,6 +153,7 @@ services:
     - ./agents:/app
     - ./sg_platform:/app/sg_platform
     - /mnt/ssd:/data
+    - /mnt/ssd:/mnt/ssd
     env_file: *id001
     environment:
     - PYTHONUNBUFFERED=1
