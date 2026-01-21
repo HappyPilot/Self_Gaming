@@ -39,6 +39,8 @@ HTTP_HOST = os.environ.get("INPUT_HTTP_HOST", "0.0.0.0")
 HTTP_PORT = int(os.environ.get("INPUT_HTTP_PORT", "5010"))
 HTTP_ENABLED = os.environ.get("INPUT_HTTP_ENABLED", "1").strip().lower() not in ("0", "false", "no", "")
 INPUT_BOUNDS_CFG = os.environ.get("INPUT_BOUNDS") or os.environ.get("GAME_BOUNDS") or ""
+INPUT_BOUNDS_MODE = INPUT_BOUNDS_CFG.strip().lower()
+INPUT_BOUNDS_DYNAMIC = INPUT_BOUNDS_MODE in ("window", "front_window", "auto")
 SCENE_TOPIC = os.environ.get("INPUT_SCENE_TOPIC") or os.environ.get("SCENE_TOPIC", "scene/state")
 REQUIRE_GAME = os.environ.get("INPUT_REQUIRE_GAME", "0").strip().lower() not in ("0", "false", "no", "")
 SCENE_STALE_SEC = float(os.environ.get("INPUT_SCENE_STALE_SEC", "2.0"))
@@ -92,9 +94,11 @@ def _parse_bounds(cfg: str):
         logger.warning("invalid INPUT_BOUNDS/GAME_BOUNDS=%s, ignoring", cfg)
         return None
 
-INPUT_BOUNDS = _parse_bounds(INPUT_BOUNDS_CFG)
+INPUT_BOUNDS = None if INPUT_BOUNDS_DYNAMIC else _parse_bounds(INPUT_BOUNDS_CFG)
 if INPUT_BOUNDS:
     logger.info("input bounds enabled: %s", INPUT_BOUNDS)
+elif INPUT_BOUNDS_DYNAMIC:
+    logger.info("input bounds enabled: front_window (auto)")
 
 def _parse_keywords(cfg: str):
     return [item.strip().lower() for item in cfg.split(",") if item.strip()]
@@ -277,8 +281,13 @@ def _get_front_app_name():
 
 def _get_front_window_title():
     script = (
-        'tell application "System Events" to tell (first application process whose frontmost is true) '
-        'if (count of windows) > 0 then get name of front window'
+        'tell application "System Events"\n'
+        '  tell (first application process whose frontmost is true)\n'
+        '    if (count of windows) > 0 then\n'
+        '      return name of front window\n'
+        '    end if\n'
+        '  end tell\n'
+        'end tell'
     )
     return _run_osascript(script)
 
@@ -286,6 +295,44 @@ def _get_front_bundle_id():
     return _run_osascript(
         'tell application "System Events" to get bundle identifier of first application process whose frontmost is true'
     )
+
+def _get_front_window_bounds():
+    script = (
+        'tell application "System Events"\n'
+        '  tell (first application process whose frontmost is true)\n'
+        '    if (count of windows) > 0 then\n'
+        '      set pos to position of front window\n'
+        '      set sz to size of front window\n'
+        '      return (item 1 of pos) & "," & (item 2 of pos) & "," & (item 1 of sz) & "," & (item 2 of sz)\n'
+        '    end if\n'
+        '  end tell\n'
+        'end tell'
+    )
+    raw = _run_osascript(script)
+    if not raw:
+        return None
+    parts = [int(p) for p in re.findall(r"-?\d+", raw)]
+    if len(parts) < 4:
+        return None
+    left, top, width, height = parts
+    if width <= 0 or height <= 0:
+        return None
+    right = left + width - 1
+    bottom = top + height - 1
+    return (left, top, right, bottom)
+
+def _maybe_update_bounds_from_front_window(name: str):
+    global INPUT_BOUNDS
+    if not INPUT_BOUNDS_DYNAMIC:
+        return
+    if FRONT_APP_REQUIRED and name and not _front_app_matches(name):
+        return
+    bounds = _get_front_window_bounds()
+    if not bounds:
+        return
+    if bounds != INPUT_BOUNDS:
+        INPUT_BOUNDS = bounds
+        logger.info("input bounds updated: %s", INPUT_BOUNDS)
 
 def _slugify(value: str):
     if not value:
@@ -346,6 +393,7 @@ def _front_app_loop():
                 last_front_bundle_id = bundle
         if PUBLISH_IDENTITY:
             _maybe_publish_identity(now, name, title, bundle)
+        _maybe_update_bounds_from_front_window(name)
 
 def _update_auto_pause():
     global auto_paused, auto_pause_reason
