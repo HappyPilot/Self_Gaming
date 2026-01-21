@@ -79,6 +79,9 @@ TEACHER_ALPHA_START = float(os.getenv("TEACHER_ALPHA_START", "1.0"))
 TEACHER_DECAY_STEPS = int(os.getenv("TEACHER_ALPHA_DECAY_STEPS", "500"))
 MIN_ALPHA = float(os.getenv("TEACHER_ALPHA_MIN", "0.0"))
 TEACHER_TARGET_PRIORITY = os.getenv("TEACHER_TARGET_PRIORITY", "1") != "0"
+TEACHER_TARGET_AUTOCLICK = os.getenv("TEACHER_TARGET_AUTOCLICK", "0") != "0"
+TEACHER_TARGET_AUTOCLICK_COOLDOWN = float(os.getenv("TEACHER_TARGET_AUTOCLICK_COOLDOWN", "2.0"))
+TEACHER_TARGET_AUTOCLICK_SAME_TOL = float(os.getenv("TEACHER_TARGET_AUTOCLICK_SAME_TOL", "0.04"))
 MOUSE_RANGE = int(os.getenv("POLICY_MOUSE_RANGE", "60"))
 MIN_MOUSE_DELTA = int(os.getenv("POLICY_MIN_MOUSE_DELTA", "8"))
 CLICK_COOLDOWN = float(os.getenv("POLICY_CLICK_COOLDOWN", "0.75"))
@@ -179,6 +182,9 @@ POLICY_EXPLORATION_KEYS = _parse_env_list(os.getenv("POLICY_EXPLORATION_KEYS", "
 POLICY_EXPLORATION_KEYS_FROM_PROFILE = os.getenv("POLICY_EXPLORATION_KEYS_FROM_PROFILE", "0") != "0"
 POLICY_EXPLORATION_MARGIN = float(os.getenv("POLICY_EXPLORATION_MARGIN", "0.08"))
 POLICY_EXPLORATION_MOUSE_RANGE = int(os.getenv("POLICY_EXPLORATION_MOUSE_RANGE", str(MOUSE_RANGE * 2)))
+POLICY_EXPLORATION_KEY_BURST = os.getenv("POLICY_EXPLORATION_KEY_BURST", "0") != "0"
+POLICY_EXPLORATION_KEY_BURST_COUNT = int(os.getenv("POLICY_EXPLORATION_KEY_BURST_COUNT", "2"))
+POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC = float(os.getenv("POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC", "600"))
 
 DEFAULT_ACTIONS = [
     "wait",
@@ -467,7 +473,9 @@ class PolicyAgent:
         self.last_reward_ts = 0.0
         self.exploration_queue: Deque[Dict[str, object]] = deque()
         self.exploration_cooldown_until = 0.0
+        self.exploration_key_cooldown_until = 0.0
         self.recent_action_labels: Deque[str] = deque(maxlen=POLICY_EXPLORATION_REPEAT_WINDOW)
+        self.last_autoclick = None
         if self.hot_reload_enabled and not self.lazy_load_enabled:
             self._initial_model_load()
             self.model_load_attempted = True
@@ -845,6 +853,53 @@ class PolicyAgent:
             'cursor_px': cursor_px,
             'source': 'teacher_target',
         }
+
+    def _autoclick_recent(self, target_norm: List[float]) -> bool:
+        if not self.last_autoclick:
+            return False
+        now = time.time()
+        last_ts = self.last_autoclick.get("ts", 0.0)
+        if (now - last_ts) > max(0.0, TEACHER_TARGET_AUTOCLICK_COOLDOWN):
+            return False
+        last_center = self.last_autoclick.get("center")
+        if not last_center or len(last_center) != 2:
+            return False
+        try:
+            dx = float(target_norm[0]) - float(last_center[0])
+            dy = float(target_norm[1]) - float(last_center[1])
+        except (TypeError, ValueError):
+            return False
+        dist = (dx * dx + dy * dy) ** 0.5
+        return dist <= max(0.0, TEACHER_TARGET_AUTOCLICK_SAME_TOL)
+
+    def _maybe_teacher_autoclick(
+        self,
+        target_norm: Optional[List[float]],
+        target_label: Optional[str],
+        text: str,
+    ) -> Optional[Dict[str, object]]:
+        if not TEACHER_TARGET_AUTOCLICK:
+            return None
+        if not target_norm or len(target_norm) != 2:
+            return None
+        if any(term in text for term in ("click", "attack", "shoot", "select", "press", "key")):
+            return None
+        try:
+            x_norm = float(target_norm[0])
+            y_norm = float(target_norm[1])
+        except (TypeError, ValueError):
+            return None
+        if not self._cursor_is_fresh() or not self._cursor_near_target(x_norm, y_norm):
+            return None
+        if not self._click_ready():
+            return None
+        if self._autoclick_recent([x_norm, y_norm]):
+            return None
+        self.last_autoclick = {"center": [x_norm, y_norm], "ts": time.time()}
+        payload = {"label": "click_primary", "target_norm": [x_norm, y_norm], "source": "teacher_autoclick"}
+        if target_label:
+            payload["target_label"] = target_label
+        return payload
 
 
     def _set_active_target(self, center, label=None):
@@ -1379,8 +1434,15 @@ class PolicyAgent:
         if not explore_keys and POLICY_EXPLORATION_KEYS_FROM_PROFILE:
             explore_keys = self.profile_allowed_keys
         if explore_keys:
-            if self.rng.random() < 0.3:
-                key = self.rng.choice(sorted(explore_keys))
+            keys_sorted = sorted(explore_keys)
+            if POLICY_EXPLORATION_KEY_BURST and now >= self.exploration_key_cooldown_until:
+                self.rng.shuffle(keys_sorted)
+                count = max(1, POLICY_EXPLORATION_KEY_BURST_COUNT)
+                for key in keys_sorted[:count]:
+                    actions.append({"label": "key_press", "key": key, "source": "exploration"})
+                self.exploration_key_cooldown_until = now + max(0.0, POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC)
+            elif self.rng.random() < 0.3:
+                key = self.rng.choice(keys_sorted)
                 actions.append({"label": "key_press", "key": key, "source": "exploration"})
         if actions:
             self.exploration_queue.extend(actions)
@@ -1843,6 +1905,10 @@ class PolicyAgent:
                 return payload
             return {"label": button}
 
+        auto_click = self._maybe_teacher_autoclick(target_norm, target_label, text)
+        if auto_click:
+            return auto_click
+
         if "hold" in text and "mouse" in text:
             return {"label": "mouse_hold", "button": "left" if "left" in text else "right"}
 
@@ -1853,6 +1919,9 @@ class PolicyAgent:
             return {"label": "wait"}
 
         if target_move and any(term in text for term in ("move", "cursor", "hover", "aim", "place")):
+            auto_click = self._maybe_teacher_autoclick(target_norm, target_label, text)
+            if auto_click:
+                return auto_click
             return target_move
 
         key = self._teacher_key_from_text(text)
@@ -1869,6 +1938,9 @@ class PolicyAgent:
             return {"label": "key_press", "key": key}
 
         if target_move:
+            auto_click = self._maybe_teacher_autoclick(target_norm, target_label, text)
+            if auto_click:
+                return auto_click
             return target_move
 
         return None

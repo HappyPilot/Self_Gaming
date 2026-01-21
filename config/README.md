@@ -88,6 +88,19 @@ RESPAWN_TRIGGER_TEXTS=respawn,revive,resurrect,resurrect at checkpoint
 `POLICY_PREFER_TARGETS` lets OCR/object targets override a pure mouse_move.
 `TEACHER_TARGET_PRIORITY` makes teacher actions with explicit coordinates take priority over mouse_move.
 
+To auto-click when the teacher only provides a target (no explicit click intent):
+```bash
+TEACHER_TARGET_AUTOCLICK=1
+TEACHER_TARGET_AUTOCLICK_COOLDOWN=2.0
+```
+
+To add a periodic key probe burst during exploration (uses allowed keys from the profile):
+```bash
+POLICY_EXPLORATION_KEY_BURST=1
+POLICY_EXPLORATION_KEY_BURST_COUNT=2
+POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC=300
+```
+
 To require a positive `scene/flags.in_game` signal before any actions:
 ```bash
 POLICY_REQUIRE_IN_GAME=1
