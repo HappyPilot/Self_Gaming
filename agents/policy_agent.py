@@ -58,7 +58,7 @@ def _parse_action_list(value: str) -> List[str]:
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-OBS_TOPIC = os.getenv("OBS_TOPIC", "vision/obs")
+OBS_TOPIC = os.getenv("OBS_TOPIC", "scene/state")
 SIM_TOPIC = os.getenv("SIM_TOPIC", "sim_core/state")
 GOAP_TOPIC = os.getenv("GOAP_TASK_TOPIC", "goap/tasks")
 CONTROL_TOPIC = os.getenv("ACT_TOPIC", "control/keys")
@@ -458,6 +458,7 @@ class PolicyAgent:
         self.shop_suppress_enabled = SHOP_SUPPRESS
         self.shop_suppress_death_only = SHOP_SUPPRESS_DEATH_ONLY
         self.feedback_pending = False
+        self.last_json_error_ts = 0.0
         self.feedback_signature = ""
         self.game_keywords = set(POLICY_GAME_KEYWORDS)
         self.desktop_keywords = set(DESKTOP_KEYWORDS)
@@ -696,8 +697,13 @@ class PolicyAgent:
             payload = msg.payload.decode("utf-8", "ignore")
             try:
                 data = json.loads(payload)
-            except Exception:
+            except Exception as exc:
                 data = {}
+                if payload.strip():
+                    now = time.time()
+                    if now - self.last_json_error_ts > 5.0:
+                        logger.warning("Invalid JSON on %s: %s", msg.topic, exc)
+                        self.last_json_error_ts = now
 
             if msg.topic == TEACHER_TOPIC:
                 if isinstance(data, dict):

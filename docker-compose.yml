@@ -91,7 +91,7 @@ services:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
     - DEBUG_PORT=5008
-    - VISION_OBJECT_TOPIC=vision/observation
+    - VISION_OBJECT_TOPIC=vision/objects
     ipc: host
     depends_on:
     - mq

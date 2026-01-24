@@ -413,20 +413,6 @@ class SceneAgent:
                 self.state["mean"].append(float(data["mean"]))
                 self.state["snapshot_ts"] = time.time()
         elif msg.topic == VISION_SNAPSHOT_TOPIC: self.state["snapshot_ts"] = time.time()
-        elif OBJECT_TOPIC and msg.topic == OBJECT_TOPIC:
-            if isinstance(data, dict):
-                if OBJECT_PREFER_OBSERVATION and self.state.get("observation_ts"):
-                    obs_age = time.time() - self.state.get("observation_ts", 0.0)
-                    if obs_age <= OBJECT_FALLBACK_AFTER_SEC:
-                        publish_now = False
-                        return
-                converted = _convert_detections_to_objects(data)
-                if converted:
-                    self.state["objects"], self.state["objects_ts"] = converted, time.time()
-                    self.state["objects_source"] = "objects_topic"
-                elif isinstance(data.get("objects"), list):
-                    self.state["objects"], self.state["objects_ts"] = data["objects"], time.time()
-                    self.state["objects_source"] = "objects_topic"
         elif OBSERVATION_TOPIC and msg.topic == OBSERVATION_TOPIC:
             if isinstance(data, dict):
                 if not isinstance(data.get("yolo_objects"), list):
@@ -448,6 +434,21 @@ class SceneAgent:
                     self._update_ocr_stability(tokens)
                 if self.state["text_zones"]: self.state["easy_text"] = "\n".join([str(z.get("text") or "") for z in self.state["text_zones"].values() if z.get("text")])
                 if self._sanitize_player(data.get("player_candidate")): self.state["player_candidate"], self.state["player_candidate_ts"] = self._sanitize_player(data["player_candidate"]), time.time()
+        elif OBJECT_TOPIC and msg.topic == OBJECT_TOPIC and msg.topic != OBSERVATION_TOPIC:
+            if isinstance(data, dict):
+                if OBJECT_PREFER_OBSERVATION and self.state.get("observation_ts"):
+                    obs_age = time.time() - self.state.get("observation_ts", 0.0)
+                    obs_objects = (self.state.get("observation") or {}).get("yolo_objects") or []
+                    if obs_age <= OBJECT_FALLBACK_AFTER_SEC and obs_objects:
+                        publish_now = False
+                        return
+                converted = _convert_detections_to_objects(data)
+                if converted:
+                    self.state["objects"], self.state["objects_ts"] = converted, time.time()
+                    self.state["objects_source"] = "objects_topic"
+                elif isinstance(data.get("objects"), list):
+                    self.state["objects"], self.state["objects_ts"] = data["objects"], time.time()
+                    self.state["objects_source"] = "objects_topic"
         elif SCENE_FLAGS_TOPIC and msg.topic == SCENE_FLAGS_TOPIC:
             if isinstance(data, dict):
                 flags = data.get("flags") if isinstance(data.get("flags"), dict) else data

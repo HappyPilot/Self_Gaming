@@ -23,7 +23,7 @@ from utils.frame_transport import get_frame_bytes
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
-OBJECT_TOPIC = os.getenv("OBJECT_TOPIC", "vision/objects")
+OBJECT_TOPIC = os.getenv("OBJECT_TOPIC") or os.getenv("VISION_OBJECT_TOPIC", "vision/objects")
 MODEL_ID = os.getenv("ZSD_MODEL_ID", "google/owlvit-base-patch32")
 PROMPTS = [p.strip() for p in os.getenv("ZSD_PROMPTS", "enemy,boss,player,npc,loot,portal,waypoint,minimap,inventory,quest_marker,dialog_button,health_orb,mana_orb,menu_button").split(",") if p.strip()]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
