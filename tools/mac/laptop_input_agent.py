@@ -325,9 +325,19 @@ def _maybe_update_bounds_from_front_window(name: str):
     global INPUT_BOUNDS
     if not INPUT_BOUNDS_DYNAMIC:
         return
+    if FRONT_APP_REQUIRED and not name:
+        return
     if FRONT_APP_REQUIRED and name and not _front_app_matches(name):
         return
-    bounds = _get_front_window_bounds()
+    try:
+        bounds = _get_front_window_bounds()
+    except Exception as exc:
+        now = time.time()
+        global last_front_app_error_log
+        if now - last_front_app_error_log > 10:
+            last_front_app_error_log = now
+            logger.warning("front window bounds check failed: %s", exc)
+        return
     if not bounds:
         return
     if bounds != INPUT_BOUNDS:
@@ -392,7 +402,12 @@ def _front_app_loop():
                 last_front_window_title = title
                 last_front_bundle_id = bundle
         if PUBLISH_IDENTITY:
-            _maybe_publish_identity(now, name, title, bundle)
+            try:
+                _maybe_publish_identity(now, name, title, bundle)
+            except Exception as exc:
+                if now - last_front_app_error_log > 10:
+                    last_front_app_error_log = now
+                    logger.warning("identity publish failed: %s", exc)
         _maybe_update_bounds_from_front_window(name)
 
 def _update_auto_pause():
