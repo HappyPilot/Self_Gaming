@@ -957,7 +957,7 @@ services:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
     - VISION_FRAME_TOPIC=vision/frame/preview
-    - PERCEPTION_TOPIC=vision/observation_ds
+    - PERCEPTION_TOPIC=vision/observation
     - YOLO11_WEIGHTS=/mnt/ssd/models/yolo/yolov8s-worldv2.pt
     - YOLO11_DEVICE=cuda:0
     - YOLO11_CONF=0.05
@@ -1208,7 +1208,7 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - PERCEPTION_TOPIC=vision/observation
+    - PERCEPTION_TOPIC=vision/observation_ds
     - HEARTBEAT_INTERVAL=5.0
     - CONF_THRESHOLD=${CONF_THRESHOLD:-0.05}
     - NMS_IOU=${NMS_IOU:-0.6}
