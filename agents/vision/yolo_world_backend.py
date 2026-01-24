@@ -80,12 +80,13 @@ class YoloWorldBackend(ObjectDetectorBackend):
     def _predict(self, frame: np.ndarray, device: str):
         ctx = torch.no_grad() if torch is not None else nullcontext()
         with ctx:
+            use_half = device.startswith("cuda")
             return self.model.predict(
                 source=frame,
                 device=device,
                 conf=self.conf,
                 imgsz=self.imgsz,
-                half=True,
+                half=use_half,
                 verbose=False,
             )
 
