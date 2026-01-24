@@ -51,7 +51,7 @@ def safe_profile(game_id: str = "unknown_game") -> dict:
         "allow_mouse_move": True,
         "allow_primary": True,
         "allow_secondary": False,
-        "allowed_keys": [],
+        "allowed_keys": ["w", "a", "s", "d", "q", "e", "r", "t", "1", "2", "3", "4", "5", "space"],
         "allowed_keys_extended": [],
         "forbidden_keys": [],
         "max_actions_per_window": 6,

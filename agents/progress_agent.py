@@ -713,7 +713,13 @@ def dashboard():
         obj_age = _age(obj_state.get("ts", 0))
         ocr_age = _age(s.get("ocr", {}).get("ts", 0))
         simple_age = _age(s.get("simple_ocr", {}).get("ts", 0))
-        understanding = s.get("understanding", {})
+        understanding = s.get("understanding") or {}
+        understanding_view = {
+            "locations": understanding.get("locations") or {},
+            "objects": understanding.get("objects") or {},
+            "ocr": understanding.get("ocr") or {},
+            "grounding": understanding.get("grounding") or {},
+        }
     
     thoughts = read_thought_log()
     color = "green" if s["status"] == "OK" else "red"
@@ -792,7 +798,8 @@ def dashboard():
     </body>
     </html>
     """, s=s, last_reward_ago=last_reward_ago, color=color, thoughts=thoughts,
-    scene_age=scene_age, obj_state=obj_state, obj_age=obj_age, ocr_age=ocr_age, simple_age=simple_age)
+    scene_age=scene_age, obj_state=obj_state, obj_age=obj_age, ocr_age=ocr_age, simple_age=simple_age,
+    understanding=understanding_view)
 
 @app.route('/api/status')
 def api_status():
