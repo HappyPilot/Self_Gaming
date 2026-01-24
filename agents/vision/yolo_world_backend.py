@@ -122,7 +122,10 @@ class YoloWorldBackend(ObjectDetectorBackend):
             return []
         frame_h, frame_w = frame.shape[:2]
         detected: List[DetectedObject] = []
-        names = res.names or {}
+        if self.classes:
+            names = {i: name for i, name in enumerate(self.classes)}
+        else:
+            names = res.names or {}
         raw_boxes = boxes.xyxy.cpu().numpy()
         scores = boxes.conf.cpu().numpy()
         classes = boxes.cls.cpu().numpy()
