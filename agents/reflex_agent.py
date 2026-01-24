@@ -26,7 +26,7 @@ LOG_EVERY_SEC = float(os.getenv("REFLEX_LOG_EVERY_SEC", "5.0"))
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-OBS_TOPIC = os.getenv("OBS_TOPIC", "vision/observation")
+OBS_TOPIC = os.getenv("OBS_TOPIC", os.getenv("SCENE_TOPIC", "scene/state"))
 ACT_CMD_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
 
 

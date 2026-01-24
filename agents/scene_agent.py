@@ -35,6 +35,7 @@ SCENE_CLASS_PATH = os.getenv("SCENE_CLASS_PATH", "")
 YOLO_CLASS_PATH = os.getenv("YOLO_CLASS_PATH", "")
 DEEPSTREAM_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "0"))
 OBJECT_PREFER_OBSERVATION = os.getenv("OBJECT_PREFER_OBSERVATION", "1") != "0"
+OBJECT_ALLOW_OBSERVATION_FALLBACK = os.getenv("OBJECT_ALLOW_OBSERVATION_FALLBACK", "1") != "0"
 OBJECT_FALLBACK_AFTER_SEC = float(os.getenv("OBJECT_FALLBACK_AFTER_SEC", "1.0"))
 NORMALIZE_TEXT = os.getenv("SCENE_NORMALIZE_TEXT", "1") != "0"
 OCR_TARGET_MIN_LEN = int(os.getenv("OCR_TARGET_MIN_LEN", "2"))
@@ -415,20 +416,25 @@ class SceneAgent:
         elif msg.topic == VISION_SNAPSHOT_TOPIC: self.state["snapshot_ts"] = time.time()
         elif OBSERVATION_TOPIC and msg.topic == OBSERVATION_TOPIC:
             if isinstance(data, dict):
+                now = time.time()
                 if not isinstance(data.get("yolo_objects"), list):
                     converted = _convert_detections_to_objects(data)
                     if converted:
                         data["yolo_objects"] = converted
-                self.state["observation"], self.state["observation_ts"] = data, time.time()
+                self.state["observation"], self.state["observation_ts"] = data, now
                 if isinstance(data.get("yolo_objects"), list):
                     should_use_obs = OBJECT_PREFER_OBSERVATION
                     if not should_use_obs:
                         last_src = self.state.get("objects_source")
                         last_ts = self.state.get("objects_ts", 0.0)
-                        if last_src != "objects_topic" or (time.time() - last_ts) > OBJECT_FALLBACK_AFTER_SEC:
+                        if (
+                            OBJECT_ALLOW_OBSERVATION_FALLBACK
+                            and OBJECT_FALLBACK_AFTER_SEC > 0
+                            and (last_src != "objects_topic" or (now - last_ts) > OBJECT_FALLBACK_AFTER_SEC)
+                        ):
                             should_use_obs = True
                     if should_use_obs:
-                        self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], time.time()
+                        self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], now
                         self.state["objects_source"] = "observation"
                 if isinstance(data.get("text_zones"), dict):
                     self.state["text_zones"] = data["text_zones"]

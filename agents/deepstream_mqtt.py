@@ -35,7 +35,7 @@ except ImportError as exc:  # pragma: no cover
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-OBS_TOPIC = os.getenv("PERCEPTION_TOPIC", "vision/observation")
+OBS_TOPIC = os.getenv("PERCEPTION_TOPIC") or os.getenv("VISION_OBSERVATION_TOPIC", "vision/observation")
 
 # Source selection
 DS_SOURCE = os.getenv("DS_SOURCE", os.getenv("VIDEO_SOURCE", "v4l2")).lower()

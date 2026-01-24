@@ -93,7 +93,7 @@ OCR-derived `targets` can be filtered with `OCR_TARGET_MIN_CONF`, `OCR_TARGET_MI
 Controls:
 - `SCENE_CLASS_PATH` (or `YOLO_CLASS_PATH`) to map `class_id` to labels.
 - `ENGINE_INPUT_SIZE` to normalize DeepStream boxes when frame dimensions are not present.
-- `OBJECT_PREFER_OBSERVATION=1` keeps DeepStream detections as the primary source; `OBJECT_FALLBACK_AFTER_SEC` controls how long to wait before accepting `vision/objects` as fallback.
+- `OBJECT_PREFER_OBSERVATION=1` keeps DeepStream detections as the primary source; `OBJECT_ALLOW_OBSERVATION_FALLBACK=0` disables fallback entirely; `OBJECT_FALLBACK_AFTER_SEC` controls how long to wait before accepting `vision/observation` as fallback when `vision/objects` is stale.
 
 ## Perception Agent (YOLO + OCR)
 
