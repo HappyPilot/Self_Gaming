@@ -421,8 +421,15 @@ class SceneAgent:
                         data["yolo_objects"] = converted
                 self.state["observation"], self.state["observation_ts"] = data, time.time()
                 if isinstance(data.get("yolo_objects"), list):
-                    self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], time.time()
-                    self.state["objects_source"] = "observation"
+                    should_use_obs = OBJECT_PREFER_OBSERVATION
+                    if not should_use_obs:
+                        last_src = self.state.get("objects_source")
+                        last_ts = self.state.get("objects_ts", 0.0)
+                        if last_src != "objects_topic" or (time.time() - last_ts) > OBJECT_FALLBACK_AFTER_SEC:
+                            should_use_obs = True
+                    if should_use_obs:
+                        self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], time.time()
+                        self.state["objects_source"] = "observation"
                 if isinstance(data.get("text_zones"), dict):
                     self.state["text_zones"] = data["text_zones"]
                     tokens = []
