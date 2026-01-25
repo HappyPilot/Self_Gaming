@@ -114,6 +114,14 @@ OCR_AGG_GRID=12
 ```
 This bins OCR text by screen position and keeps tokens that repeat across frames.
 
+## OCR fallback (easyocr on empty results)
+If paddle OCR returns no text, enable a lightweight fallback pass:
+```bash
+OCR_FALLBACK_ON_EMPTY=1
+OCR_FALLBACK_MIN_RESULTS=1
+OCR_FALLBACK_BACKEND=easyocr
+```
+
 ## OCR quality report tool
 Use the probe script to sample OCR output and save frames for review:
 ```bash

@@ -78,6 +78,9 @@ MAX_LINE_LENGTH = int(os.getenv("OCR_MAX_LINE_CHARS", "160"))
 VARIANT_THRESHOLD = os.getenv("OCR_VARIANT_THRESHOLD", "adaptive")
 MAX_RESULTS = int(os.getenv("OCR_MAX_RESULTS", "12"))
 PREFER_SNAPSHOT = os.getenv("OCR_PREFER_SNAPSHOT", "1") != "0"
+FALLBACK_ON_EMPTY = os.getenv("OCR_FALLBACK_ON_EMPTY", "0") == "1"
+FALLBACK_MIN_RESULTS = max(1, int(os.getenv("OCR_FALLBACK_MIN_RESULTS", "1")))
+FALLBACK_BACKEND = os.getenv("OCR_FALLBACK_BACKEND", "easyocr").strip().lower()
 
 # Frame hash gating (skip OCR on unchanged frames)
 HASH_ENABLE = os.getenv("OCR_HASH_ENABLE", "1") == "1"
@@ -165,6 +168,22 @@ class OcrEasyAgent:
         self.ready = (self.backend == "paddle" and self.rapidocr_reader is not None) or \
                      (self.backend == "easyocr" and self.reader is not None)
         logger.info("OCR backend ready: %s (backend=%s, gpu=%s)", self.ready, self.backend, self.gpu)
+
+    def _ensure_easyocr(self) -> bool:
+        if self.reader is not None:
+            return True
+        if torch is not None:
+            try:
+                self.gpu = torch.cuda.is_available() and not FORCE_CPU and OCR_USE_GPU
+            except Exception:
+                self.gpu = False
+        try:
+            import easyocr
+            self.reader = easyocr.Reader(OCR_LANGS or ["en"], gpu=self.gpu)
+            return True
+        except Exception as exc:
+            logger.warning("EasyOCR fallback init failed: %s", exc)
+            return False
 
     def _ensure_backend(self):
         if self._backend_initialized:
@@ -287,12 +306,13 @@ class OcrEasyAgent:
         if cv2 is not None: return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
         return np.dstack([arr] * 3)
 
-    def _recognize_variant(self, arr: np.ndarray) -> List[dict]:
+    def _recognize_variant(self, arr: np.ndarray, backend: Optional[str] = None) -> List[dict]:
         if not self.ready: return []
         h, w = arr.shape[:2]
         results = []
-        
-        if self.backend == "paddle":
+
+        use_backend = backend or self.backend
+        if use_backend == "paddle":
             if self.rapidocr_reader is None: return []
             with self._ocr_lock:
                 raw_res, _ = self.rapidocr_reader(self._convert_to_color(arr))
@@ -312,7 +332,7 @@ class OcrEasyAgent:
                         "conf": float(conf)
                     })
 
-        elif self.backend == "easyocr":
+        elif use_backend == "easyocr":
             if self.reader is None: return []
             # EasyOCR: [ ([[x1,y1], ...], text, conf), ... ]
             with self._ocr_lock:
@@ -374,7 +394,8 @@ class OcrEasyAgent:
             all_results = []
             seen_texts = set()
             
-            for variant in self._preprocess_variants(img):
+            variants = self._preprocess_variants(img)
+            for variant in variants:
                 for res in self._recognize_variant(variant):
                     cleaned = res["text"].strip()
                     if not cleaned or self._is_noise(cleaned): continue
@@ -383,6 +404,24 @@ class OcrEasyAgent:
                     if key in seen_texts: continue
                     seen_texts.add(key)
                     
+                    all_results.append(res)
+
+            if (
+                FALLBACK_ON_EMPTY
+                and self.backend != "easyocr"
+                and FALLBACK_BACKEND == "easyocr"
+                and len(all_results) < FALLBACK_MIN_RESULTS
+                and self._ensure_easyocr()
+                and variants
+            ):
+                for res in self._recognize_variant(variants[0], backend="easyocr"):
+                    cleaned = res["text"].strip()
+                    if not cleaned or self._is_noise(cleaned):
+                        continue
+                    key = f"{cleaned}_{res['box'][0]:.2f}_{res['box'][1]:.2f}"
+                    if key in seen_texts:
+                        continue
+                    seen_texts.add(key)
                     all_results.append(res)
 
             # Keep top-N by confidence to limit payload size
