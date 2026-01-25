@@ -22,6 +22,7 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 VISION_MEAN_TOPIC = os.getenv("VISION_MEAN_TOPIC", "vision/mean")
 VISION_SNAPSHOT_TOPIC = os.getenv("VISION_SNAPSHOT_TOPIC", "vision/snapshot")
 VISION_EMBEDDINGS_TOPIC = os.getenv("VISION_EMBEDDINGS_TOPIC", "vision/embeddings")
+VISION_PROMPT_TOPIC = os.getenv("VISION_PROMPT_TOPIC", "")
 OBJECT_TOPIC = os.getenv("VISION_OBJECT_TOPIC", "vision/objects")
 OBSERVATION_TOPIC = os.getenv("VISION_OBSERVATION_TOPIC", "")
 SCENE_FLAGS_TOPIC = os.getenv("SCENE_FLAGS_TOPIC", "scene/flags")
@@ -34,6 +35,11 @@ EMBED_PUBLISH_INTERVAL = float(os.getenv("SCENE_EMBED_PUBLISH_INTERVAL", "1.0"))
 SCENE_CLASS_PATH = os.getenv("SCENE_CLASS_PATH", "")
 YOLO_CLASS_PATH = os.getenv("YOLO_CLASS_PATH", "")
 DEEPSTREAM_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "0"))
+PROMPT_SCORE_TTL_SEC = float(os.getenv("PROMPT_SCORE_TTL_SEC", "2.5"))
+PROMPT_TAG_MIN_SCORE = float(os.getenv("PROMPT_TAG_MIN_SCORE", "0.2"))
+PROMPT_TAG_TOP_K = int(os.getenv("PROMPT_TAG_TOP_K", "4"))
+PROMPT_TAG_PREFIX = os.getenv("PROMPT_TAG_PREFIX", "prompt_").strip() or "prompt_"
+PROMPT_TAG_ALLOW = {label.strip().lower() for label in os.getenv("PROMPT_TAG_ALLOW", "").split(",") if label.strip()}
 OBJECT_PREFER_OBSERVATION = os.getenv("OBJECT_PREFER_OBSERVATION", "1") != "0"
 OBJECT_ALLOW_OBSERVATION_FALLBACK = os.getenv("OBJECT_ALLOW_OBSERVATION_FALLBACK", "1") != "0"
 OBJECT_FALLBACK_AFTER_SEC = float(os.getenv("OBJECT_FALLBACK_AFTER_SEC", "1.0"))
@@ -218,6 +224,7 @@ class SceneAgent:
             "mean": deque(maxlen=10), "easy_text": "", "simple_text": "", "snapshot_ts": 0.0,
             "objects": [], "objects_ts": 0.0, "text_zones": {}, "observation": {}, "observation_ts": 0.0,
             "objects_source": "", "embeddings": [], "embeddings_ts": 0.0, "flags": {}, "flags_ts": 0.0,
+            "prompt_scores": {}, "prompt_ts": 0.0,
         }
         self._last_embed_publish_ts = 0.0
         self._symbolic_candidate_since = 0.0
@@ -257,6 +264,36 @@ class SceneAgent:
             if all(token in frame for frame in history):
                 return True
         return False
+
+    def _prompt_tokens(self, now: float) -> tuple[list[str], Optional[dict]]:
+        scores = self.state.get("prompt_scores")
+        if not isinstance(scores, dict) or not scores:
+            return [], None
+        if PROMPT_SCORE_TTL_SEC > 0 and (now - self.state.get("prompt_ts", 0.0)) > PROMPT_SCORE_TTL_SEC:
+            return [], None
+        items = []
+        for label, raw_score in scores.items():
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+            normalized = str(label).strip().lower()
+            if not normalized:
+                continue
+            if PROMPT_TAG_ALLOW and normalized not in PROMPT_TAG_ALLOW:
+                continue
+            items.append((normalized, score))
+        if not items:
+            return [], None
+        items.sort(key=lambda item: item[1], reverse=True)
+        tokens = []
+        for label, score in items:
+            if score < PROMPT_TAG_MIN_SCORE:
+                continue
+            tokens.append(f"{PROMPT_TAG_PREFIX}{label}")
+            if len(tokens) >= PROMPT_TAG_TOP_K:
+                break
+        return tokens, {label: round(score, 4) for label, score in items}
 
     def _normalize_text(self, entry: str) -> str:
         return entry.translate(TEXT_TRANSLATION) if isinstance(entry, str) else entry
@@ -332,6 +369,7 @@ class SceneAgent:
             if OBJECT_TOPIC: topics.append((OBJECT_TOPIC, 0))
             if OBSERVATION_TOPIC: topics.append((OBSERVATION_TOPIC, 0))
             if VISION_EMBEDDINGS_TOPIC: topics.append((VISION_EMBEDDINGS_TOPIC, 0))
+            if VISION_PROMPT_TOPIC: topics.append((VISION_PROMPT_TOPIC, 0))
             if SCENE_FLAGS_TOPIC: topics.append((SCENE_FLAGS_TOPIC, 0))
             client.subscribe(topics)
             client.publish(SCENE_TOPIC, json.dumps({"ok": True, "event": "scene_agent_ready"}))
@@ -344,6 +382,12 @@ class SceneAgent:
         fuse_start = time.perf_counter()
         entries = [self.state["easy_text"]] if self.state["easy_text"] else [self.state["simple_text"]] if self.state["simple_text"] else []
         text_payload = [self._normalize_text(entry) for entry in entries] if entries and NORMALIZE_TEXT else entries
+        prompt_tokens, prompt_scores = self._prompt_tokens(now)
+        if prompt_tokens:
+            text_payload = list(text_payload) if text_payload else []
+            for token in prompt_tokens:
+                if token not in text_payload:
+                    text_payload.append(token)
         obs = self.state.get("observation", {})
         objects = obs.get("yolo_objects") or self.state.get("objects", [])
         text_zones = obs.get("text_zones") or self.state.get("text_zones", {})
@@ -360,6 +404,8 @@ class SceneAgent:
                    "objects_source": self.state.get("objects_source", ""),
                    "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now,
                    "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0)}
+        if prompt_scores:
+            payload["prompt_scores"] = prompt_scores
         if flags:
             payload["flags"] = dict(flags)
         if isinstance(player_entry, dict) and player_entry.get("bbox"):
@@ -498,6 +544,10 @@ class SceneAgent:
         elif msg.topic == SIMPLE_OCR_TOPIC:
             raw = data.get("text") if isinstance(data, dict) else data
             self.state["simple_text"] = (str(raw) if raw is not None else "").strip()
+        elif VISION_PROMPT_TOPIC and msg.topic == VISION_PROMPT_TOPIC:
+            if isinstance(data, dict) and isinstance(data.get("scores"), dict):
+                self.state["prompt_scores"] = data["scores"]
+                self.state["prompt_ts"] = float(data.get("timestamp") or time.time())
         elif msg.topic == VISION_EMBEDDINGS_TOPIC:
             publish_now = False
             if isinstance(data, dict):

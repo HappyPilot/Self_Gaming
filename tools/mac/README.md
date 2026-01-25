@@ -76,6 +76,9 @@ INPUT_IDENTITY_TOPIC=game/identity
 INPUT_IDENTITY_PUBLISH_SEC=5.0
 ```
 
+The identity payload includes `app_name`, `window_title`, and `bundle_id`, so the
+Jetson-side `game_identity_agent` can derive a game_id without OCR.
+
 ## MQTT control (optional)
 
 ```bash

@@ -146,6 +146,23 @@ export EMBED_FEATURE_DIM=128
 export EMBED_FEATURE_SOURCE_DIM=768
 ```
 
+## Zero-shot Prompt Scoring (SigLIP2)
+
+`siglip_prompt_agent.py` runs a lightweight text-image similarity pass on preview frames and publishes `vision/prompt_scores`.
+`scene_agent` attaches the score map to `scene/state` and appends top prompt tags as `prompt_<label>` tokens in `text`, so
+both the teacher and policy can react without relying on OCR/YOLO.
+
+Suggested defaults:
+
+```bash
+export SIGLIP_PROMPTS="enemy,boss,npc,player,loot,chest,portal,waypoint,minimap,inventory,quest,dialog,health bar,mana bar,death screen,loading screen,pause menu"
+export SIGLIP_PROMPT_DEVICE=cpu
+export SIGLIP_PROMPT_INTERVAL_SEC=2.0
+export VISION_PROMPT_TOPIC=vision/prompt_scores
+```
+
+Tune `PROMPT_TAG_MIN_SCORE` / `PROMPT_TAG_TOP_K` to adjust how many tags are injected into `scene/state`.
+
 ## Embedding Guard (In-Game Gate)
 
 `embedding_guard_agent.py` listens to `vision/embeddings`, compares them to stored centroids, and publishes `scene/flags` with `in_game=true/false`. This gates actions and teacher updates when the screen is not in-game.
