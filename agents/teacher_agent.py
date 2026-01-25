@@ -63,6 +63,7 @@ TEACHER_CONTEXT_SCOPE_FALLBACK = os.getenv("TEACHER_CONTEXT_SCOPE_FALLBACK", "ge
 TEACHER_CONTEXT_DIFF_JACCARD, TEACHER_CONTEXT_DIFF_MIN_CHARS = float(os.getenv("TEACHER_CONTEXT_DIFF_JACCARD", "0.4")), int(os.getenv("TEACHER_CONTEXT_DIFF_MIN_CHARS", "48"))
 TEACHER_PROMPT_TOP_K = int(os.getenv("TEACHER_PROMPT_TOP_K", "5"))
 TEACHER_PROMPT_MIN_SCORE = float(os.getenv("TEACHER_PROMPT_MIN_SCORE", "0.02"))
+TEACHER_PROMPT_ALLOW = {item.strip().lower() for item in os.getenv("TEACHER_PROMPT_ALLOW", "").split(",") if item.strip()}
 TEACHER_REQUIRE_IN_GAME = os.getenv("TEACHER_REQUIRE_IN_GAME", "0") != "0"
 TEACHER_REQUIRE_IN_GAME_STRICT = os.getenv("TEACHER_REQUIRE_IN_GAME_STRICT", "0") != "0"
 TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
@@ -336,8 +337,11 @@ class TeacherAgent:
             if score < TEACHER_PROMPT_MIN_SCORE:
                 continue
             name = str(label).strip().lower()
-            if name:
-                items.append((name, score))
+            if not name:
+                continue
+            if TEACHER_PROMPT_ALLOW and name not in TEACHER_PROMPT_ALLOW:
+                continue
+            items.append((name, score))
         if not items:
             return ""
         items.sort(key=lambda pair: pair[1], reverse=True)
