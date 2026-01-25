@@ -138,6 +138,8 @@ class BaseChatClient:
                 "content": (
                     "Propose one safe, concrete next action. "
                     "Use only controls listed in the scene summary under Controls. "
+                    "If you suggest a key press, write it explicitly (example: 'press q' or 'press 1'). "
+                    "When enemies are present and skill keys exist, prefer a skill key over repeated clicks. "
                     "If you include coordinates, use normalized 0..1."
                 ),
             },
@@ -415,6 +417,9 @@ class TeacherAgent:
         prompt_signals = self._format_prompt_signals(scene)
         if prompt_signals:
             parts.append(f"Prompt signals: {prompt_signals}")
+        enemies = scene.get("enemies") or []
+        if isinstance(enemies, list) and enemies:
+            parts.append(f"Enemies detected: {len(enemies)}")
         if rules:
             rules_text = "\n".join(f"- {rule.get('text')}" for rule in rules)
             parts.append(f"Rules:\n{rules_text}")
