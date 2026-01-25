@@ -81,6 +81,27 @@ GAME_IDENTITY_TOPIC = os.getenv("GAME_IDENTITY_TOPIC", "game/identity")
 IDENTITY_WAIT_SEC = float(os.getenv("ONBOARD_IDENTITY_WAIT_SEC", "2.0"))
 PROMPT_MIN_LEN = int(os.getenv("ONBOARD_PROMPT_MIN_LEN", "2"))
 PROMPT_MAX = int(os.getenv("ONBOARD_PROMPT_MAX", "18"))
+PROMPT_FALLBACK_ENABLED = os.getenv("ONBOARD_PROMPT_FALLBACK", "1") != "0"
+
+DEFAULT_PROMPT_FALLBACK = [
+    "enemy",
+    "boss",
+    "player",
+    "npc",
+    "loot",
+    "chest",
+    "portal",
+    "waypoint",
+    "minimap",
+    "inventory",
+    "quest",
+    "dialog",
+    "health bar",
+    "mana bar",
+    "death screen",
+    "loading screen",
+    "pause menu",
+]
 
 def _as_int(code) -> int:
     try:
@@ -600,7 +621,20 @@ class GameOnboardingAgent:
                         len(prompt_profile.get("ui_prompts") or []),
                     )
                 else:
-                    logger.warning("Prompt profile unavailable status=%s", status)
+                    if PROMPT_FALLBACK_ENABLED:
+                        fallback = {
+                            "game_id": self.game_id,
+                            "prompts": list(DEFAULT_PROMPT_FALLBACK),
+                            "object_prompts": ["enemy", "boss", "player", "npc", "loot", "chest", "portal", "waypoint"],
+                            "ui_prompts": ["inventory", "minimap", "quest", "dialog", "health bar", "mana bar", "death screen", "loading screen", "pause menu"],
+                            "confidence": 0.0,
+                        }
+                        self.prompt_profile = fallback
+                        self.prompt_status = f"{status}_fallback"
+                        self._publish_prompt_config(fallback)
+                        logger.warning("Prompt profile unavailable status=%s; published fallback prompts", status)
+                    else:
+                        logger.warning("Prompt profile unavailable status=%s", status)
             self._build_schema(layout)
         finally:
             self.client.loop_stop()
