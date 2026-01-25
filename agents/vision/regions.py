@@ -15,7 +15,7 @@ TEXT_REGIONS: Dict[str, RegionBox] = {
     "chat_log": (0.00, 0.70, 0.35, 0.98),
     "top_center_info": (0.30, 0.00, 0.70, 0.08),
     "tooltip_area": (0.50, 0.35, 0.95, 0.75),
-    "death_dialog": (0.42, 0.58, 0.58, 0.76),
+    "death_dialog": (0.30, 0.20, 0.70, 0.58),
 }
 
 

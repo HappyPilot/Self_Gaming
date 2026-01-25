@@ -70,6 +70,7 @@ TEACHER_REQUIRE_IN_GAME = os.getenv("TEACHER_REQUIRE_IN_GAME", "0") != "0"
 TEACHER_REQUIRE_IN_GAME_STRICT = os.getenv("TEACHER_REQUIRE_IN_GAME_STRICT", "0") != "0"
 TEACHER_ALLOW_OCR_GAME_ID = os.getenv("TEACHER_ALLOW_OCR_GAME_ID", "0") != "0"
 TEACHER_ACTION_JSON = os.getenv("TEACHER_ACTION_JSON", "1") != "0"
+TEACHER_DIALOG_SCORE_MIN = float(os.getenv("TEACHER_DIALOG_SCORE_MIN", "0.01"))
 TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
 TEACHER_RESPAWN_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_RESPAWN_KEYWORDS", "resurrect,resurrect at checkpoint,respawn,revive").split(",") if item.strip()}
 TEACHER_DEATH_SCOPES = {item.strip().lower() for item in os.getenv("TEACHER_DEATH_SCOPES", "death_dialog,critical_dialog:death").split(",") if item.strip()}
@@ -112,6 +113,53 @@ def _normalize_game_id(value: str) -> str:
     lowered = str(value).strip().lower()
     slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
     return slug or "unknown_game"
+
+def _normalize_keyword_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
+
+def _scene_has_respawn_text(scene: dict) -> bool:
+    if not scene:
+        return False
+    candidates = []
+    text_field = scene.get("text")
+    if isinstance(text_field, list):
+        candidates.extend([str(item) for item in text_field if item])
+    elif isinstance(text_field, str):
+        candidates.append(text_field)
+    zones = scene.get("text_zones") or {}
+    if isinstance(zones, dict):
+        for zone in zones.values():
+            if isinstance(zone, dict) and zone.get("text"):
+                candidates.append(str(zone.get("text")))
+    for key in ("ocr", "simple_ocr"):
+        payload = scene.get(key)
+        if isinstance(payload, dict) and payload.get("text"):
+            candidates.append(str(payload.get("text")))
+        elif isinstance(payload, str):
+            candidates.append(payload)
+    if not candidates:
+        return False
+    for raw in candidates:
+        cleaned = _normalize_keyword_text(raw)
+        if not cleaned:
+            continue
+        for keyword in TEACHER_RESPAWN_KEYWORDS:
+            if keyword and keyword in cleaned:
+                return True
+    return False
+
+def _scene_has_dialog_hint(scene: dict) -> bool:
+    if not scene:
+        return False
+    flags = scene.get("flags") or {}
+    if flags.get("death"):
+        return True
+    scores = scene.get("prompt_scores") or {}
+    try:
+        score = float(scores.get("dialog", 0) or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    return score >= TEACHER_DIALOG_SCORE_MIN
 
 def _strip_code_fences(text: str) -> str:
     stripped = text.strip()
@@ -247,6 +295,7 @@ class BaseChatClient:
                     "Propose one safe, concrete next action. "
                     "Use only controls listed in the scene summary under Controls. "
                     "When enemies are present and skill keys exist, you MUST choose a key_press action. "
+                    "If a respawn/death dialog is visible, choose click_primary on the respawn button. "
                     "Return ONLY valid JSON with this schema:\n"
                     "{\n"
                     "  \"action\": {\n"
@@ -688,12 +737,17 @@ class TeacherAgent:
             except (TypeError, ValueError):
                 enemy_count = 0
             has_enemies = bool(enemies) or enemy_count > 0
-            if has_enemies and action_obj and action_obj.get("label") != "key_press":
+            respawn_hint = _scene_has_respawn_text(scene)
+            dialog_hint = respawn_hint or _scene_has_dialog_hint(scene)
+            if has_enemies and action_obj and action_obj.get("label") != "key_press" and not dialog_hint:
                 logger.info("Teacher rejected non-key action while enemies present: %s", action_obj.get("label"))
                 return
-            if has_enemies and not action_obj:
+            if has_enemies and not action_obj and not dialog_hint:
                 logger.info("Teacher rejected unstructured action while enemies present")
                 return
+            if respawn_hint and action_obj and action_obj.get("label") != "click_primary":
+                logger.info("Teacher overriding action to respawn click")
+                action_obj = {"label": "click_primary", "target_label": "respawn"}
 
             payload = {
                 "ok": True,
