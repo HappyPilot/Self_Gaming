@@ -105,6 +105,13 @@ TEACHER_RESPAWN_SKELETON_THRESHOLD=0.72
 SCENE_DEATH_SKELETON_THRESHOLD=0.72
 ```
 
+## OCR quality report tool
+Use the probe script to sample OCR output and save frames for review:
+```bash
+python3 agents/tools/ocr_quality_report.py --samples 30 --interval 2 --request --save-frames
+```
+It writes JSONL to `logs/ocr_report/ocr_report.jsonl` and saves frames alongside.
+
 ## Policy targeting overrides
 Use these when the policy gets stuck on generic mouse_move actions:
 ```bash

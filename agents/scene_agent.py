@@ -634,8 +634,36 @@ class SceneAgent:
             else:
                 self.state["easy_text"] = str(data).strip()
         elif msg.topic == SIMPLE_OCR_TOPIC:
-            raw = data.get("text") if isinstance(data, dict) else data
-            self.state["simple_text"] = (str(raw) if raw is not None else "").strip()
+            if isinstance(data, dict):
+                items = data.get("items") or []
+                texts = []
+                zones = {}
+                for idx, item in enumerate(items):
+                    text = str(item.get("text") or "").strip()
+                    if not text:
+                        continue
+                    texts.append(text)
+                    box = item.get("box")
+                    if isinstance(box, (list, tuple)) and len(box) == 4:
+                        key = f"simple_{idx}_{text[:10]}"
+                        zones[key] = {"text": text, "bbox": box, "confidence": item.get("conf")}
+                if texts:
+                    self.state["simple_text"] = "\n".join(texts)
+                    if zones:
+                        merged = dict(self.state.get("text_zones") or {})
+                        merged.update(zones)
+                        self.state["text_zones"] = merged
+                        tokens = []
+                        for zone in zones.values():
+                            normalized = _normalize_target_text(str(zone.get("text") or ""))
+                            if normalized:
+                                tokens.append(normalized)
+                        self._update_ocr_stability(tokens)
+                else:
+                    self.state["simple_text"] = ""
+            else:
+                raw = data
+                self.state["simple_text"] = (str(raw) if raw is not None else "").strip()
         elif VISION_PROMPT_TOPIC and msg.topic == VISION_PROMPT_TOPIC:
             if isinstance(data, dict) and isinstance(data.get("scores"), dict):
                 self.state["prompt_scores"] = data["scores"]
