@@ -40,6 +40,10 @@ CURIOSITY_PRED_TIMEOUT = float(os.getenv("CURIOSITY_PRED_TIMEOUT_SEC", "30"))
 CURIOSITY_EMBED_WEIGHT = float(os.getenv("CURIOSITY_EMBED_WEIGHT", "0.08"))
 CURIOSITY_EMBED_SCALE = float(os.getenv("CURIOSITY_EMBED_SCALE", "1.0"))
 CURIOSITY_EMBED_MAX = float(os.getenv("CURIOSITY_EMBED_MAX", "0.15"))
+CURIOSITY_LOCATION_WEIGHT = float(os.getenv("CURIOSITY_LOCATION_WEIGHT", "0.12"))
+CURIOSITY_OBJECT_WEIGHT = float(os.getenv("CURIOSITY_OBJECT_WEIGHT", "0.08"))
+CURIOSITY_OCR_WEIGHT = float(os.getenv("CURIOSITY_OCR_WEIGHT", "0.05"))
+CURIOSITY_PROGRESS_MAX = float(os.getenv("CURIOSITY_PROGRESS_MAX", "0.2"))
 
 # ... (rest of constants and imports unchanged) ...
 
@@ -221,6 +225,9 @@ class RewardManager:
         self.last_pred_ts = 0.0
         self.last_embed_delta = None
         self.last_embed_ts = 0.0
+        self.last_location_new_rate = None
+        self.last_object_new_rate = None
+        self.last_ocr_new_rate = None
         self.death_active = False
         self.death_entered = 0.0
 
@@ -271,6 +278,21 @@ class RewardManager:
                     if isinstance(delta, (int, float)):
                         self.last_embed_delta = float(delta)
                         self.last_embed_ts = time.time()
+                    locations = understanding.get("locations") or {}
+                    if isinstance(locations, dict):
+                        loc_new = locations.get("new_rate")
+                        if isinstance(loc_new, (int, float)):
+                            self.last_location_new_rate = float(loc_new)
+                    objects = understanding.get("objects") or {}
+                    if isinstance(objects, dict):
+                        obj_new = objects.get("new_rate")
+                        if isinstance(obj_new, (int, float)):
+                            self.last_object_new_rate = float(obj_new)
+                    ocr = understanding.get("ocr") or {}
+                    if isinstance(ocr, dict):
+                        ocr_new = ocr.get("new_rate")
+                        if isinstance(ocr_new, (int, float)):
+                            self.last_ocr_new_rate = float(ocr_new)
             except Exception:
                 pass
         self.publish_reward()
@@ -293,6 +315,18 @@ class RewardManager:
             capped = min(CURIOSITY_EMBED_MAX, max(0.0, scaled))
             intrinsic_reward = capped * CURIOSITY_EMBED_WEIGHT
             curiosity_source = "embedding"
+        elif CURIOSITY_MODE in {"progress", "auto"}:
+            loc = self.last_location_new_rate or 0.0
+            obj = self.last_object_new_rate or 0.0
+            ocr = self.last_ocr_new_rate or 0.0
+            novelty = (
+                loc * CURIOSITY_LOCATION_WEIGHT
+                + obj * CURIOSITY_OBJECT_WEIGHT
+                + ocr * CURIOSITY_OCR_WEIGHT
+            )
+            if novelty > 0:
+                intrinsic_reward = min(CURIOSITY_PROGRESS_MAX, novelty)
+                curiosity_source = "progress"
         reward += intrinsic_reward
         components["curiosity"] = round(intrinsic_reward, 4)
         components["curiosity_source"] = curiosity_source
