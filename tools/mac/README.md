@@ -17,6 +17,21 @@ Open the control panel:
 - paho-mqtt
 - pyperclip (optional, for paste)
 
+## Restart helper
+Use the helper script to stop the running bridge and relaunch it with
+safe defaults (auto front app + dynamic bounds):
+
+```bash
+./tools/mac/restart_laptop_input.sh
+```
+
+Override the agent path if you use the project helper copy:
+
+```bash
+INPUT_AGENT_PATH=/Users/dima/project_helper/self-gaming/laptop_input_agent.py \
+  ./tools/mac/restart_laptop_input.sh
+```
+
 ## macOS permissions
 Allow the Python binary you use in:
 - System Settings -> Privacy & Security -> Accessibility
