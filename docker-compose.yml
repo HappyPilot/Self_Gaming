@@ -959,7 +959,7 @@ services:
     - VISION_FRAME_TOPIC=vision/frame/preview
     - PERCEPTION_TOPIC=vision/observation
     - YOLO11_WEIGHTS=/mnt/ssd/models/yolo/yolov8s-worldv2.pt
-    - YOLO11_DEVICE=cuda:0
+    - YOLO11_DEVICE=cpu
     - YOLO11_CONF=0.05
     - YOLO11_IMGSZ=320
     - YOLO_MAX_SIZE=320
