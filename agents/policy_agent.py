@@ -56,6 +56,24 @@ def _candidate_chunks(cleaned: str):
             chunks.add(token)
     return list(chunks)
 
+
+def _normalize_skeleton(text: str) -> str:
+    """Reduce OCR noise by comparing consonant skeletons with collapsed repeats."""
+    if not text:
+        return ""
+    filtered = [ch for ch in text.lower() if ch.isalnum()]
+    if not filtered:
+        return ""
+    vowels = set("aeiouy")
+    skeleton = [ch for ch in filtered if ch not in vowels]
+    if not skeleton:
+        return ""
+    deduped = [skeleton[0]]
+    for ch in skeleton[1:]:
+        if ch != deduped[-1]:
+            deduped.append(ch)
+    return "".join(deduped)
+
 logging.basicConfig(level=os.getenv("POLICY_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("policy_agent")
 
@@ -165,6 +183,8 @@ RESPAWN_TARGET_X = float(os.getenv("RESPAWN_TARGET_X", os.getenv("GOAP_DIALOG_BU
 RESPAWN_TARGET_Y = float(os.getenv("RESPAWN_TARGET_Y", os.getenv("GOAP_DIALOG_BUTTON_Y", "0.82")))
 RESPAWN_COOLDOWN = float(os.getenv("RESPAWN_COOLDOWN_SEC", "2.0"))
 RESPAWN_FUZZY_THRESHOLD = float(os.getenv("RESPAWN_FUZZY_THRESHOLD", "0.6"))
+RESPAWN_SKELETON_THRESHOLD = float(os.getenv("RESPAWN_SKELETON_THRESHOLD", "0.72"))
+RESPAWN_SKELETON_MIN_LEN = int(os.getenv("RESPAWN_SKELETON_MIN_LEN", "6"))
 RESPAWN_DEBUG = os.getenv("RESPAWN_DEBUG", "0") != "0"
 RESPAWN_MACRO_MOVE_STEPS = int(os.getenv("RESPAWN_MACRO_MOVE_STEPS", "2"))
 RESPAWN_MACRO_MOVE_DELAY = float(os.getenv("RESPAWN_MACRO_MOVE_DELAY", "0.1"))
@@ -1335,6 +1355,27 @@ class PolicyAgent:
                     )
                 if ratio >= RESPAWN_FUZZY_THRESHOLD:
                     return True
+                if RESPAWN_SKELETON_THRESHOLD > 0:
+                    skeleton_keyword = _normalize_skeleton(keyword)
+                    skeleton_candidate = _normalize_skeleton(candidate)
+                    if (
+                        len(skeleton_keyword) >= RESPAWN_SKELETON_MIN_LEN
+                        and len(skeleton_candidate) >= RESPAWN_SKELETON_MIN_LEN
+                    ):
+                        skeleton_ratio = difflib.SequenceMatcher(
+                            None,
+                            skeleton_keyword,
+                            skeleton_candidate,
+                        ).ratio()
+                        if RESPAWN_DEBUG:
+                            logger.info(
+                                "Respawn skeleton check keyword='%s' candidate='%s' ratio=%.3f",
+                                skeleton_keyword,
+                                skeleton_candidate,
+                                skeleton_ratio,
+                            )
+                        if skeleton_ratio >= RESPAWN_SKELETON_THRESHOLD:
+                            return True
         return False
 
     def _queue_respawn_tasks(self):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Scene agent that fuses raw perception topics into a high-level scene."""
+import difflib
 import json
 import logging
 import os
@@ -53,6 +54,9 @@ OCR_TARGET_STABLE_FRAMES = max(1, int(os.getenv("OCR_TARGET_STABLE_FRAMES", "2")
 OCR_TARGET_CONSECUTIVE_MIN = max(1, int(os.getenv("OCR_TARGET_CONSECUTIVE_MIN", "2")))
 TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
+DEATH_FUZZY_THRESHOLD = float(os.getenv("SCENE_DEATH_FUZZY_THRESHOLD", "0.7"))
+DEATH_SKELETON_THRESHOLD = float(os.getenv("SCENE_DEATH_SKELETON_THRESHOLD", "0.72"))
+DEATH_SKELETON_MIN_LEN = int(os.getenv("SCENE_DEATH_SKELETON_MIN_LEN", "6"))
 DEATH_SYMBOLS = [sym.strip() for sym in os.getenv("SCENE_DEATH_SYMBOLS", "*,†,+,☠").split(",") if sym.strip()]
 DEATH_SYMBOL_LINES = int(os.getenv("SCENE_DEATH_SYMBOL_LINES", "1"))
 DEATH_SYMBOL_PERSIST = float(os.getenv("SCENE_DEATH_SYMBOL_PERSIST", "1.0"))
@@ -116,6 +120,36 @@ def _normalize_target_text(text: str) -> str:
         return ""
     normalized = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.lower())
     return " ".join(normalized.split())
+
+
+def _candidate_chunks(cleaned: str) -> List[str]:
+    if not cleaned:
+        return []
+    chunks = {cleaned}
+    splits = cleaned.split()
+    if len(splits) >= 2:
+        chunks.add(" ".join(splits[:2]))
+        chunks.add(" ".join(splits[:3]))
+    for token in splits:
+        if token:
+            chunks.add(token)
+    return list(chunks)
+
+
+def _normalize_skeleton(text: str) -> str:
+    """Reduce OCR noise by comparing consonant skeletons with collapsed repeats."""
+    filtered = [ch for ch in str(text).lower() if ch.isalnum()]
+    if not filtered:
+        return ""
+    vowels = set("aeiouy")
+    skeleton = [ch for ch in filtered if ch not in vowels]
+    if not skeleton:
+        return ""
+    deduped = [skeleton[0]]
+    for ch in skeleton[1:]:
+        if ch != deduped[-1]:
+            deduped.append(ch)
+    return "".join(deduped)
 
 
 def _normalize_xyxy(
@@ -307,6 +341,45 @@ class SceneAgent:
                 return True
         return False
 
+    def _text_has_death_keyword(self, text_payload: List[str]) -> bool:
+        if not text_payload:
+            return False
+        normalized_entries = []
+        for entry in text_payload:
+            cleaned = _normalize_target_text(str(entry))
+            if cleaned:
+                normalized_entries.append(cleaned)
+        if not normalized_entries:
+            return False
+        lower_text = " ".join(normalized_entries)
+        if lower_text and any(kw in lower_text for kw in DEATH_KEYWORDS):
+            return True
+        if DEATH_FUZZY_THRESHOLD <= 0 and DEATH_SKELETON_THRESHOLD <= 0:
+            return False
+        for cleaned in normalized_entries:
+            for candidate in _candidate_chunks(cleaned):
+                for keyword in DEATH_KEYWORDS:
+                    if not keyword:
+                        continue
+                    ratio = difflib.SequenceMatcher(None, keyword, candidate).ratio()
+                    if ratio >= DEATH_FUZZY_THRESHOLD:
+                        return True
+                    if DEATH_SKELETON_THRESHOLD > 0:
+                        keyword_skeleton = _normalize_skeleton(keyword)
+                        candidate_skeleton = _normalize_skeleton(candidate)
+                        if (
+                            len(keyword_skeleton) >= DEATH_SKELETON_MIN_LEN
+                            and len(candidate_skeleton) >= DEATH_SKELETON_MIN_LEN
+                        ):
+                            skeleton_ratio = difflib.SequenceMatcher(
+                                None,
+                                keyword_skeleton,
+                                candidate_skeleton,
+                            ).ratio()
+                            if skeleton_ratio >= DEATH_SKELETON_THRESHOLD:
+                                return True
+        return False
+
     def _normalize_bbox(self, bbox):
         if not bbox or len(bbox) != 4: return None
         return [round(float(c), 4) for c in bbox]
@@ -448,8 +521,7 @@ class SceneAgent:
             targets.append({"label": text, "zone": name, "bbox": norm_bbox, "center": [round((norm_bbox[0] + norm_bbox[2]) / 2.0, 4), round((norm_bbox[1] + norm_bbox[3]) / 2.0, 4)]})
             seen_targets.add(normalized)
         if targets: payload["targets"] = targets
-        lower_text = " ".join(text_payload).lower()
-        if (lower_text and any(kw in lower_text for kw in DEATH_KEYWORDS)) or self._object_matches(objects):
+        if self._text_has_death_keyword(text_payload) or self._object_matches(objects):
             flags["death"] = True
             payload["flags"], payload["death_reason"] = flags, "text_or_object_match"
         elif text_payload and self._symbolic_text_only(text_payload) and payload.get("mean") <= DEATH_SYMBOL_MEAN_THRESHOLD and len(objects) <= DEATH_OBJECT_THRESHOLD:

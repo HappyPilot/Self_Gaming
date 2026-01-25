@@ -87,6 +87,24 @@ ONBOARD_REQUEST_LLM_PROMPTS=1
 `OCR_LANGS` defaults to `en` to reduce OCR latency and false positives.
 Enable more languages by overriding `OCR_LANGS` in your local env file.
 
+## OCR quality tuning (full frames + snapshot bypass)
+For higher-fidelity OCR on small UI text, switch OCR to full-resolution frames and skip snapshots:
+```bash
+OCR_FRAME_TOPIC=vision/frame/full
+OCR_PREFER_SNAPSHOT=0
+OCR_MAX_BASE_WIDTH=1280
+```
+`OCR_MAX_BASE_WIDTH=0` disables downscaling entirely (use with care on Jetson CPU).
+
+## OCR fuzzy matching for death/respawn dialogs
+If OCR is noisy, enable skeleton matching so "resurrect at checkpoint" still matches:
+```bash
+RESPAWN_SKELETON_THRESHOLD=0.72
+RESPAWN_SKELETON_MIN_LEN=6
+TEACHER_RESPAWN_SKELETON_THRESHOLD=0.72
+SCENE_DEATH_SKELETON_THRESHOLD=0.72
+```
+
 ## Policy targeting overrides
 Use these when the policy gets stuck on generic mouse_move actions:
 ```bash

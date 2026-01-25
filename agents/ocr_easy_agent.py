@@ -57,7 +57,8 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 OCR_CLIENT_ID = os.getenv("OCR_CLIENT_ID")
 VISION_CMD = os.getenv("VISION_CMD", "vision/cmd")
 VISION_SNAPSHOT = os.getenv("VISION_SNAPSHOT", "vision/snapshot")
-VISION_FRAME = os.getenv("VISION_FRAME", os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview"))
+OCR_FRAME_TOPIC = os.getenv("OCR_FRAME_TOPIC", "").strip()
+VISION_FRAME = os.getenv("VISION_FRAME", OCR_FRAME_TOPIC or os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview"))
 OCR_CMD = os.getenv("OCR_CMD", "ocr_easy/cmd")
 OCR_TEXT = os.getenv("OCR_TEXT", "ocr_easy/text")
 OCR_LANGS = [lang.strip() for lang in os.getenv("OCR_LANGS", "en,ru").split(",") if lang.strip()]
@@ -76,6 +77,7 @@ MIN_ALPHA_RATIO = float(os.getenv("OCR_MIN_ALPHA_RATIO", "0.35"))
 MAX_LINE_LENGTH = int(os.getenv("OCR_MAX_LINE_CHARS", "160"))
 VARIANT_THRESHOLD = os.getenv("OCR_VARIANT_THRESHOLD", "adaptive")
 MAX_RESULTS = int(os.getenv("OCR_MAX_RESULTS", "12"))
+PREFER_SNAPSHOT = os.getenv("OCR_PREFER_SNAPSHOT", "1") != "0"
 
 # Frame hash gating (skip OCR on unchanged frames)
 HASH_ENABLE = os.getenv("OCR_HASH_ENABLE", "1") == "1"
@@ -178,7 +180,12 @@ class OcrEasyAgent:
     def _on_connect(self, client, userdata, flags, rc):
         if _as_int(rc) == 0:
             client.subscribe([(VISION_SNAPSHOT, 0), (VISION_FRAME, 0), (OCR_CMD, 0)])
-            client.publish(OCR_TEXT, json.dumps({"ok": True, "event": "connected", "gpu": self.gpu, "listen": [VISION_SNAPSHOT, OCR_CMD]}))
+            client.publish(
+                OCR_TEXT,
+                json.dumps(
+                    {"ok": True, "event": "connected", "gpu": self.gpu, "listen": [VISION_SNAPSHOT, VISION_FRAME, OCR_CMD]}
+                ),
+            )
             logger.info("Connected to MQTT")
         else:
             logger.error("Connect failed rc=%s", _as_int(rc))
@@ -339,10 +346,13 @@ class OcrEasyAgent:
             self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": self.init_error or "ocr_not_ready"}))
             return
         timeout = float(payload.get("timeout", AUTO_TIMEOUT))
-        source, jpeg = "snapshot", self._request_snapshot(timeout)
+        source, jpeg = "frame", None
+        if PREFER_SNAPSHOT:
+            source, jpeg = "snapshot", self._request_snapshot(timeout)
         if jpeg is None:
-            source, jpeg = "frame", None
-            with self.frame_lock: jpeg = self.frame_data
+            source = "frame"
+            with self.frame_lock:
+                jpeg = self.frame_data
             if jpeg is None:
                 self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": "no_frame", "timeout": timeout}))
                 return
