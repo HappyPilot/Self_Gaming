@@ -63,6 +63,8 @@ ENEMY_KEYWORDS = {label.strip().lower() for label in os.getenv("SCENE_ENEMY_KEYW
 RESOURCE_KEYWORDS = {"life": ["life", "hp", "health"], "mana": ["mana", "mp"]}
 ALLOW_GENERIC_PLAYER = os.getenv("SCENE_GENERIC_PLAYER", "1") != "0"
 ALLOW_GENERIC_ENEMIES = os.getenv("SCENE_GENERIC_ENEMIES", "1") != "0"
+GENERIC_ENEMY_LABELS = {label.strip().lower() for label in os.getenv("SCENE_GENERIC_ENEMY_LABELS", "person,character,npc").split(",") if label.strip()}
+GENERIC_ENEMY_EXCLUDE_RADIUS = float(os.getenv("SCENE_GENERIC_ENEMY_EXCLUDE_RADIUS", "0.08"))
 SLA_STAGE_FUSE_MS = get_sla_ms("SLA_STAGE_FUSE_MS")
 
 stop_event = threading.Event()
@@ -325,14 +327,32 @@ class SceneAgent:
                 fallback_score, fallback = dist, {"label": obj.get("label"), "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)}
         return best or fallback
 
-    def _extract_enemies(self, objects):
+    def _extract_enemies(self, objects, player_entry=None):
         matches = []
+        player_center = None
+        if isinstance(player_entry, dict) and player_entry.get("bbox"):
+            try:
+                pb = player_entry["bbox"]
+                player_center = ((pb[0] + pb[2]) / 2.0, (pb[1] + pb[3]) / 2.0)
+            except Exception:
+                player_center = None
         for obj in objects:
             bbox = obj.get("bbox") or obj.get("box")
             if not bbox: continue
             label = str(obj.get("label") or "").lower()
             if not ENEMY_KEYWORDS or any(keyword in label for keyword in ENEMY_KEYWORDS):
                 matches.append({"label": obj.get("label"), "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)})
+                continue
+            if ALLOW_GENERIC_ENEMIES and label in GENERIC_ENEMY_LABELS:
+                if player_center:
+                    try:
+                        cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+                        dist = (cx - player_center[0]) ** 2 + (cy - player_center[1]) ** 2
+                        if dist <= (GENERIC_ENEMY_EXCLUDE_RADIUS ** 2):
+                            continue
+                    except Exception:
+                        pass
+                matches.append({"label": obj.get("label") or "enemy", "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)})
         return matches[:5]
 
     def _extract_resources(self, text_zones: Dict[str, Dict[str, object]]):
@@ -396,7 +416,7 @@ class SceneAgent:
         if not player_entry: player_entry = self._extract_player(objects)
         if not player_entry and objects: player_entry = {"label": objects[0].get("label") or "player", "confidence": objects[0].get("confidence"), "bbox": self._normalize_bbox(objects[0].get("bbox") or objects[0].get("box"))}
         if not player_entry: player_entry = self.state.get("player_candidate") or {"label": "player_estimate", "confidence": 0.05, "bbox": [0.35, 0.35, 0.65, 0.85]}
-        enemies = self._extract_enemies(objects)
+        enemies = self._extract_enemies(objects, player_entry)
         resources = self._extract_resources(text_zones) or self._extract_resources({"aggregate": {"text": "\n".join(text_payload)}})
         flags = dict(self.state.get("flags") or {})
         payload = {"ok": True, "event": "scene_update", "mean": self.state["mean"][-1], "trend": list(self.state["mean"]),
