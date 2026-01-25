@@ -157,6 +157,7 @@ POLICY_RANDOM_FALLBACK = os.getenv("POLICY_RANDOM_FALLBACK", "1") != "0"
 POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
 POLICY_ENEMY_SKILL_SUBSTITUTE = os.getenv("POLICY_ENEMY_SKILL_SUBSTITUTE", "1") != "0"
 POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
+POLICY_DIALOG_SCORE_MIN = float(os.getenv("POLICY_DIALOG_SCORE_MIN", "0.01"))
 RESPAWN_TEXTS = _parse_env_list(
     os.getenv("RESPAWN_TRIGGER_TEXTS", "resurrect at checkpoint,resurrect in town,resurrect")
 )
@@ -1945,7 +1946,12 @@ class PolicyAgent:
                 )
                 return {"label": "wait"}
 
-            if label == "click_primary" and POLICY_ENEMY_SKILL_SUBSTITUTE and self._enemies_present():
+            if (
+                label == "click_primary"
+                and POLICY_ENEMY_SKILL_SUBSTITUTE
+                and self._enemies_present()
+                and not self._scene_dialog_present()
+            ):
                 skill_key = self._choose_skill_key()
                 if skill_key:
                     logger.info("Enemy present -> substituting click_primary with key_press %s", skill_key)
@@ -2128,6 +2134,20 @@ class PolicyAgent:
             if key in self.profile_allowed_keys:
                 return key
         return None
+
+    def _scene_dialog_present(self) -> bool:
+        state = self.latest_state or {}
+        flags = state.get("flags") or {}
+        if flags.get("death"):
+            return True
+        if self._latest_scene_has_respawn_text():
+            return True
+        scores = state.get("prompt_scores") or {}
+        try:
+            score = float(scores.get("dialog", 0) or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        return score >= POLICY_DIALOG_SCORE_MIN
 
     def _teacher_key_from_text(self, text: str) -> Optional[str]:
         patterns = [
