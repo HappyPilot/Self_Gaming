@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 from control_profile import load_profile, safe_profile, upsert_profile
-from llm_client import fetch_control_profile, guess_game_id
+from llm_client import fetch_control_profile, fetch_visual_prompts, guess_game_id
 from utils.frame_transport import get_frame_bytes
 
 logging.basicConfig(level=os.getenv("ONBOARD_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -31,6 +31,7 @@ CURSOR_TOPIC = os.getenv("CURSOR_TOPIC", "cursor/state")
 ACT_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
 SCHEMA_TOPIC = os.getenv("GAME_SCHEMA_TOPIC", "game/schema")
 MEM_STORE_TOPIC = os.getenv("MEM_STORE_TOPIC", "mem/store")
+PROMPT_CONFIG_TOPIC = os.getenv("VISION_PROMPT_CONFIG_TOPIC", "vision/prompts")
 
 PHASE_A_SECONDS = float(os.getenv("ONBOARD_PHASE_A_SEC", "6.0"))
 CONTROL_SETTLE_SEC = float(os.getenv("ONBOARD_CONTROL_SETTLE", "1.0"))
@@ -68,6 +69,7 @@ stop_event = threading.Event()
 PROBE_WITHOUT_PROFILE = os.getenv("ONBOARD_PROBE_WITHOUT_PROFILE", "0") != "0"
 REQUEST_LLM_PROFILE = os.getenv("ONBOARD_REQUEST_LLM_PROFILE", "1") != "0"
 REQUEST_LLM_GAME_ID = os.getenv("ONBOARD_REQUEST_LLM_GAME_ID", "1") != "0"
+REQUEST_LLM_PROMPTS = os.getenv("ONBOARD_REQUEST_LLM_PROMPTS", "1") != "0"
 LLM_CONF_MIN_KEYS = int(os.getenv("LLM_CONF_MIN_KEYS", "1"))
 DISABLE_PROBES = os.getenv("ONBOARD_DISABLE_PROBES", "1") == "1"
 SAFE_KEY_BLACKLIST = {k.strip().lower() for k in os.getenv("ONBOARD_SAFE_KEY_BLACKLIST", "m,tab,i,esc").split(",") if k.strip()}
@@ -77,6 +79,8 @@ EXTENDED_PROBE = os.getenv("ONBOARD_EXTENDED_PROBE", "1") != "0"
 GAME_ID_OVERRIDE = os.getenv("ONBOARD_GAME_ID_OVERRIDE", "").strip()
 GAME_IDENTITY_TOPIC = os.getenv("GAME_IDENTITY_TOPIC", "game/identity")
 IDENTITY_WAIT_SEC = float(os.getenv("ONBOARD_IDENTITY_WAIT_SEC", "2.0"))
+PROMPT_MIN_LEN = int(os.getenv("ONBOARD_PROMPT_MIN_LEN", "2"))
+PROMPT_MAX = int(os.getenv("ONBOARD_PROMPT_MAX", "18"))
 
 def _as_int(code) -> int:
     try:
@@ -115,6 +119,22 @@ def _dedupe_keys(keys: List[str]) -> List[str]:
         ordered.append(key)
     return ordered
 
+
+def _normalize_prompts(values: List[str]) -> List[str]:
+    cleaned: List[str] = []
+    seen = set()
+    for value in values:
+        token = str(value).strip().lower()
+        if not token or len(token) < PROMPT_MIN_LEN:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        cleaned.append(token)
+        if PROMPT_MAX and len(cleaned) >= PROMPT_MAX:
+            break
+    return cleaned
+
 @dataclass
 class FrameRecord:
     timestamp: float
@@ -151,6 +171,8 @@ class GameOnboardingAgent:
         self.game_id: str = "unknown_game"
         self.llm_status: str = "not_requested"
         self.identity_game_id: Optional[str] = None
+        self.prompt_profile: Dict[str, object] = {}
+        self.prompt_status: str = "not_requested"
 
     # MQTT wiring -------------------------------------------------------------
     def _on_connect(self, client, _userdata, _flags, rc):
@@ -430,6 +452,22 @@ class GameOnboardingAgent:
         }
         logger.info("Schema summary: %s", summary)
 
+    def _publish_prompt_config(self, prompt_profile: Dict[str, object]) -> None:
+        if not PROMPT_CONFIG_TOPIC:
+            return
+        payload = {
+            "ok": True,
+            "timestamp": time.time(),
+            "game_id": self.game_id,
+            "source": "onboarding",
+            "prompts": _normalize_prompts(prompt_profile.get("prompts") or []),
+            "object_prompts": _normalize_prompts(prompt_profile.get("object_prompts") or []),
+            "ui_prompts": _normalize_prompts(prompt_profile.get("ui_prompts") or []),
+            "confidence": prompt_profile.get("confidence"),
+            "status": self.prompt_status,
+        }
+        self.client.publish(PROMPT_CONFIG_TOPIC, json.dumps(payload))
+
     # Main -------------------------------------------------------------------
     def run(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
@@ -547,6 +585,22 @@ class GameOnboardingAgent:
                     self.profile["allowed_keys_extended_verified"] = verified
             upsert_profile(self.profile)
             if stop_event.is_set(): return
+            if REQUEST_LLM_PROMPTS:
+                prompt_profile, status = fetch_visual_prompts(self.game_id, texts)
+                self.prompt_status = status
+                if prompt_profile:
+                    prompt_profile["game_id"] = self.game_id
+                    self.prompt_profile = prompt_profile
+                    self._publish_prompt_config(prompt_profile)
+                    logger.info(
+                        "Prompt profile published status=%s prompts=%s objects=%s ui=%s",
+                        status,
+                        len(prompt_profile.get("prompts") or []),
+                        len(prompt_profile.get("object_prompts") or []),
+                        len(prompt_profile.get("ui_prompts") or []),
+                    )
+                else:
+                    logger.warning("Prompt profile unavailable status=%s", status)
             self._build_schema(layout)
         finally:
             self.client.loop_stop()

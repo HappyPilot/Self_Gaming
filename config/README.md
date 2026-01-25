@@ -74,6 +74,15 @@ LLM_QUEUE_UPSTREAM=http://10.0.0.230:11434/v1/chat/completions
 ```
 Start the queue service with Docker Compose (`llm_queue`).
 
+## Vision prompt hints (LLM -> SigLIP/YOLO)
+When onboarding runs, it can ask the LLM for a small prompt list and publish it:
+```bash
+VISION_PROMPT_CONFIG_TOPIC=vision/prompts
+ONBOARD_REQUEST_LLM_PROMPTS=1
+```
+`siglip_prompt_agent` will update its prompt set from `vision/prompts`. If
+`YOLO_DYNAMIC_PROMPTS=1`, the perception agent will refresh YOLO-World classes using those prompts.
+
 ## OCR language defaults
 `OCR_LANGS` defaults to `en` to reduce OCR latency and false positives.
 Enable more languages by overriding `OCR_LANGS` in your local env file.

@@ -36,6 +36,7 @@ MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
 PROMPT_TOPIC = os.getenv("VISION_PROMPT_TOPIC", "vision/prompt_scores")
+PROMPT_CONFIG_TOPIC = os.getenv("VISION_PROMPT_CONFIG_TOPIC", "")
 
 MODEL_ID = os.getenv("SIGLIP_PROMPT_MODEL_ID", "google/siglip2-base-patch16-224").strip()
 PROMPTS_RAW = os.getenv(
@@ -52,9 +53,15 @@ TOP_K = int(os.getenv("SIGLIP_PROMPT_TOP_K", "5"))
 MIN_SCORE = float(os.getenv("SIGLIP_PROMPT_MIN_SCORE", "0.2"))
 QUEUE_MAX = int(os.getenv("SIGLIP_PROMPT_QUEUE", "2"))
 FRAME_TIMEOUT = float(os.getenv("SIGLIP_PROMPT_FRAME_TIMEOUT", "5.0"))
+PROMPT_MIN_LEN = int(os.getenv("SIGLIP_PROMPT_MIN_LEN", "2"))
+PROMPT_MAX = int(os.getenv("SIGLIP_PROMPT_MAX", "24"))
+PROMPT_CONFIG_INTERVAL_SEC = float(os.getenv("SIGLIP_PROMPT_CONFIG_INTERVAL_SEC", "5.0"))
 
 stop_event = threading.Event()
 frame_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=max(1, QUEUE_MAX))
+prompt_lock = threading.Lock()
+pending_prompts: Optional[List[str]] = None
+last_prompt_config_ts = 0.0
 
 
 def _resolve_device() -> str:
@@ -96,6 +103,12 @@ class SiglipPromptScorer:
             features = self.model.get_text_features(**inputs)
         return F.normalize(features, dim=-1)
 
+    def update_prompts(self, prompts: List[str]) -> None:
+        if not prompts:
+            return
+        self.prompts = prompts
+        self.text_features = self._encode_text()
+
     def score(self, image: Image.Image) -> dict:
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
         if self.fp16:
@@ -124,16 +137,62 @@ def _decode_frame(raw: bytes) -> Optional[Image.Image]:
 
 def _on_connect(client, _userdata, _flags, rc):
     if rc == 0:
-        client.subscribe(FRAME_TOPIC)
-        logger.info("ready: topic=%s prompts=%d device=%s", FRAME_TOPIC, len(PROMPTS), _resolve_device())
+        topics = [(FRAME_TOPIC, 0)]
+        if PROMPT_CONFIG_TOPIC:
+            topics.append((PROMPT_CONFIG_TOPIC, 0))
+        client.subscribe(topics)
+        logger.info("ready: topics=%s prompts=%d device=%s", [t for t, _ in topics], len(PROMPTS), _resolve_device())
     else:
         logger.error("mqtt connect failed rc=%s", rc)
 
+def _normalize_prompt_list(values: List[str]) -> List[str]:
+    cleaned: List[str] = []
+    seen = set()
+    for value in values:
+        token = str(value).strip().lower()
+        if not token or len(token) < PROMPT_MIN_LEN:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        cleaned.append(token)
+        if PROMPT_MAX and len(cleaned) >= PROMPT_MAX:
+            break
+    return cleaned
+
+
+def _extract_prompt_config(payload: dict) -> Optional[List[str]]:
+    if not isinstance(payload, dict):
+        return None
+    prompts = payload.get("prompts")
+    if not prompts:
+        prompts = []
+        for key in ("object_prompts", "ui_prompts"):
+            items = payload.get(key) or []
+            if isinstance(items, list):
+                prompts.extend(items)
+    if not isinstance(prompts, list) or not prompts:
+        return None
+    return _normalize_prompt_list(prompts)
+
 
 def _on_message(_client, _userdata, msg):
+    global pending_prompts, last_prompt_config_ts
     try:
         payload = json.loads(msg.payload.decode("utf-8", "ignore"))
     except Exception:
+        return
+    if PROMPT_CONFIG_TOPIC and msg.topic == PROMPT_CONFIG_TOPIC:
+        now = time.time()
+        if PROMPT_CONFIG_INTERVAL_SEC > 0 and (now - last_prompt_config_ts) < PROMPT_CONFIG_INTERVAL_SEC:
+            return
+        prompts = _extract_prompt_config(payload)
+        if not prompts:
+            return
+        with prompt_lock:
+            pending_prompts = prompts
+            last_prompt_config_ts = now
+        logger.info("received prompt config prompts=%d", len(prompts))
         return
     raw = get_frame_bytes(payload)
     if not raw:
@@ -162,8 +221,10 @@ def _format_top(scores: dict) -> List[dict]:
 
 
 def run() -> None:
+    global pending_prompts
     device = _resolve_device()
     scorer = SiglipPromptScorer(MODEL_ID, PROMPTS, device, FP16)
+    current_prompts = list(PROMPTS)
     client = mqtt.Client(client_id="siglip_prompt", protocol=mqtt.MQTTv311)
     client.on_connect = _on_connect
     client.on_message = _on_message
@@ -183,6 +244,12 @@ def run() -> None:
         if (now - last_infer) < INTERVAL_SEC:
             continue
         last_frame_ts = now
+        with prompt_lock:
+            if pending_prompts and pending_prompts != current_prompts:
+                scorer.update_prompts(pending_prompts)
+                current_prompts = list(pending_prompts)
+                pending_prompts = None
+                logger.info("updated prompt set size=%d", len(current_prompts))
         image = _decode_frame(raw)
         if image is None:
             continue

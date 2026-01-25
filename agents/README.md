@@ -161,6 +161,13 @@ export SIGLIP_PROMPT_INTERVAL_SEC=2.0
 export VISION_PROMPT_TOPIC=vision/prompt_scores
 ```
 
+To let onboarding publish a dynamic prompt list (from the LLM) and hot-reload the prompt set:
+
+```bash
+export VISION_PROMPT_CONFIG_TOPIC=vision/prompts
+export ONBOARD_REQUEST_LLM_PROMPTS=1
+```
+
 Tune `PROMPT_TAG_MIN_SCORE` / `PROMPT_TAG_TOP_K` to adjust how many tags are injected into `scene/state`.
 
 ## Embedding Guard (In-Game Gate)

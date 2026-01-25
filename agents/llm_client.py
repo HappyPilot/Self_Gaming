@@ -16,6 +16,7 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "dummy")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "8.0"))
 LLM_PROFILE_MAX_TOKENS = int(os.getenv("LLM_PROFILE_MAX_TOKENS", "240"))
 LLM_GAME_ID_MAX_TOKENS = int(os.getenv("LLM_GAME_ID_MAX_TOKENS", "30"))
+LLM_PROMPT_MAX_TOKENS = int(os.getenv("LLM_PROMPT_MAX_TOKENS", "180"))
 LLM_DETECT_GAME = os.getenv("LLM_DETECT_GAME", "1") != "0"
 _RESOLVED_MODEL: Optional[str] = None
 
@@ -171,6 +172,60 @@ def guess_game_id(game_hint: str, texts: Optional[list] = None) -> Tuple[Optiona
         # Clean minimal slug
         slug = content.strip().strip('"').replace("\n", " ").strip()
         return (slug or None), "llm_ok"
+    except Exception as exc:
+        return None, f"llm_request_failed: {exc}"
+    finally:
+        release_gate()
+
+
+def fetch_visual_prompts(game_hint: str, texts: Optional[list] = None) -> Tuple[Optional[dict], str]:
+    """Ask LLM for a compact prompt list to guide zero-shot vision."""
+    gate_acquired = acquire_gate("visual_prompts")
+    if not gate_acquired:
+        return None, "llm_gate_busy"
+    texts = texts or []
+    prompt = (
+        "Suggest a concise list of visual prompt labels for zero-shot detection in a PC game.\n"
+        "Return JSON ONLY with fields:\n"
+        "{\n"
+        '  "game_id": str,\n'
+        '  "prompts": [str, ...],\n'
+        '  "object_prompts": [str, ...],\n'
+        '  "ui_prompts": [str, ...],\n'
+        '  "confidence": 0.0-1.0\n'
+        "}\n"
+        "Rules:\n"
+        "- Keep prompts short nouns or noun phrases (1-3 words).\n"
+        "- Include generic items: enemy, boss, player, npc, loot, chest, portal, waypoint.\n"
+        "- Put UI-only labels in ui_prompts (inventory, map, dialog, menu, loading screen).\n"
+        "- Avoid system keys and avoid game-specific spoilers if unsure.\n"
+        f"Game hint: {game_hint or 'unknown'}.\n"
+        f"On-screen texts: {texts[:12]}.\n"
+        "JSON only, no prose."
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LLM_API_KEY}",
+    }
+    body = {
+        "model": _resolve_model(),
+        "messages": [
+            {"role": "system", "content": "You output only JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "max_tokens": max(64, LLM_PROMPT_MAX_TOKENS),
+    }
+    try:
+        resp = requests.post(LLM_ENDPOINT, headers=headers, json=body, timeout=LLM_TIMEOUT)
+        if resp.status_code != 200:
+            return None, f"llm_http_{resp.status_code}"
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        parsed = _extract_json(content)
+        if not isinstance(parsed, dict):
+            return None, "llm_parse_failed"
+        return parsed, "llm_ok"
     except Exception as exc:
         return None, f"llm_request_failed: {exc}"
     finally:

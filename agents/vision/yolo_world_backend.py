@@ -65,6 +65,7 @@ class YoloWorldBackend(ObjectDetectorBackend):
         self.classes = classes
         self.max_size = max_size if max_size and max_size > 0 else None
         self.fallback_cpu = fallback_cpu
+        self._clip_cpu = clip_cpu
         logger.info(
             "YOLO-World backend ready weights=%s device=%s conf=%.3f imgsz=%s classes=%s max_size=%s fallback_cpu=%s clip_cpu=%s",
             weights_path,
@@ -76,6 +77,22 @@ class YoloWorldBackend(ObjectDetectorBackend):
             self.fallback_cpu,
             clip_cpu,
         )
+
+    def set_classes(self, classes: list[str]) -> bool:
+        if not classes:
+            return False
+        self.classes = classes
+        try:
+            if self._clip_cpu:
+                with _clip_on_cpu():
+                    self.model.set_classes(classes)
+            else:
+                self.model.set_classes(classes)
+        except Exception:  # noqa: BLE001
+            logger.exception("YOLO-World dynamic set_classes failed")
+            return False
+        logger.info("YOLO-World classes updated count=%d", len(classes))
+        return True
 
     def _predict(self, frame: np.ndarray, device: str):
         ctx = torch.no_grad() if torch is not None else nullcontext()

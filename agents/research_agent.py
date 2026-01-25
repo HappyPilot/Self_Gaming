@@ -20,9 +20,9 @@ try:
 except ImportError:  # pragma: no cover - script invocation fallback
     from mem_rpc import MemRPC
 try:
-    from .llm_gate import blocked_reason
+    from .llm_gate import acquire_gate, blocked_reason, release_gate
 except ImportError:  # pragma: no cover - script invocation fallback
-    from llm_gate import blocked_reason
+    from llm_gate import acquire_gate, blocked_reason, release_gate
 
 logging.basicConfig(level=os.getenv("RESEARCH_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("research_agent")
@@ -223,6 +223,9 @@ class ResearchAgent:
     def _generate_rules(self, scope: str, summaries: List[str]) -> List[dict]:
         if not REFLECTION_ENDPOINT or requests is None:
             raise RuntimeError("Reflection endpoint not configured or requests missing")
+        acquired = acquire_gate("research_reflection", wait_s=0.0)
+        if not acquired:
+            return []
         prompt = (
             "You analyze gameplay episodes to produce concise rules for an automation agent.\n"
             f"Scope: {scope or 'generic'}\n"
@@ -238,9 +241,12 @@ class ResearchAgent:
             "temperature": 0.1,
             "stream": False,
         }
-        response = requests.post(REFLECTION_ENDPOINT, json=payload, timeout=20)
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = requests.post(REFLECTION_ENDPOINT, json=payload, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+        finally:
+            release_gate()
         content = ""
         if isinstance(data, dict):
             if data.get("choices"):

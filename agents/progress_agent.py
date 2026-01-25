@@ -15,7 +15,7 @@ import requests
 from collections import deque
 from flask import Flask, jsonify, render_template_string
 import paho.mqtt.client as mqtt
-from llm_gate import blocked_reason
+from llm_gate import acquire_gate, blocked_reason, release_gate
 
 # --- CONFIG ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
@@ -594,6 +594,12 @@ def consult_oracle():
             logger.info("LLM blocked (%s); skipping intervention", reason)
             last_gate_log = now
         return None
+    if not acquire_gate("progress_intervention", wait_s=0.0):
+        now = time.time()
+        if now - last_gate_log >= LLM_GATE_LOG_SEC:
+            logger.info("LLM gate busy; skipping intervention")
+            last_gate_log = now
+        return None
     try:
         with lock:
             scene = state["scene_desc"]
@@ -631,6 +637,8 @@ def consult_oracle():
     except Exception as e:
         logger.error(f"LLM failed: {e}")
         return None
+    finally:
+        release_gate()
 
 def perform_intervention(key):
     logger.warning(f"⚠️ INTERVENTION: Pressing '{key}'")

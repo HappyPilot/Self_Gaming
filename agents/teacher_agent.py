@@ -26,9 +26,9 @@ except ImportError:
     from mem_rpc import MemRPC
 from control_profile import load_profile, safe_profile
 try:
-    from .llm_gate import blocked_reason
+    from .llm_gate import acquire_gate, blocked_reason, release_gate
 except ImportError:
-    from llm_gate import blocked_reason
+    from llm_gate import acquire_gate, blocked_reason, release_gate
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("TEACHER_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -225,6 +225,7 @@ class TeacherAgent:
         self._watchdog_last: Dict[str, float] = {}
         self.game_id: Optional[str] = None
         self._last_gate_log = 0.0
+        self._gate_held = False
 
     def _ensure_mem_rpc(self):
         if self.mem_rpc:
@@ -283,7 +284,11 @@ class TeacherAgent:
                 thread.start()
 
     def _identify_game(self, text_content):
+        acquired = False
         try:
+            acquired = acquire_gate("teacher_identify", wait_s=0.0)
+            if not acquired:
+                return
             llm = self._ensure_llm()
             if llm:
                 prompt = [
@@ -296,6 +301,9 @@ class TeacherAgent:
                 logger.info("Game Identified: %s", self.game_id)
         except Exception as e:
             logger.warning("Identification failed: %s", e)
+        finally:
+            if acquired:
+                release_gate()
 
     def _scene_scope(self, scene: dict) -> str:
         if scene.get("flags", {}).get("death"):
@@ -461,7 +469,13 @@ class TeacherAgent:
                 logger.info("LLM blocked (%s); skipping request", reason)
                 self._last_gate_log = now
             return
+        if not acquire_gate("teacher_action", wait_s=0.0):
+            if now - self._last_gate_log >= LLM_GATE_LOG_SEC:
+                logger.info("LLM gate busy; skipping request")
+                self._last_gate_log = now
+            return
         
+        self._gate_held = True
         self._inflight = True
         self._last_request = now
         thread = threading.Thread(target=self._generate_action, args=(client,), daemon=True)
@@ -520,7 +534,11 @@ class TeacherAgent:
         except Exception as exc:
             logger.error("LLM error: %s", exc)
         finally:
-            with self._lock: self._inflight = False
+            with self._lock:
+                self._inflight = False
+                if self._gate_held:
+                    release_gate()
+                    self._gate_held = False
 
     def start(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
