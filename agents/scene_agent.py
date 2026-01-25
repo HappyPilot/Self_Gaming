@@ -52,6 +52,9 @@ OCR_TARGET_EXCLUDE_REGEX = os.getenv("OCR_TARGET_EXCLUDE_REGEX", "").strip()
 OCR_TARGET_EXCLUDE = re.compile(OCR_TARGET_EXCLUDE_REGEX) if OCR_TARGET_EXCLUDE_REGEX else None
 OCR_TARGET_STABLE_FRAMES = max(1, int(os.getenv("OCR_TARGET_STABLE_FRAMES", "2")))
 OCR_TARGET_CONSECUTIVE_MIN = max(1, int(os.getenv("OCR_TARGET_CONSECUTIVE_MIN", "2")))
+OCR_AGG_WINDOW = max(1, int(os.getenv("OCR_AGG_WINDOW", "1")))
+OCR_AGG_MIN_VOTES = max(1, int(os.getenv("OCR_AGG_MIN_VOTES", "2")))
+OCR_AGG_GRID = max(1, int(os.getenv("OCR_AGG_GRID", "12")))
 TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
 DEATH_FUZZY_THRESHOLD = float(os.getenv("SCENE_DEATH_FUZZY_THRESHOLD", "0.7"))
@@ -266,6 +269,7 @@ class SceneAgent:
         self._symbolic_candidate_since = 0.0
         self._ocr_token_history = deque(maxlen=OCR_TARGET_STABLE_FRAMES)
         self._ocr_token_consecutive: Dict[str, int] = {}
+        self._ocr_zone_history = deque(maxlen=OCR_AGG_WINDOW)
 
     def _symbolic_text_only(self, entries):
         lines = 0
@@ -300,6 +304,84 @@ class SceneAgent:
             if all(token in frame for frame in history):
                 return True
         return False
+
+    def _update_ocr_history(self, zones: Dict[str, Dict[str, object]]) -> None:
+        if OCR_AGG_WINDOW <= 1:
+            return
+        entries: List[Dict[str, object]] = []
+        for zone in (zones or {}).values():
+            text = str(zone.get("text") or "").strip()
+            if not text:
+                continue
+            bbox = zone.get("bbox") or zone.get("box")
+            norm_bbox = self._normalize_bbox(bbox)
+            if not norm_bbox:
+                continue
+            normalized = _normalize_target_text(text)
+            if not normalized:
+                continue
+            cx = (norm_bbox[0] + norm_bbox[2]) / 2.0
+            cy = (norm_bbox[1] + norm_bbox[3]) / 2.0
+            entries.append(
+                {
+                    "text": text,
+                    "norm": normalized,
+                    "bbox": norm_bbox,
+                    "center": (cx, cy),
+                    "confidence": zone.get("confidence"),
+                }
+            )
+        self._ocr_zone_history.append(entries)
+
+    def _aggregate_ocr_zones(self) -> tuple[Dict[str, Dict[str, object]], List[str]]:
+        if OCR_AGG_WINDOW <= 1 or not self._ocr_zone_history:
+            return {}, []
+        min_votes = min(OCR_AGG_MIN_VOTES, OCR_AGG_WINDOW)
+        buckets: Dict[tuple[int, int], List[Dict[str, object]]] = {}
+        for entries in self._ocr_zone_history:
+            for entry in entries:
+                cx, cy = entry["center"]
+                key = (int(cx * OCR_AGG_GRID), int(cy * OCR_AGG_GRID))
+                buckets.setdefault(key, []).append(entry)
+        aggregated: Dict[str, Dict[str, object]] = {}
+        texts: List[str] = []
+        idx = 0
+        for key, entries in buckets.items():
+            counts: Dict[str, int] = {}
+            for entry in entries:
+                norm = entry.get("norm") or ""
+                if not norm:
+                    continue
+                counts[norm] = counts.get(norm, 0) + 1
+            if not counts:
+                continue
+            best_norm, best_count = max(counts.items(), key=lambda item: item[1])
+            if best_count < min_votes:
+                continue
+            chosen = None
+            for frame_entries in reversed(self._ocr_zone_history):
+                for entry in frame_entries:
+                    if entry.get("norm") != best_norm:
+                        continue
+                    cx, cy = entry["center"]
+                    if (int(cx * OCR_AGG_GRID), int(cy * OCR_AGG_GRID)) == key:
+                        chosen = entry
+                        break
+                if chosen:
+                    break
+            if chosen is None:
+                chosen = entries[-1]
+            idx += 1
+            zone_key = f"agg_{idx}_{best_norm[:10]}"
+            aggregated[zone_key] = {
+                "text": chosen.get("text"),
+                "bbox": chosen.get("bbox"),
+                "confidence": chosen.get("confidence"),
+                "votes": best_count,
+            }
+            if chosen.get("text"):
+                texts.append(str(chosen.get("text")))
+        return aggregated, texts
 
     def _prompt_tokens(self, now: float) -> tuple[list[str], Optional[dict]]:
         scores = self.state.get("prompt_scores")
@@ -483,7 +565,20 @@ class SceneAgent:
                     text_payload.append(token)
         obs = self.state.get("observation", {})
         objects = obs.get("yolo_objects") or self.state.get("objects", [])
-        text_zones = obs.get("text_zones") or self.state.get("text_zones", {})
+        raw_text_zones = obs.get("text_zones") or self.state.get("text_zones", {})
+        text_zones = raw_text_zones
+        agg_texts: List[str] = []
+        if OCR_AGG_WINDOW > 1:
+            agg_zones, agg_texts = self._aggregate_ocr_zones()
+            if agg_zones:
+                text_zones = agg_zones
+        if agg_texts:
+            if text_payload is None:
+                text_payload = []
+            for entry in agg_texts:
+                normalized = self._normalize_text(entry) if NORMALIZE_TEXT else entry
+                if normalized and normalized not in text_payload:
+                    text_payload.append(normalized)
         player_entry = self._sanitize_player(obs.get("player_candidate")) or self.state.get("player_candidate")
         if player_entry and (now - self.state.get("player_candidate_ts", 0)) > WINDOW_SEC * 3: player_entry = None
         if not player_entry: player_entry = self._extract_player(objects)
@@ -497,6 +592,9 @@ class SceneAgent:
                    "objects_source": self.state.get("objects_source", ""),
                    "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now,
                    "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0)}
+        if text_zones is not raw_text_zones:
+            payload["text_zones_raw"] = raw_text_zones
+            payload["text_zones_agg"] = text_zones
         if prompt_scores:
             payload["prompt_scores"] = prompt_scores
         if flags:
@@ -631,6 +729,7 @@ class SceneAgent:
                         if normalized:
                             tokens.append(normalized)
                     self._update_ocr_stability(tokens)
+                    self._update_ocr_history(new_zones)
             else:
                 self.state["easy_text"] = str(data).strip()
         elif msg.topic == SIMPLE_OCR_TOPIC:
@@ -659,6 +758,7 @@ class SceneAgent:
                             if normalized:
                                 tokens.append(normalized)
                         self._update_ocr_stability(tokens)
+                        self._update_ocr_history(zones)
                 else:
                     self.state["simple_text"] = ""
             else:

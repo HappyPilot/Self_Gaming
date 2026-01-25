@@ -105,6 +105,15 @@ TEACHER_RESPAWN_SKELETON_THRESHOLD=0.72
 SCENE_DEATH_SKELETON_THRESHOLD=0.72
 ```
 
+## OCR temporal aggregation (majority vote)
+To stabilize noisy text, aggregate OCR over a short window (3–5 frames):
+```bash
+OCR_AGG_WINDOW=3
+OCR_AGG_MIN_VOTES=2
+OCR_AGG_GRID=12
+```
+This bins OCR text by screen position and keeps tokens that repeat across frames.
+
 ## OCR quality report tool
 Use the probe script to sample OCR output and save frames for review:
 ```bash
