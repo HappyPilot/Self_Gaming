@@ -22,6 +22,10 @@ import torch.nn as nn
 from models.backbone import Backbone
 from utils.embedding_projector import EmbeddingProjector
 from utils.latency import emit_control_metric, emit_latency, get_float_env, get_sla_ms
+try:
+    from .control_profile import load_profile, safe_profile
+except ImportError:
+    from control_profile import load_profile, safe_profile
 
 
 def _normalize_phrase(text: str) -> str:
@@ -29,6 +33,14 @@ def _normalize_phrase(text: str) -> str:
         return ""
     normalized = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.lower())
     return " ".join(normalized.split())
+
+
+def _normalize_game_id(value: str) -> str:
+    if not value:
+        return "unknown_game"
+    lowered = str(value).strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    return slug or "unknown_game"
 
 
 def _candidate_chunks(cleaned: str):
@@ -68,6 +80,7 @@ CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
 PROGRESS_TOPIC = os.getenv("PROGRESS_TOPIC", "progress/status")
 REWARD_TOPIC = os.getenv("REWARD_TOPIC", "train/reward")
 GAME_SCHEMA_TOPIC = os.getenv("GAME_SCHEMA_TOPIC", "game/schema")
+CONTROL_PROFILE_GAME_ID = os.getenv("CONTROL_PROFILE_GAME_ID") or os.getenv("RECORDER_GAME_ID") or os.getenv("GAME_ID") or "unknown_game"
 THRESH = float(os.getenv("THRESH", "120.0"))
 DEBOUNCE = float(os.getenv("DEBOUNCE", "0.25"))
 SLA_STAGE_POLICY_MS = get_sla_ms("SLA_STAGE_POLICY_MS")
@@ -425,6 +438,7 @@ class PolicyAgent:
         self.steps = 0
         self.last_label: Optional[str] = None
         self.profile_allowed_keys: Set[str] = set()
+        self.game_id = _normalize_game_id(CONTROL_PROFILE_GAME_ID)
         self.last_click_ts = 0.0
         self.rng = random.Random()
         self.model_lock = threading.Lock()
@@ -718,6 +732,8 @@ class PolicyAgent:
                         logger.info("Received teacher action: %s", action_text)
             elif msg.topic == OBS_TOPIC or (SIM_TOPIC and msg.topic == SIM_TOPIC):
                 self.latest_state = data
+                self._update_game_id_from_scene(data)
+                self._maybe_refresh_profile_keys(self.game_id, "control_profile")
                 tick_start = time.perf_counter()
                 policy_action = self._policy_from_observation(data)
                 if policy_action is None:
@@ -785,12 +801,45 @@ class PolicyAgent:
                     allowed = profile.get("allowed_keys") if isinstance(profile, dict) else None
                     if isinstance(allowed, list):
                         keys = {str(k).lower() for k in allowed if k}
-                        if keys and keys != self.profile_allowed_keys:
-                            self.profile_allowed_keys = keys
-                            logger.info("Policy loaded allowed_keys from game schema: %s", sorted(keys))
+                        if keys:
+                            merged = self.profile_allowed_keys | keys
+                            if merged != self.profile_allowed_keys:
+                                self.profile_allowed_keys = merged
+                                logger.info("Policy merged allowed_keys from game schema: %s", sorted(merged))
+                            self._maybe_refresh_profile_keys(self.game_id, "control_profile")
             elif CURSOR_TOPIC and msg.topic == CURSOR_TOPIC:
                 if isinstance(data, dict):
                     self._handle_cursor_message(data)
+
+    def _update_game_id_from_scene(self, state: dict) -> None:
+        if not isinstance(state, dict):
+            return
+        raw = state.get("game_id")
+        if not raw:
+            flags = state.get("flags") or {}
+            raw = flags.get("game_id")
+        if not raw:
+            return
+        normalized = _normalize_game_id(str(raw))
+        if normalized and normalized != self.game_id:
+            self.game_id = normalized
+            logger.info("Policy game_id set: %s", self.game_id)
+
+    def _load_profile_allowed_keys(self, game_id: str) -> Set[str]:
+        profile = load_profile(str(game_id)) or load_profile("unknown_game") or safe_profile(str(game_id))
+        allowed = [str(k).lower() for k in profile.get("allowed_keys", []) if k]
+        return {k for k in allowed if k}
+
+    def _maybe_refresh_profile_keys(self, game_id: str, source: str) -> None:
+        if not game_id:
+            return
+        keys = self._load_profile_allowed_keys(game_id)
+        if not keys:
+            return
+        merged = self.profile_allowed_keys | keys
+        if merged != self.profile_allowed_keys:
+            self.profile_allowed_keys = merged
+            logger.info("Policy merged allowed_keys from %s: %s", source, sorted(merged))
 
     def _attach_teacher_target_hint(self, payload: dict) -> None:
         if not payload:
