@@ -1938,6 +1938,9 @@ class PolicyAgent:
 
         key = self._teacher_key_from_text(text)
         if key:
+            if not self._key_allowed(key):
+                logger.info("Teacher requested key '%s' not in allowed_keys; ignoring", key)
+                return None
             return {"label": "key_press", "key": key}
 
         move_vec = self._direction_from_text(text)
@@ -1947,6 +1950,9 @@ class PolicyAgent:
 
         key = self._extract_key(text)
         if key:
+            if not self._key_allowed(key):
+                logger.info("Teacher extracted key '%s' not in allowed_keys; ignoring", key)
+                return None
             return {"label": "key_press", "key": key}
 
         if target_move:
@@ -1986,6 +1992,13 @@ class PolicyAgent:
             if token in {"enter", "space", "escape", "tab"}:
                 return token
         return None
+
+    def _key_allowed(self, key: Optional[str]) -> bool:
+        if not key:
+            return False
+        if not self.profile_allowed_keys:
+            return True
+        return str(key).lower() in self.profile_allowed_keys
 
     def _teacher_key_from_text(self, text: str) -> Optional[str]:
         patterns = [
@@ -2187,6 +2200,9 @@ class PolicyAgent:
             return {"label": "click_secondary", "confidence": 1.0}
         if label.startswith("key_"):
             key = label.split("_", 1)[1]
+            if not self._key_allowed(key):
+                logger.info("Policy suppressed key '%s' (not in allowed_keys)", key)
+                return {"label": "wait"}
             return {"label": "key_press", "key": key}
         if label in {"press_space", "space"}:
             return {"label": "key_press", "key": "space"}

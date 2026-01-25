@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import threading
 import time
@@ -39,6 +40,7 @@ stop_event = threading.Event()
 MQTT_HOST, MQTT_PORT = os.getenv("MQTT_HOST", "127.0.0.1"), int(os.getenv("MQTT_PORT", "1883"))
 SCENE_TOPIC, SIM_TOPIC = os.getenv("SCENE_TOPIC", "scene/state"), os.getenv("SIM_TOPIC", "sim_core/state")
 SNAPSHOT_TOPIC, ACT_RESULT_TOPIC = os.getenv("SNAPSHOT_TOPIC", "vision/snapshot"), os.getenv("ACT_RESULT_TOPIC", "act/result")
+GAME_IDENTITY_TOPIC = os.getenv("GAME_IDENTITY_TOPIC", "game/identity")
 TEACHER_TOPIC, MEM_STORE_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action"), os.getenv("MEM_STORE_TOPIC", "mem/store")
 MEM_QUERY_TOPIC, MEM_REPLY_TOPIC, MEM_RESPONSE_TOPIC = os.getenv("MEM_QUERY_TOPIC", "mem/query"), os.getenv("MEM_REPLY_TOPIC", "mem/reply"), os.getenv("MEM_RESPONSE_TOPIC", "mem/response")
 GOAL_TOPIC, GUIDE_KEY = os.getenv("GOAL_TOPIC", "goals/high_level"), os.getenv("TEACHER_GUIDE_KEY", "teacher_guides")
@@ -66,6 +68,7 @@ TEACHER_PROMPT_MIN_SCORE = float(os.getenv("TEACHER_PROMPT_MIN_SCORE", "0.02"))
 TEACHER_PROMPT_ALLOW = {item.strip().lower() for item in os.getenv("TEACHER_PROMPT_ALLOW", "").split(",") if item.strip()}
 TEACHER_REQUIRE_IN_GAME = os.getenv("TEACHER_REQUIRE_IN_GAME", "0") != "0"
 TEACHER_REQUIRE_IN_GAME_STRICT = os.getenv("TEACHER_REQUIRE_IN_GAME_STRICT", "0") != "0"
+TEACHER_ALLOW_OCR_GAME_ID = os.getenv("TEACHER_ALLOW_OCR_GAME_ID", "0") != "0"
 TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
 TEACHER_RESPAWN_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_RESPAWN_KEYWORDS", "resurrect,resurrect at checkpoint,respawn,revive").split(",") if item.strip()}
 TEACHER_DEATH_SCOPES = {item.strip().lower() for item in os.getenv("TEACHER_DEATH_SCOPES", "death_dialog,critical_dialog:death").split(",") if item.strip()}
@@ -102,6 +105,13 @@ def _scene_in_game(scene: dict) -> bool:
         return in_game is True
     return in_game is not False
 
+def _normalize_game_id(value: str) -> str:
+    if not value:
+        return "unknown_game"
+    lowered = str(value).strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    return slug or "unknown_game"
+
 class BaseChatClient:
     def _complete(self, messages):  # pragma: no cover - subclasses implement transport
         raise NotImplementedError
@@ -127,6 +137,7 @@ class BaseChatClient:
                 "role": "system",
                 "content": (
                     "Propose one safe, concrete next action. "
+                    "Use only controls listed in the scene summary under Controls. "
                     "If you include coordinates, use normalized 0..1."
                 ),
             },
@@ -224,6 +235,7 @@ class TeacherAgent:
         self._context_cache, self._context_text_fingerprint, self._context_refresh_times, self._context_force_refresh = {}, {}, {}, set()
         self._watchdog_last: Dict[str, float] = {}
         self.game_id: Optional[str] = None
+        self.identity: Dict[str, object] = {}
         self._last_gate_log = 0.0
         self._gate_held = False
 
@@ -244,7 +256,7 @@ class TeacherAgent:
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if _as_int(rc) == 0:
-            topics = [(t, 0) for t in [SCENE_TOPIC, SIM_TOPIC, SNAPSHOT_TOPIC, ACT_RESULT_TOPIC] if t]
+            topics = [(t, 0) for t in [SCENE_TOPIC, SIM_TOPIC, SNAPSHOT_TOPIC, ACT_RESULT_TOPIC, GAME_IDENTITY_TOPIC] if t]
             client.subscribe(topics)
             client.publish("teacher/status", json.dumps({"ok": True, "event": "teacher_ready"}))
             logger.info("Teacher agent connected and subscribed")
@@ -267,6 +279,8 @@ class TeacherAgent:
                 self._maybe_request_action(client)
             elif msg.topic == SNAPSHOT_TOPIC and isinstance(data, dict) and data.get("ok"): self.snapshot = data.get("image_b64")
             elif msg.topic == ACT_RESULT_TOPIC and isinstance(data, dict) and data.get("applied"): self.actions.append(str(data["applied"]))
+            elif msg.topic == GAME_IDENTITY_TOPIC and isinstance(data, dict):
+                self._handle_identity_update(data)
     
     def _ensure_llm(self):
         if self.llm: return self.llm
@@ -277,11 +291,22 @@ class TeacherAgent:
         return self.llm
 
     def _handle_scene_update(self, scene: dict):
+        if not TEACHER_ALLOW_OCR_GAME_ID:
+            return
         if not self.game_id and scene.get("text"):
             text_content = " ".join(scene["text"])
             if len(text_content) > 20:
                 thread = threading.Thread(target=self._identify_game, args=(text_content,), daemon=True)
                 thread.start()
+
+    def _handle_identity_update(self, payload: dict) -> None:
+        self.identity = payload
+        raw = payload.get("game_id") or payload.get("app_name") or payload.get("window_title") or payload.get("bundle_id") or ""
+        normalized = _normalize_game_id(str(raw))
+        if normalized and normalized != "unknown_game":
+            if self.game_id != normalized:
+                self.game_id = normalized
+                logger.info("Identity game_id set: %s (source=%s)", self.game_id, payload.get("source") or "identity")
 
     def _identify_game(self, text_content):
         acquired = False
@@ -372,7 +397,18 @@ class TeacherAgent:
             return None
 
     def _build_scene_summary(self, scene: dict, rules: List[dict], recent_critical: List[dict]) -> str:
-        parts = [self._format_scene_desc(scene)]
+        parts = []
+        game_id = scene.get("game_id") or self.game_id or CONTROL_PROFILE_GAME_ID
+        if game_id:
+            parts.append(f"Game: {game_id}")
+        if isinstance(self.identity, dict) and self.identity:
+            app = self.identity.get("app_name") or ""
+            title = self.identity.get("window_title") or ""
+            bundle = self.identity.get("bundle_id") or ""
+            ident_bits = [item for item in (app, title, bundle) if item]
+            if ident_bits:
+                parts.append(f"Identity: {' | '.join(str(item) for item in ident_bits[:3])}")
+        parts.append(self._format_scene_desc(scene))
         stats = scene.get("stats")
         if stats:
             parts.append(f"Stats: {json.dumps(stats)}")
