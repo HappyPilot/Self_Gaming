@@ -55,7 +55,6 @@ OCR_TARGET_CONSECUTIVE_MIN = max(1, int(os.getenv("OCR_TARGET_CONSECUTIVE_MIN", 
 OCR_AGG_WINDOW = max(1, int(os.getenv("OCR_AGG_WINDOW", "1")))
 OCR_AGG_MIN_VOTES = max(1, int(os.getenv("OCR_AGG_MIN_VOTES", "2")))
 OCR_AGG_GRID = max(1, int(os.getenv("OCR_AGG_GRID", "12")))
-TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
 DEATH_FUZZY_THRESHOLD = float(os.getenv("SCENE_DEATH_FUZZY_THRESHOLD", "0.7"))
 DEATH_SKELETON_THRESHOLD = float(os.getenv("SCENE_DEATH_SKELETON_THRESHOLD", "0.72"))
@@ -414,7 +413,7 @@ class SceneAgent:
         return tokens, {label: round(score, 4) for label, score in items}
 
     def _normalize_text(self, entry: str) -> str:
-        return entry.translate(TEXT_TRANSLATION) if isinstance(entry, str) else entry
+        return entry if isinstance(entry, str) else entry
 
     def _object_matches(self, objects):
         for obj in objects:
