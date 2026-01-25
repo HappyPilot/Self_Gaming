@@ -122,6 +122,16 @@ OCR_FALLBACK_MIN_RESULTS=1
 OCR_FALLBACK_BACKEND=easyocr
 ```
 
+## Curiosity reward (world-model or embedding fallback)
+If the world-model pred error is unavailable, reward can use embedding drift from progress:
+```bash
+CURIOSITY_MODE=auto
+CURIOSITY_PRED_TIMEOUT_SEC=30
+CURIOSITY_EMBED_WEIGHT=0.08
+CURIOSITY_EMBED_SCALE=1.0
+CURIOSITY_EMBED_MAX=0.15
+```
+
 ## OCR quality report tool
 Use the probe script to sample OCR output and save frames for review:
 ```bash
