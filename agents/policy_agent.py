@@ -155,6 +155,8 @@ POLICY_MEANINGFUL_FALLBACK = os.getenv("POLICY_MEANINGFUL_FALLBACK", "0") != "0"
 POLICY_PREFER_TARGETS = os.getenv("POLICY_PREFER_TARGETS", "1") != "0"
 POLICY_RANDOM_FALLBACK = os.getenv("POLICY_RANDOM_FALLBACK", "1") != "0"
 POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
+POLICY_ENEMY_SKILL_SUBSTITUTE = os.getenv("POLICY_ENEMY_SKILL_SUBSTITUTE", "1") != "0"
+POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
 RESPAWN_TEXTS = _parse_env_list(
     os.getenv("RESPAWN_TRIGGER_TEXTS", "resurrect at checkpoint,resurrect in town,resurrect")
 )
@@ -438,6 +440,7 @@ class PolicyAgent:
         self.steps = 0
         self.last_label: Optional[str] = None
         self.profile_allowed_keys: Set[str] = set()
+        self.profile_allowed_key_order: List[str] = []
         self.game_id = _normalize_game_id(CONTROL_PROFILE_GAME_ID)
         self.last_click_ts = 0.0
         self.rng = random.Random()
@@ -721,13 +724,27 @@ class PolicyAgent:
 
             if msg.topic == TEACHER_TOPIC:
                 if isinstance(data, dict):
-                    action_text = data.get("action") or data.get("text")
+                    raw_action = data.get("action") or data.get("text")
+                    action_obj = raw_action if isinstance(raw_action, dict) else None
+                    action_text = raw_action if isinstance(raw_action, str) else None
+                    if action_obj and not action_text:
+                        action_text = self._teacher_action_repr(action_obj)
                     if action_text:
                         self.teacher_action = {
                             "text": action_text,
                             "reasoning": data.get("reasoning"),
                             "timestamp": data.get("timestamp", time.time()),
+                            "action": action_obj,
                         }
+                        if action_obj:
+                            if "target_norm" in action_obj and "target_norm" not in self.teacher_action:
+                                self.teacher_action["target_norm"] = action_obj.get("target_norm")
+                            if "target_label" in action_obj and "target_label" not in self.teacher_action:
+                                self.teacher_action["target_label"] = action_obj.get("target_label")
+                        if data.get("target_norm"):
+                            self.teacher_action["target_norm"] = data.get("target_norm")
+                        if data.get("target_label"):
+                            self.teacher_action["target_label"] = data.get("target_label")
                         self._attach_teacher_target_hint(self.teacher_action)
                         logger.info("Received teacher action: %s", action_text)
             elif msg.topic == OBS_TOPIC or (SIM_TOPIC and msg.topic == SIM_TOPIC):
@@ -800,13 +817,15 @@ class PolicyAgent:
                     profile = schema.get("profile")
                     allowed = profile.get("allowed_keys") if isinstance(profile, dict) else None
                     if isinstance(allowed, list):
-                        keys = {str(k).lower() for k in allowed if k}
+                        ordered = [str(k).lower() for k in allowed if k]
+                        keys = {k for k in ordered if k}
                         if keys:
                             merged = self.profile_allowed_keys | keys
                             if merged != self.profile_allowed_keys:
                                 self.profile_allowed_keys = merged
                                 logger.info("Policy merged allowed_keys from game schema: %s", sorted(merged))
                             self._maybe_refresh_profile_keys(self.game_id, "control_profile")
+                            self._merge_profile_key_order(ordered, "game_schema")
             elif CURSOR_TOPIC and msg.topic == CURSOR_TOPIC:
                 if isinstance(data, dict):
                     self._handle_cursor_message(data)
@@ -826,29 +845,55 @@ class PolicyAgent:
             logger.info("Policy game_id set: %s", self.game_id)
 
     def _load_profile_allowed_keys(self, game_id: str) -> Set[str]:
+        ordered = self._load_profile_allowed_keys_ordered(game_id)
+        return {k for k in ordered if k}
+
+    def _load_profile_allowed_keys_ordered(self, game_id: str) -> List[str]:
         profile = load_profile(str(game_id)) or load_profile("unknown_game") or safe_profile(str(game_id))
-        allowed = [str(k).lower() for k in profile.get("allowed_keys", []) if k]
-        return {k for k in allowed if k}
+        return [str(k).lower() for k in profile.get("allowed_keys", []) if k]
+
+    def _merge_profile_key_order(self, keys: List[str], source: str) -> None:
+        if not keys:
+            return
+        normalized = [str(k).lower() for k in keys if k]
+        if not normalized:
+            return
+        merged = list(self.profile_allowed_key_order)
+        existing = set(merged)
+        for key in normalized:
+            if key not in existing:
+                merged.append(key)
+                existing.add(key)
+        if merged != self.profile_allowed_key_order:
+            self.profile_allowed_key_order = merged
+            logger.info("Policy merged allowed_keys order from %s: %s", source, merged)
 
     def _maybe_refresh_profile_keys(self, game_id: str, source: str) -> None:
         if not game_id:
             return
-        keys = self._load_profile_allowed_keys(game_id)
+        ordered = self._load_profile_allowed_keys_ordered(game_id)
+        keys = {k for k in ordered if k}
         if not keys:
             return
         merged = self.profile_allowed_keys | keys
         if merged != self.profile_allowed_keys:
             self.profile_allowed_keys = merged
             logger.info("Policy merged allowed_keys from %s: %s", source, sorted(merged))
+        if ordered:
+            self._merge_profile_key_order(ordered, source)
 
     def _attach_teacher_target_hint(self, payload: dict) -> None:
         if not payload:
             return
         reasoning = str(payload.get('reasoning') or '')
         text = str(payload.get('text') or '')
+        existing_target_norm = payload.get('target_norm')
+        existing_target_label = payload.get('target_label')
         if not reasoning and not text:
-            payload.pop('target_norm', None)
-            payload.pop('target_label', None)
+            if existing_target_norm is None:
+                payload.pop('target_norm', None)
+            if existing_target_label is None:
+                payload.pop('target_label', None)
             return
         match = None
         for candidate in (reasoning, text):
@@ -866,13 +911,15 @@ class PolicyAgent:
                 y_norm = max(0.0, min(1.0, float(match.group(2))))
                 payload['target_norm'] = [x_norm, y_norm]
             except ValueError:
-                payload.pop('target_norm', None)
+                if existing_target_norm is None:
+                    payload.pop('target_norm', None)
         else:
-            payload.pop('target_norm', None)
+            if existing_target_norm is None:
+                payload.pop('target_norm', None)
         hint_match = TEACHER_TARGET_LABEL_RE.search(reasoning) or TEACHER_TARGET_LABEL_RE.search(text)
         if hint_match:
             payload['target_label'] = hint_match.group(1).strip().strip('"')
-        elif 'target_label' in payload:
+        elif existing_target_label is None and 'target_label' in payload:
             payload.pop('target_label', None)
         target_label = payload.get('target_label')
         if target_label:
@@ -1898,6 +1945,12 @@ class PolicyAgent:
                 )
                 return {"label": "wait"}
 
+            if label == "click_primary" and POLICY_ENEMY_SKILL_SUBSTITUTE and self._enemies_present():
+                skill_key = self._choose_skill_key()
+                if skill_key:
+                    logger.info("Enemy present -> substituting click_primary with key_press %s", skill_key)
+                    return {"label": "key_press", "key": skill_key, "source": "enemy_skill_substitute"}
+
             if label == "click_primary" and not self._click_ready():
                 if self.active_target and self._cursor_is_fresh():
                     center = self.active_target.get("center") or self.active_target.get("target_norm")
@@ -1930,6 +1983,11 @@ class PolicyAgent:
             return None
         if not self.teacher_action:
             return None
+        action_obj = self.teacher_action.get("action")
+        if isinstance(action_obj, dict):
+            structured = self._normalize_teacher_action_obj(action_obj)
+            if structured:
+                return structured
         raw_text = self.teacher_action.get("text") or ""
         if not raw_text:
             return None
@@ -2049,6 +2107,28 @@ class PolicyAgent:
             return True
         return str(key).lower() in self.profile_allowed_keys
 
+    def _enemies_present(self) -> bool:
+        state = self.latest_state or {}
+        enemies = state.get("enemies") or []
+        if isinstance(enemies, list) and enemies:
+            return True
+        stats = state.get("stats") or {}
+        try:
+            return float(stats.get("enemy_count", 0) or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _choose_skill_key(self) -> Optional[str]:
+        skill_set = set(POLICY_SKILL_KEYS)
+        if self.profile_allowed_key_order:
+            for key in self.profile_allowed_key_order:
+                if key in skill_set:
+                    return key
+        for key in POLICY_SKILL_KEYS:
+            if key in self.profile_allowed_keys:
+                return key
+        return None
+
     def _teacher_key_from_text(self, text: str) -> Optional[str]:
         patterns = [
             r"(?:press|tap|hit|use)\s+(?:key\s+)?(shift)",
@@ -2065,6 +2145,94 @@ class PolicyAgent:
                 if len(key) == 1 and key.isalpha():
                     return key.lower()
                 return key.lower()
+        return None
+
+    def _teacher_action_repr(self, action: dict) -> str:
+        label = str(action.get("label") or action.get("action") or "").lower()
+        if label == "key_press":
+            key = action.get("key") or ""
+            return f"press {key}".strip()
+        if label == "click_secondary":
+            return "click right"
+        if label == "click_primary":
+            return "click left"
+        if label == "mouse_move":
+            return "move mouse"
+        return label or "wait"
+
+    def _normalize_teacher_label(self, label: str) -> str:
+        label = str(label or "").strip().lower()
+        aliases = {
+            "click": "click_primary",
+            "attack": "click_primary",
+            "primary": "click_primary",
+            "secondary": "click_secondary",
+            "right_click": "click_secondary",
+            "left_click": "click_primary",
+            "move_mouse": "mouse_move",
+        }
+        return aliases.get(label, label)
+
+    def _normalize_teacher_action_obj(self, action: dict) -> Optional[Dict[str, object]]:
+        label = self._normalize_teacher_label(action.get("label") or action.get("action") or action.get("type"))
+        if not label:
+            return None
+        target_norm = action.get("target_norm") or action.get("target")
+        if isinstance(target_norm, dict):
+            try:
+                target_norm = [float(target_norm.get("x")), float(target_norm.get("y"))]
+            except (TypeError, ValueError):
+                target_norm = None
+        if isinstance(target_norm, (list, tuple)) and len(target_norm) >= 2:
+            try:
+                x_norm = max(0.0, min(1.0, float(target_norm[0])))
+                y_norm = max(0.0, min(1.0, float(target_norm[1])))
+                target_norm = [x_norm, y_norm]
+            except (TypeError, ValueError):
+                target_norm = None
+        else:
+            target_norm = None
+        target_label = action.get("target_label")
+        if label == "key_press":
+            key = str(action.get("key") or "").lower().strip()
+            if not key:
+                return None
+            if not self._key_allowed(key):
+                logger.info("Teacher requested key '%s' not in allowed_keys; ignoring", key)
+                return None
+            return {"label": "key_press", "key": key}
+        if label in {"click_primary", "click_secondary"}:
+            if target_norm:
+                if not self._cursor_is_fresh() or not self._cursor_near_target(*target_norm):
+                    move = self._teacher_target_move(target_norm)
+                    if move:
+                        logger.info(
+                            "Teacher requested %s but cursor not on target %s; moving cursor first",
+                            label,
+                            target_norm,
+                        )
+                        return move
+            payload = {"label": label}
+            if target_norm:
+                payload["target_norm"] = target_norm
+            if target_label:
+                payload["target_label"] = target_label
+            return payload
+        if label == "mouse_move":
+            dx = action.get("dx")
+            dy = action.get("dy")
+            if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
+                return {"label": "mouse_move", "dx": int(dx), "dy": int(dy)}
+            if target_norm:
+                move = self._teacher_target_move(target_norm)
+                if move:
+                    return move
+            return {"label": "wait"}
+        if label in {"mouse_hold", "mouse_release"}:
+            button = action.get("button") or "left"
+            return {"label": label, "button": button}
+        if label == "wait":
+            return {"label": "wait"}
         return None
 
     @staticmethod

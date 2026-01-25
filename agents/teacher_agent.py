@@ -69,6 +69,7 @@ TEACHER_PROMPT_ALLOW = {item.strip().lower() for item in os.getenv("TEACHER_PROM
 TEACHER_REQUIRE_IN_GAME = os.getenv("TEACHER_REQUIRE_IN_GAME", "0") != "0"
 TEACHER_REQUIRE_IN_GAME_STRICT = os.getenv("TEACHER_REQUIRE_IN_GAME_STRICT", "0") != "0"
 TEACHER_ALLOW_OCR_GAME_ID = os.getenv("TEACHER_ALLOW_OCR_GAME_ID", "0") != "0"
+TEACHER_ACTION_JSON = os.getenv("TEACHER_ACTION_JSON", "1") != "0"
 TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
 TEACHER_RESPAWN_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_RESPAWN_KEYWORDS", "resurrect,resurrect at checkpoint,respawn,revive").split(",") if item.strip()}
 TEACHER_DEATH_SCOPES = {item.strip().lower() for item in os.getenv("TEACHER_DEATH_SCOPES", "death_dialog,critical_dialog:death").split(",") if item.strip()}
@@ -112,6 +113,113 @@ def _normalize_game_id(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
     return slug or "unknown_game"
 
+def _strip_code_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        parts = stripped.split("```")
+        if len(parts) >= 3:
+            return parts[1].strip()
+        return stripped.strip("`")
+    return stripped
+
+def _extract_json_block(text: str) -> str:
+    if not text:
+        return ""
+    stripped = _strip_code_fences(text)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start:end + 1]
+    return stripped
+
+def _normalize_action_label(label: str) -> str:
+    label = str(label or "").strip().lower()
+    aliases = {
+        "click": "click_primary",
+        "attack": "click_primary",
+        "primary": "click_primary",
+        "secondary": "click_secondary",
+        "right_click": "click_secondary",
+        "left_click": "click_primary",
+        "move_mouse": "mouse_move",
+    }
+    return aliases.get(label, label)
+
+def _normalize_target_norm(value) -> Optional[List[float]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        x = value.get("x")
+        y = value.get("y")
+        try:
+            x_norm = max(0.0, min(1.0, float(x)))
+            y_norm = max(0.0, min(1.0, float(y)))
+            return [x_norm, y_norm]
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            x_norm = max(0.0, min(1.0, float(value[0])))
+            y_norm = max(0.0, min(1.0, float(value[1])))
+            return [x_norm, y_norm]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+def _normalize_action_payload(raw) -> Optional[dict]:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        payload = raw
+    else:
+        try:
+            payload = json.loads(_extract_json_block(str(raw)))
+        except Exception:
+            return None
+    if not isinstance(payload, dict):
+        return None
+    action = payload.get("action")
+    if isinstance(action, str):
+        action = {"label": action}
+    if not isinstance(action, dict):
+        return None
+    label = _normalize_action_label(action.get("label") or action.get("action") or action.get("type"))
+    if not label:
+        return None
+    normalized = {"label": label}
+    key = action.get("key") or action.get("value")
+    if key:
+        normalized["key"] = str(key).strip().lower()
+    target_norm = _normalize_target_norm(action.get("target_norm") or action.get("target"))
+    if target_norm:
+        normalized["target_norm"] = target_norm
+    target_label = action.get("target_label") or action.get("target_name") or action.get("target")
+    if isinstance(target_label, str):
+        normalized["target_label"] = target_label.strip()
+    for name in ("dx", "dy", "button"):
+        if name in action:
+            normalized[name] = action[name]
+    return {
+        "action": normalized,
+        "reasoning": payload.get("reasoning") or payload.get("rationale") or payload.get("thought") or "",
+    }
+
+def _action_to_text(action: dict) -> str:
+    label = str(action.get("label") or "").lower()
+    if label == "key_press":
+        key = action.get("key") or ""
+        return f"press {key}".strip()
+    if label == "click_secondary":
+        return "click right"
+    if label == "click_primary":
+        return "click left"
+    if label == "mouse_move":
+        return "move mouse"
+    if label in {"mouse_hold", "mouse_release"}:
+        button = action.get("button") or "left"
+        return f"{label} {button}"
+    return label or "wait"
+
 class BaseChatClient:
     def _complete(self, messages):  # pragma: no cover - subclasses implement transport
         raise NotImplementedError
@@ -138,9 +246,18 @@ class BaseChatClient:
                 "content": (
                     "Propose one safe, concrete next action. "
                     "Use only controls listed in the scene summary under Controls. "
-                    "If you suggest a key press, write it explicitly (example: 'press q' or 'press 1'). "
-                    "When enemies are present and skill keys exist, prefer a skill key over repeated clicks. "
-                    "If you include coordinates, use normalized 0..1."
+                    "When enemies are present and skill keys exist, you MUST choose a key_press action. "
+                    "Return ONLY valid JSON with this schema:\n"
+                    "{\n"
+                    "  \"action\": {\n"
+                    "    \"label\": \"mouse_move|click_primary|click_secondary|key_press|mouse_hold|mouse_release|wait\",\n"
+                    "    \"key\": \"q\",\n"
+                    "    \"target_norm\": [0.50, 0.50],\n"
+                    "    \"target_label\": \"enemy\"\n"
+                    "  },\n"
+                    "  \"reasoning\": \"short rationale\"\n"
+                    "}\n"
+                    "Use normalized 0..1 coordinates; omit target_norm/target_label when not relevant."
                 ),
             },
             {
@@ -149,7 +266,7 @@ class BaseChatClient:
                     f"Reasoning:\n{reasoning}\n\n"
                     f"Scene summary:\n{scene_summary}\n\n"
                     f"Recent actions:\n{recent_actions}\n\n"
-                    "Return the action as a single sentence."
+                    "Return JSON only. No prose."
                 ),
             },
         ]
@@ -555,21 +672,45 @@ class TeacherAgent:
                 context_game = context_payload.get("game")
 
             reasoning = llm.summarize(scene_summary, snapshot_hint, recent_actions)
-            action_text = llm.propose_action(reasoning, scene_summary, recent_actions)
-            if not action_text:
+            raw_action = llm.propose_action(reasoning, scene_summary, recent_actions)
+            if not raw_action:
+                return
+            parsed_action = _normalize_action_payload(raw_action) if TEACHER_ACTION_JSON else None
+            if TEACHER_ACTION_JSON and not parsed_action:
+                logger.info("Teacher response missing valid JSON action; dropping")
+                return
+            action_obj = parsed_action["action"] if parsed_action else None
+            action_text = _action_to_text(action_obj) if action_obj else str(raw_action).strip()
+            enemies = scene.get("enemies") or []
+            stats = scene.get("stats") or {}
+            try:
+                enemy_count = float(stats.get("enemy_count", 0) or 0)
+            except (TypeError, ValueError):
+                enemy_count = 0
+            has_enemies = bool(enemies) or enemy_count > 0
+            if has_enemies and action_obj and action_obj.get("label") != "key_press":
+                logger.info("Teacher rejected non-key action while enemies present: %s", action_obj.get("label"))
+                return
+            if has_enemies and not action_obj:
+                logger.info("Teacher rejected unstructured action while enemies present")
                 return
 
             payload = {
                 "ok": True,
                 "timestamp": time.time(),
-                "action": action_text,
-                "reasoning": reasoning,
+                "action": action_obj or action_text,
+                "reasoning": parsed_action.get("reasoning") if parsed_action else reasoning,
                 "text": action_text,
                 "rules_used": len(rules),
                 "recent_critical_used": len(recent_critical),
                 "game_id": self.game_id,
                 "context_game": context_game,
             }
+            if action_obj:
+                if "target_norm" in action_obj:
+                    payload["target_norm"] = action_obj.get("target_norm")
+                if "target_label" in action_obj:
+                    payload["target_label"] = action_obj.get("target_label")
             client.publish(TEACHER_TOPIC, json.dumps(payload))
 
         except Exception as exc:
