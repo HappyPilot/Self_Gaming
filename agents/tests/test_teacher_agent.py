@@ -11,7 +11,12 @@ class DummyLLM:
 
     def propose_action(self, reasoning, scene_summary, recent_actions):
         self.action_args = (reasoning, scene_summary, recent_actions)
-        return "Click the search box and type weather"
+        return json.dumps(
+            {
+                "action": {"label": "click_primary", "target_norm": [0.5, 0.5], "target_label": "search box"},
+                "reasoning": "Click the search box",
+            }
+        )
 
 
 class DummyMQTT:
@@ -46,7 +51,7 @@ class TeacherAgentTest(unittest.TestCase):
         self.assertTrue(agent.client.messages, "Teacher agent did not publish an action")
         topic, payload = agent.client.messages[0]
         self.assertIn("teacher/action", topic)
-        self.assertTrue(payload["action"].lower().startswith("click"))
+        self.assertEqual(payload["action"]["label"], "click_primary")
         self.assertIn("reasoning", payload)
 
     def test_rules_and_recent_critical_in_prompt(self):

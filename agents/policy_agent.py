@@ -11,7 +11,7 @@ import random
 import re
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Set, Tuple
 
@@ -20,7 +20,12 @@ import torch
 import torch.nn as nn
 
 from models.backbone import Backbone
+from utils.embedding_projector import EmbeddingProjector
 from utils.latency import emit_control_metric, emit_latency, get_float_env, get_sla_ms
+try:
+    from .control_profile import load_profile, safe_profile
+except ImportError:
+    from control_profile import load_profile, safe_profile
 
 
 def _normalize_phrase(text: str) -> str:
@@ -28,6 +33,14 @@ def _normalize_phrase(text: str) -> str:
         return ""
     normalized = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.lower())
     return " ".join(normalized.split())
+
+
+def _normalize_game_id(value: str) -> str:
+    if not value:
+        return "unknown_game"
+    lowered = str(value).strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    return slug or "unknown_game"
 
 
 def _candidate_chunks(cleaned: str):
@@ -51,15 +64,23 @@ def _parse_env_list(value: str) -> Set[str]:
     return {item.strip().lower() for item in value.split(",") if item.strip()}
 
 
+def _parse_action_list(value: str) -> List[str]:
+    return [item.strip().lower() for item in value.split(",") if item.strip()]
+
+
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-OBS_TOPIC = os.getenv("OBS_TOPIC", "vision/obs")
+OBS_TOPIC = os.getenv("OBS_TOPIC", "scene/state")
 SIM_TOPIC = os.getenv("SIM_TOPIC", "sim_core/state")
 GOAP_TOPIC = os.getenv("GOAP_TASK_TOPIC", "goap/tasks")
 CONTROL_TOPIC = os.getenv("ACT_TOPIC", "control/keys")
 ACT_CMD_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
 TEACHER_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action")
 CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
+PROGRESS_TOPIC = os.getenv("PROGRESS_TOPIC", "progress/status")
+REWARD_TOPIC = os.getenv("REWARD_TOPIC", "train/reward")
+GAME_SCHEMA_TOPIC = os.getenv("GAME_SCHEMA_TOPIC", "game/schema")
+CONTROL_PROFILE_GAME_ID = os.getenv("CONTROL_PROFILE_GAME_ID") or os.getenv("RECORDER_GAME_ID") or os.getenv("GAME_ID") or "unknown_game"
 THRESH = float(os.getenv("THRESH", "120.0"))
 DEBOUNCE = float(os.getenv("DEBOUNCE", "0.25"))
 SLA_STAGE_POLICY_MS = get_sla_ms("SLA_STAGE_POLICY_MS")
@@ -70,18 +91,31 @@ CONTROL_METRIC_SAMPLE_EVERY = max(1, int(os.getenv("CONTROL_METRIC_SAMPLE_EVERY"
 TEACHER_ALPHA_START = float(os.getenv("TEACHER_ALPHA_START", "1.0"))
 TEACHER_DECAY_STEPS = int(os.getenv("TEACHER_ALPHA_DECAY_STEPS", "500"))
 MIN_ALPHA = float(os.getenv("TEACHER_ALPHA_MIN", "0.0"))
+TEACHER_TARGET_PRIORITY = os.getenv("TEACHER_TARGET_PRIORITY", "1") != "0"
+TEACHER_TARGET_AUTOCLICK = os.getenv("TEACHER_TARGET_AUTOCLICK", "0") != "0"
+TEACHER_TARGET_AUTOCLICK_COOLDOWN = float(os.getenv("TEACHER_TARGET_AUTOCLICK_COOLDOWN", "2.0"))
+TEACHER_TARGET_AUTOCLICK_SAME_TOL = float(os.getenv("TEACHER_TARGET_AUTOCLICK_SAME_TOL", "0.04"))
 MOUSE_RANGE = int(os.getenv("POLICY_MOUSE_RANGE", "60"))
 MIN_MOUSE_DELTA = int(os.getenv("POLICY_MIN_MOUSE_DELTA", "8"))
 CLICK_COOLDOWN = float(os.getenv("POLICY_CLICK_COOLDOWN", "0.75"))
-NON_VISUAL_DIM = 128
 NUMERIC_DIM = 32
 OBJECT_HIST_DIM = 32
 TEXT_EMBED_DIM = 64
+BASE_NON_VISUAL_DIM = NUMERIC_DIM + OBJECT_HIST_DIM + TEXT_EMBED_DIM
+EMBED_FEATURE_ENABLED = os.getenv("EMBED_FEATURE_ENABLED", "0") != "0"
+EMBED_FEATURE_DIM = int(os.getenv("EMBED_FEATURE_DIM", "128"))
+EMBED_FEATURE_SOURCE_DIM = int(os.getenv("EMBED_FEATURE_SOURCE_DIM", "768"))
+EMBED_FEATURE_SEED = int(os.getenv("EMBED_FEATURE_SEED", "42"))
+EMBED_FEATURE_LAYER_NORM = os.getenv("EMBED_FEATURE_LAYER_NORM", "1") != "0"
+NON_VISUAL_DIM = BASE_NON_VISUAL_DIM + (EMBED_FEATURE_DIM if EMBED_FEATURE_ENABLED else 0)
 FRAME_SHAPE = (3, int(os.getenv("POLICY_FRAME_HEIGHT", "96")), int(os.getenv("POLICY_FRAME_WIDTH", "54")))
 BACKBONE_PATH = Path(os.getenv("POLICY_BACKBONE_PATH", "/mnt/ssd/models/backbone/backbone.pt"))
 POLICY_HEAD_PATH = Path(os.getenv("POLICY_HEAD_PATH", "/mnt/ssd/models/heads/ppo/policy_head.pt"))
 VALUE_HEAD_PATH = Path(os.getenv("POLICY_VALUE_HEAD_PATH", "/mnt/ssd/models/heads/ppo/value_head.pt"))
 LABEL_MAP_PATH = Path(os.getenv("POLICY_LABEL_MAP_PATH", "/mnt/ssd/models/heads/ppo/label_map.json"))
+POLICY_LABEL_MAP_OPTIONAL = os.getenv("POLICY_LABEL_MAP_OPTIONAL", "1") != "0"
+POLICY_LABEL_MAP_FALLBACK_PATH = Path(os.getenv("POLICY_LABEL_MAP_FALLBACK_PATH", "config/label_map.default.json"))
+POLICY_DEFAULT_ACTIONS = _parse_action_list(os.getenv("POLICY_DEFAULT_ACTIONS", ""))
 HOT_RELOAD_ENABLED = os.getenv("POLICY_HOT_RELOAD", "1") != "0"
 POLICY_LAZY_LOAD = os.getenv("POLICY_LAZY_LOAD", "1") != "0"
 POLICY_LAZY_RETRY_SEC = float(os.getenv("POLICY_LAZY_RETRY_SEC", "120"))
@@ -113,6 +147,16 @@ FEEDBACK_SETTLE_SEC = float(os.getenv("POLICY_FEEDBACK_SETTLE_SEC", "1.0"))
 POLICY_GAME_KEYWORDS = _parse_env_list(
     os.getenv("POLICY_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map")
 )
+POLICY_REQUIRE_IN_GAME = os.getenv("POLICY_REQUIRE_IN_GAME", "0") != "0"
+POLICY_REQUIRE_IN_GAME_STRICT = os.getenv("POLICY_REQUIRE_IN_GAME_STRICT", "0") != "0"
+POLICY_REQUIRE_EMBEDDINGS = os.getenv("POLICY_REQUIRE_EMBEDDINGS", "0") != "0"
+POLICY_EMBED_MAX_AGE_SEC = float(os.getenv("POLICY_EMBED_MAX_AGE_SEC", "5.0"))
+POLICY_MEANINGFUL_FALLBACK = os.getenv("POLICY_MEANINGFUL_FALLBACK", "0") != "0"
+POLICY_PREFER_TARGETS = os.getenv("POLICY_PREFER_TARGETS", "1") != "0"
+POLICY_RANDOM_FALLBACK = os.getenv("POLICY_RANDOM_FALLBACK", "1") != "0"
+POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
+POLICY_ENEMY_SKILL_SUBSTITUTE = os.getenv("POLICY_ENEMY_SKILL_SUBSTITUTE", "1") != "0"
+POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
 RESPAWN_TEXTS = _parse_env_list(
     os.getenv("RESPAWN_TRIGGER_TEXTS", "resurrect at checkpoint,resurrect in town,resurrect")
 )
@@ -132,11 +176,70 @@ MIN_TARGET_DELTA = float(os.getenv("POLICY_TARGET_MIN_DELTA", "2.0"))
 POLICY_SCENE_BRIGHT_THRESHOLD = float(os.getenv("POLICY_SCENE_BRIGHT_THRESHOLD", "0.65"))
 POLICY_FORBIDDEN_COOLDOWN = float(os.getenv("POLICY_FORBIDDEN_COOLDOWN", "3.0"))
 HOVER_DEBUG = os.getenv("POLICY_HOVER_DEBUG", "0") != "0"
-TEACHER_TARGET_COORD_RE = re.compile(r"target\s*=\s*\(\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)", re.IGNORECASE)
+TEACHER_TARGET_COORD_RE = re.compile(
+    r"(?:target|coord(?:inate)?s?)\s*[:=]?\s*[\(\[]?\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*[\)\]]?",
+    re.IGNORECASE,
+)
+TEACHER_PAREN_COORD_RE = re.compile(r"\(\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\)")
 TEACHER_TARGET_LABEL_RE = re.compile(r"target_hint\s*:?\s*([^|\n\r]+)", re.IGNORECASE)
+
+POLICY_EXPLORATION_ENABLED = os.getenv("POLICY_EXPLORATION_ENABLED", "1") != "0"
+POLICY_EXPLORATION_REWARD_TIMEOUT_SEC = float(os.getenv("POLICY_EXPLORATION_REWARD_TIMEOUT_SEC", "180"))
+POLICY_EXPLORATION_MIN_REWARD = float(os.getenv("POLICY_EXPLORATION_MIN_REWARD", "0.05"))
+POLICY_EXPLORATION_LOCATION_AGE_SEC = float(os.getenv("POLICY_EXPLORATION_LOCATION_AGE_SEC", "90"))
+POLICY_EXPLORATION_OBJECT_NEW_RATE_MAX = float(os.getenv("POLICY_EXPLORATION_OBJECT_NEW_RATE_MAX", "0.02"))
+POLICY_EXPLORATION_REPEAT_WINDOW = max(1, int(os.getenv("POLICY_EXPLORATION_REPEAT_WINDOW", "8")))
+POLICY_EXPLORATION_REPEAT_MIN = max(1, int(os.getenv("POLICY_EXPLORATION_REPEAT_MIN", "6")))
+POLICY_EXPLORATION_COOLDOWN_SEC = float(os.getenv("POLICY_EXPLORATION_COOLDOWN_SEC", "120"))
+POLICY_EXPLORATION_BURST_ACTIONS = int(os.getenv("POLICY_EXPLORATION_BURST_ACTIONS", "6"))
+POLICY_EXPLORATION_ALLOW_CLICK = os.getenv("POLICY_EXPLORATION_ALLOW_CLICK", "0") != "0"
+POLICY_EXPLORATION_KEYS = _parse_env_list(os.getenv("POLICY_EXPLORATION_KEYS", ""))
+POLICY_EXPLORATION_KEYS_FROM_PROFILE = os.getenv("POLICY_EXPLORATION_KEYS_FROM_PROFILE", "0") != "0"
+POLICY_EXPLORATION_MARGIN = float(os.getenv("POLICY_EXPLORATION_MARGIN", "0.08"))
+POLICY_EXPLORATION_MOUSE_RANGE = int(os.getenv("POLICY_EXPLORATION_MOUSE_RANGE", str(MOUSE_RANGE * 2)))
+POLICY_EXPLORATION_KEY_BURST = os.getenv("POLICY_EXPLORATION_KEY_BURST", "0") != "0"
+POLICY_EXPLORATION_KEY_BURST_COUNT = int(os.getenv("POLICY_EXPLORATION_KEY_BURST_COUNT", "2"))
+POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC = float(os.getenv("POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC", "600"))
+
+DEFAULT_ACTIONS = [
+    "wait",
+    "mouse_move",
+    "click_primary",
+    "click_secondary",
+    "mouse_hold",
+    "mouse_release",
+    "key_w",
+    "key_a",
+    "key_s",
+    "key_d",
+    "key_q",
+    "key_e",
+    "key_r",
+    "key_t",
+    "key_f",
+    "key_1",
+    "key_2",
+    "key_3",
+    "key_4",
+    "key_5",
+    "key_space",
+    "key_tab",
+    "key_enter",
+    "key_escape",
+]
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+EMBED_PROJECTOR = (
+    EmbeddingProjector(
+        in_dim=EMBED_FEATURE_SOURCE_DIM,
+        out_dim=EMBED_FEATURE_DIM,
+        seed=EMBED_FEATURE_SEED,
+        use_layer_norm=EMBED_FEATURE_LAYER_NORM,
+    )
+    if EMBED_FEATURE_ENABLED
+    else None
+)
 
 
 def compute_cursor_motion(
@@ -161,6 +264,78 @@ def compute_cursor_motion(
     )
     delta = (target_px[0] - cursor_px[0], target_px[1] - cursor_px[1])
     return target_px, cursor_px, delta
+
+
+def _coerce_label_map(raw: object) -> Dict[str, int]:
+    if isinstance(raw, dict):
+        mapping = {}
+        for action, idx in raw.items():
+            try:
+                mapping[str(action)] = int(idx)
+            except (TypeError, ValueError):
+                continue
+        return mapping
+    if isinstance(raw, list):
+        mapping = {}
+        for idx, action in enumerate(raw):
+            if action:
+                mapping[str(action)] = idx
+        return mapping
+    return {}
+
+
+def _load_label_map_from_path(path: Optional[Path]) -> Tuple[Dict[str, int], str]:
+    if not path:
+        return {}, "missing"
+    if not path.exists():
+        return {}, f"missing:{path}"
+    try:
+        raw = json.loads(path.read_text())
+    except Exception as exc:
+        logger.warning("Failed to load label_map from %s: %s", path, exc)
+        return {}, f"invalid:{path}"
+    label_map = _coerce_label_map(raw)
+    if not label_map:
+        return {}, f"empty:{path}"
+    return label_map, f"path:{path}"
+
+
+def _fallback_actions(num_classes: Optional[int]) -> Tuple[List[str], str]:
+    if POLICY_DEFAULT_ACTIONS:
+        actions = list(POLICY_DEFAULT_ACTIONS)
+        source = "env"
+    else:
+        actions = []
+        source = "builtin"
+        if POLICY_LABEL_MAP_FALLBACK_PATH.exists():
+            label_map, origin = _load_label_map_from_path(POLICY_LABEL_MAP_FALLBACK_PATH)
+            if label_map:
+                actions = [action for action, _idx in sorted(label_map.items(), key=lambda item: item[1])]
+                source = origin
+        if not actions:
+            actions = list(DEFAULT_ACTIONS)
+            source = "builtin"
+    if num_classes is not None and num_classes > 0:
+        if len(actions) < num_classes:
+            actions.extend([f"action_{idx}" for idx in range(len(actions), num_classes)])
+        elif len(actions) > num_classes:
+            actions = actions[:num_classes]
+    return actions, source
+
+
+def _build_idx_to_action(label_map: Dict[str, int], num_classes: int) -> Dict[int, str]:
+    idx_to_action: Dict[int, str] = {}
+    for action, idx in label_map.items():
+        try:
+            idx_int = int(idx)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx_int < num_classes:
+            idx_to_action[idx_int] = action
+    for idx in range(num_classes):
+        if idx not in idx_to_action:
+            idx_to_action[idx] = f"action_{idx}"
+    return idx_to_action
 
 OBJECT_CLASS_BUCKETS = {
     "enemy_melee": 0,
@@ -209,7 +384,15 @@ def encode_non_visual(state: Dict) -> torch.Tensor:
         for token in str(entry).lower().split():
             idx = hash(token) % TEXT_EMBED_DIM
             text_bins[idx] += 1.0
-    vector[start + OBJECT_HIST_DIM :] = text_bins
+    text_offset = start + OBJECT_HIST_DIM
+    vector[text_offset : text_offset + TEXT_EMBED_DIM] = text_bins
+    if EMBED_FEATURE_ENABLED and EMBED_PROJECTOR is not None:
+        embedding = state.get("embeddings") or state.get("embedding")
+        projected = EMBED_PROJECTOR.project(embedding)
+        if projected is not None:
+            embed_tensor = torch.from_numpy(projected)
+            embed_offset = BASE_NON_VISUAL_DIM
+            vector[embed_offset : embed_offset + EMBED_FEATURE_DIM] = embed_tensor
     return vector
 
 
@@ -256,6 +439,9 @@ class PolicyAgent:
         self.teacher_min_alpha = max(0.0, MIN_ALPHA)
         self.steps = 0
         self.last_label: Optional[str] = None
+        self.profile_allowed_keys: Set[str] = set()
+        self.profile_allowed_key_order: List[str] = []
+        self.game_id = _normalize_game_id(CONTROL_PROFILE_GAME_ID)
         self.last_click_ts = 0.0
         self.rng = random.Random()
         self.model_lock = threading.Lock()
@@ -289,6 +475,7 @@ class PolicyAgent:
         self.shop_suppress_enabled = SHOP_SUPPRESS
         self.shop_suppress_death_only = SHOP_SUPPRESS_DEATH_ONLY
         self.feedback_pending = False
+        self.last_json_error_ts = 0.0
         self.feedback_signature = ""
         self.game_keywords = set(POLICY_GAME_KEYWORDS)
         self.desktop_keywords = set(DESKTOP_KEYWORDS)
@@ -306,6 +493,13 @@ class PolicyAgent:
         self.control_ready_window: Deque[int] = deque(maxlen=CONTROL_READY_WINDOW)
         self.control_tick_count = 0
         self.last_control_action: Optional[dict] = None
+        self.progress_state: Dict[str, object] = {}
+        self.last_reward_ts = 0.0
+        self.exploration_queue: Deque[Dict[str, object]] = deque()
+        self.exploration_cooldown_until = 0.0
+        self.exploration_key_cooldown_until = 0.0
+        self.recent_action_labels: Deque[str] = deque(maxlen=POLICY_EXPLORATION_REPEAT_WINDOW)
+        self.last_autoclick = None
         if self.hot_reload_enabled and not self.lazy_load_enabled:
             self._initial_model_load()
             self.model_load_attempted = True
@@ -323,30 +517,52 @@ class PolicyAgent:
             SCREEN_WIDTH,
             SCREEN_HEIGHT,
         )
+        logger.info(
+            "Policy checkpoints | backbone=%s policy_head=%s label_map=%s exists=%s",
+            BACKBONE_PATH,
+            POLICY_HEAD_PATH,
+            LABEL_MAP_PATH,
+            LABEL_MAP_PATH.exists(),
+        )
 
     # ------------------------------------------------------------------ Model
     def _initial_model_load(self):
-        if BACKBONE_PATH.exists() and POLICY_HEAD_PATH.exists() and LABEL_MAP_PATH.exists():
+        if BACKBONE_PATH.exists() and POLICY_HEAD_PATH.exists():
             logger.info("Attempting initial model load from %s", POLICY_HEAD_PATH.parent)
             self._reload_worker(
                 {
                     "backbone_path": str(BACKBONE_PATH),
                     "policy_head_path": str(POLICY_HEAD_PATH),
                     "value_head_path": str(VALUE_HEAD_PATH),
-                    "label_map_path": str(LABEL_MAP_PATH),
+                    "label_map_path": str(LABEL_MAP_PATH) if LABEL_MAP_PATH.exists() else None,
                 }
             )
         else:
             logger.warning("Policy hot reload enabled but no initial checkpoint found")
 
     def _build_model(self, paths: Dict) -> Dict:
+        policy_state = torch.load(paths.get("policy_head_path"), map_location=DEVICE)
+        weight = policy_state.get("weight")
+        if weight is None or not hasattr(weight, "shape"):
+            raise ValueError("policy_head missing weight tensor")
+        num_classes = int(weight.shape[0])
+
         label_map_path = Path(paths.get("label_map_path") or LABEL_MAP_PATH)
-        with label_map_path.open("r", encoding="utf-8") as f:
-            label_map = json.load(f)
-        idx_to_action = {int(idx): action for action, idx in label_map.items()}
-        num_classes = len(idx_to_action)
-        if num_classes == 0:
+        label_map, source = _load_label_map_from_path(label_map_path if label_map_path else None)
+        if not label_map and POLICY_LABEL_MAP_OPTIONAL:
+            actions, source = _fallback_actions(num_classes)
+            label_map = {action: idx for idx, action in enumerate(actions)}
+            logger.warning("Label map missing; using fallback (%s) with %s actions", source, len(label_map))
+        if not label_map:
             raise ValueError("label_map is empty")
+
+        if num_classes != len(label_map):
+            logger.warning(
+                "Label map size (%s) does not match policy head classes (%s); reconciling",
+                len(label_map),
+                num_classes,
+            )
+        idx_to_action = _build_idx_to_action(label_map, num_classes)
 
         backbone = Backbone(frame_shape=FRAME_SHAPE, non_visual_dim=NON_VISUAL_DIM).to(DEVICE)
         policy_head = nn.Linear(backbone.output_dim, num_classes).to(DEVICE)
@@ -354,7 +570,6 @@ class PolicyAgent:
 
         backbone_state = torch.load(paths.get("backbone_path"), map_location=DEVICE)
         backbone.load_state_dict(backbone_state)
-        policy_state = torch.load(paths.get("policy_head_path"), map_location=DEVICE)
         policy_head.load_state_dict(policy_state)
         value_state_path = paths.get("value_head_path")
         if value_state_path and Path(value_state_path).exists():
@@ -368,10 +583,11 @@ class PolicyAgent:
             "policy_head": policy_head,
             "value_head": value_head,
             "idx_to_action": idx_to_action,
+            "label_map_source": source,
         }
 
     def _schedule_model_reload(self, paths: Dict):
-        required = ["backbone_path", "policy_head_path", "label_map_path"]
+        required = ["backbone_path", "policy_head_path"]
         if not all(paths.get(key) for key in required):
             logger.warning("Checkpoint missing required paths: %s", paths)
             return
@@ -389,7 +605,9 @@ class PolicyAgent:
             if signature is not None:
                 self.last_checkpoint_signature = signature
             logger.info(
-                "Policy model reloaded from %s",
+                "Policy model reloaded | actions=%s label_map=%s path=%s",
+                len(model.get("idx_to_action", {})),
+                model.get("label_map_source"),
                 paths.get("policy_head_path"),
             )
         except Exception as exc:
@@ -402,10 +620,11 @@ class PolicyAgent:
             return self.model
 
     def _checkpoint_signature(self) -> Optional[Tuple[Tuple[float, int], ...]]:
-        paths = [BACKBONE_PATH, POLICY_HEAD_PATH, LABEL_MAP_PATH]
-        for path in paths:
-            if not path.exists():
-                return None
+        if not BACKBONE_PATH.exists() or not POLICY_HEAD_PATH.exists():
+            return None
+        paths = [BACKBONE_PATH, POLICY_HEAD_PATH]
+        if LABEL_MAP_PATH.exists():
+            paths.append(LABEL_MAP_PATH)
         signature = []
         for path in paths:
             stat = path.stat()
@@ -419,7 +638,12 @@ class PolicyAgent:
         if self.auto_reload_delay_sec <= 0:
             return True
         now = time.time()
-        for path in (BACKBONE_PATH, POLICY_HEAD_PATH, LABEL_MAP_PATH, VALUE_HEAD_PATH):
+        paths = [BACKBONE_PATH, POLICY_HEAD_PATH]
+        if LABEL_MAP_PATH.exists():
+            paths.append(LABEL_MAP_PATH)
+        if VALUE_HEAD_PATH.exists():
+            paths.append(VALUE_HEAD_PATH)
+        for path in paths:
             if not path.exists():
                 continue
             stat = path.stat()
@@ -465,6 +689,12 @@ class PolicyAgent:
             subscriptions.append((GOAP_TOPIC, 0))
         if CHECKPOINT_TOPIC:
             subscriptions.append((CHECKPOINT_TOPIC, 0))
+        if PROGRESS_TOPIC:
+            subscriptions.append((PROGRESS_TOPIC, 0))
+        if REWARD_TOPIC:
+            subscriptions.append((REWARD_TOPIC, 0))
+        if GAME_SCHEMA_TOPIC:
+            subscriptions.append((GAME_SCHEMA_TOPIC, 0))
         if CURSOR_TOPIC:
             subscriptions.append((CURSOR_TOPIC, 0))
         if rc == 0:
@@ -484,22 +714,43 @@ class PolicyAgent:
             payload = msg.payload.decode("utf-8", "ignore")
             try:
                 data = json.loads(payload)
-            except Exception:
+            except Exception as exc:
                 data = {}
+                if payload.strip():
+                    now = time.time()
+                    if now - self.last_json_error_ts > 5.0:
+                        logger.warning("Invalid JSON on %s: %s", msg.topic, exc)
+                        self.last_json_error_ts = now
 
             if msg.topic == TEACHER_TOPIC:
                 if isinstance(data, dict):
-                    action_text = data.get("action") or data.get("text")
+                    raw_action = data.get("action") or data.get("text")
+                    action_obj = raw_action if isinstance(raw_action, dict) else None
+                    action_text = raw_action if isinstance(raw_action, str) else None
+                    if action_obj and not action_text:
+                        action_text = self._teacher_action_repr(action_obj)
                     if action_text:
                         self.teacher_action = {
                             "text": action_text,
                             "reasoning": data.get("reasoning"),
                             "timestamp": data.get("timestamp", time.time()),
+                            "action": action_obj,
                         }
+                        if action_obj:
+                            if "target_norm" in action_obj and "target_norm" not in self.teacher_action:
+                                self.teacher_action["target_norm"] = action_obj.get("target_norm")
+                            if "target_label" in action_obj and "target_label" not in self.teacher_action:
+                                self.teacher_action["target_label"] = action_obj.get("target_label")
+                        if data.get("target_norm"):
+                            self.teacher_action["target_norm"] = data.get("target_norm")
+                        if data.get("target_label"):
+                            self.teacher_action["target_label"] = data.get("target_label")
                         self._attach_teacher_target_hint(self.teacher_action)
                         logger.info("Received teacher action: %s", action_text)
             elif msg.topic == OBS_TOPIC or (SIM_TOPIC and msg.topic == SIM_TOPIC):
                 self.latest_state = data
+                self._update_game_id_from_scene(data)
+                self._maybe_refresh_profile_keys(self.game_id, "control_profile")
                 tick_start = time.perf_counter()
                 policy_action = self._policy_from_observation(data)
                 if policy_action is None:
@@ -552,32 +803,123 @@ class PolicyAgent:
             elif CHECKPOINT_TOPIC and msg.topic == CHECKPOINT_TOPIC and self.hot_reload_enabled:
                 if isinstance(data, dict):
                     self._schedule_model_reload(data)
+            elif PROGRESS_TOPIC and msg.topic == PROGRESS_TOPIC:
+                if isinstance(data, dict):
+                    self._handle_progress_status(data)
+            elif REWARD_TOPIC and msg.topic == REWARD_TOPIC:
+                if isinstance(data, dict):
+                    self._handle_reward(data)
+            elif GAME_SCHEMA_TOPIC and msg.topic == GAME_SCHEMA_TOPIC:
+                schema = data.get("schema") if isinstance(data, dict) else None
+                if not isinstance(schema, dict):
+                    schema = data if isinstance(data, dict) else None
+                if isinstance(schema, dict):
+                    profile = schema.get("profile")
+                    allowed = profile.get("allowed_keys") if isinstance(profile, dict) else None
+                    if isinstance(allowed, list):
+                        ordered = [str(k).lower() for k in allowed if k]
+                        keys = {k for k in ordered if k}
+                        if keys:
+                            merged = self.profile_allowed_keys | keys
+                            if merged != self.profile_allowed_keys:
+                                self.profile_allowed_keys = merged
+                                logger.info("Policy merged allowed_keys from game schema: %s", sorted(merged))
+                            self._maybe_refresh_profile_keys(self.game_id, "control_profile")
+                            self._merge_profile_key_order(ordered, "game_schema")
             elif CURSOR_TOPIC and msg.topic == CURSOR_TOPIC:
                 if isinstance(data, dict):
                     self._handle_cursor_message(data)
+
+    def _update_game_id_from_scene(self, state: dict) -> None:
+        if not isinstance(state, dict):
+            return
+        raw = state.get("game_id")
+        if not raw:
+            flags = state.get("flags") or {}
+            raw = flags.get("game_id")
+        if not raw:
+            return
+        normalized = _normalize_game_id(str(raw))
+        if normalized and normalized != self.game_id:
+            self.game_id = normalized
+            logger.info("Policy game_id set: %s", self.game_id)
+
+    def _load_profile_allowed_keys(self, game_id: str) -> Set[str]:
+        ordered = self._load_profile_allowed_keys_ordered(game_id)
+        return {k for k in ordered if k}
+
+    def _load_profile_allowed_keys_ordered(self, game_id: str) -> List[str]:
+        profile = load_profile(str(game_id)) or load_profile("unknown_game") or safe_profile(str(game_id))
+        return [str(k).lower() for k in profile.get("allowed_keys", []) if k]
+
+    def _merge_profile_key_order(self, keys: List[str], source: str) -> None:
+        if not keys:
+            return
+        normalized = [str(k).lower() for k in keys if k]
+        if not normalized:
+            return
+        merged = list(self.profile_allowed_key_order)
+        existing = set(merged)
+        for key in normalized:
+            if key not in existing:
+                merged.append(key)
+                existing.add(key)
+        if merged != self.profile_allowed_key_order:
+            self.profile_allowed_key_order = merged
+            logger.info("Policy merged allowed_keys order from %s: %s", source, merged)
+
+    def _maybe_refresh_profile_keys(self, game_id: str, source: str) -> None:
+        if not game_id:
+            return
+        ordered = self._load_profile_allowed_keys_ordered(game_id)
+        keys = {k for k in ordered if k}
+        if not keys:
+            return
+        merged = self.profile_allowed_keys | keys
+        if merged != self.profile_allowed_keys:
+            self.profile_allowed_keys = merged
+            logger.info("Policy merged allowed_keys from %s: %s", source, sorted(merged))
+        if ordered:
+            self._merge_profile_key_order(ordered, source)
 
     def _attach_teacher_target_hint(self, payload: dict) -> None:
         if not payload:
             return
         reasoning = str(payload.get('reasoning') or '')
-        if not reasoning:
-            payload.pop('target_norm', None)
-            payload.pop('target_label', None)
+        text = str(payload.get('text') or '')
+        existing_target_norm = payload.get('target_norm')
+        existing_target_label = payload.get('target_label')
+        if not reasoning and not text:
+            if existing_target_norm is None:
+                payload.pop('target_norm', None)
+            if existing_target_label is None:
+                payload.pop('target_label', None)
             return
-        match = TEACHER_TARGET_COORD_RE.search(reasoning)
+        match = None
+        for candidate in (reasoning, text):
+            if not candidate:
+                continue
+            match = TEACHER_TARGET_COORD_RE.search(candidate)
+            if match:
+                break
+            match = TEACHER_PAREN_COORD_RE.search(candidate)
+            if match:
+                break
         if match:
             try:
                 x_norm = max(0.0, min(1.0, float(match.group(1))))
                 y_norm = max(0.0, min(1.0, float(match.group(2))))
                 payload['target_norm'] = [x_norm, y_norm]
             except ValueError:
-                payload.pop('target_norm', None)
+                if existing_target_norm is None:
+                    payload.pop('target_norm', None)
         else:
-            payload.pop('target_norm', None)
-        hint_match = TEACHER_TARGET_LABEL_RE.search(reasoning)
+            if existing_target_norm is None:
+                payload.pop('target_norm', None)
+        hint_match = TEACHER_TARGET_LABEL_RE.search(reasoning) or TEACHER_TARGET_LABEL_RE.search(text)
         if hint_match:
             payload['target_label'] = hint_match.group(1).strip().strip('"')
-        elif 'target_label' in payload:
+        elif existing_target_label is None and 'target_label' in payload:
             payload.pop('target_label', None)
         target_label = payload.get('target_label')
         if target_label:
@@ -619,6 +961,53 @@ class PolicyAgent:
             'cursor_px': cursor_px,
             'source': 'teacher_target',
         }
+
+    def _autoclick_recent(self, target_norm: List[float]) -> bool:
+        if not self.last_autoclick:
+            return False
+        now = time.time()
+        last_ts = self.last_autoclick.get("ts", 0.0)
+        if (now - last_ts) > max(0.0, TEACHER_TARGET_AUTOCLICK_COOLDOWN):
+            return False
+        last_center = self.last_autoclick.get("center")
+        if not last_center or len(last_center) != 2:
+            return False
+        try:
+            dx = float(target_norm[0]) - float(last_center[0])
+            dy = float(target_norm[1]) - float(last_center[1])
+        except (TypeError, ValueError):
+            return False
+        dist = (dx * dx + dy * dy) ** 0.5
+        return dist <= max(0.0, TEACHER_TARGET_AUTOCLICK_SAME_TOL)
+
+    def _maybe_teacher_autoclick(
+        self,
+        target_norm: Optional[List[float]],
+        target_label: Optional[str],
+        text: str,
+    ) -> Optional[Dict[str, object]]:
+        if not TEACHER_TARGET_AUTOCLICK:
+            return None
+        if not target_norm or len(target_norm) != 2:
+            return None
+        if any(term in text for term in ("click", "attack", "shoot", "select", "press", "key")):
+            return None
+        try:
+            x_norm = float(target_norm[0])
+            y_norm = float(target_norm[1])
+        except (TypeError, ValueError):
+            return None
+        if not self._cursor_is_fresh() or not self._cursor_near_target(x_norm, y_norm):
+            return None
+        if not self._click_ready():
+            return None
+        if self._autoclick_recent([x_norm, y_norm]):
+            return None
+        self.last_autoclick = {"center": [x_norm, y_norm], "ts": time.time()}
+        payload = {"label": "click_primary", "target_norm": [x_norm, y_norm], "source": "teacher_autoclick"}
+        if target_label:
+            payload["target_label"] = target_label
+        return payload
 
 
     def _set_active_target(self, center, label=None):
@@ -805,33 +1194,50 @@ class PolicyAgent:
 
         if self._maybe_inject_respawn(state):
             pass
+        exploration_action = self._maybe_exploration_action(state)
+        if exploration_action is not None:
+            return exploration_action
         if self.current_task:
             action = self._action_from_task(state)
         else:
             action = self._action_from_model(state)
+            if (
+                action
+                and POLICY_PREFER_TARGETS
+                and action.get("label") == "mouse_move"
+            ):
+                target_action = self._meaningful_fallback_action(state)
+                if target_action and (target_action.get("target_norm") or target_action.get("target_label")):
+                    action = target_action
             if action is None:
                 if self.stage0_enabled:
                     return None
-                if self.last_label == "mouse_move":
-                    # Random exploration: sometimes click, sometimes hold to run
-                    if self.rng.random() < 0.3:
-                        # Run!
-                        dx = self._random_delta()
-                        dy = self._random_delta()
-                        action = {"label": "mouse_hold", "button": "left", "dx": dx, "dy": dy, "confidence": 1.0}
-                        # We need to release later, but for now let's just hold. 
-                        # The next action will likely be a move or click which overrides hold state logic in host_master 
-                        # (or we should send release). For simple exploration, hold+move is good.
+                meaningful = self._meaningful_fallback_action(state)
+                if meaningful:
+                    action = meaningful
+                elif POLICY_RANDOM_FALLBACK:
+                    if self.last_label == "mouse_move":
+                        # Random exploration: sometimes click, sometimes hold to run
+                        if self.rng.random() < 0.3:
+                            # Run!
+                            dx = self._random_delta()
+                            dy = self._random_delta()
+                            action = {"label": "mouse_hold", "button": "left", "dx": dx, "dy": dy, "confidence": 1.0}
+                            # We need to release later, but for now let's just hold.
+                            # The next action will likely be a move or click which overrides hold state logic in host_master
+                            # (or we should send release). For simple exploration, hold+move is good.
+                        else:
+                            action = {"label": "click_primary", "confidence": min(1.0, mean_val / THRESH)}
                     else:
-                        action = {"label": "click_primary", "confidence": min(1.0, mean_val / THRESH)}
+                        # If we just clicked or held, move or release
+                        if self.last_label == "mouse_hold":
+                            action = {"label": "mouse_release", "button": "left", "confidence": 1.0}
+                        else:
+                            dx = self._random_delta()
+                            dy = self._random_delta()
+                            action = {"label": "mouse_move", "dx": dx, "dy": dy, "confidence": min(1.0, mean_val / THRESH)}
                 else:
-                    # If we just clicked or held, move or release
-                    if self.last_label == "mouse_hold":
-                         action = {"label": "mouse_release", "button": "left", "confidence": 1.0}
-                    else:
-                        dx = self._random_delta()
-                        dy = self._random_delta()
-                        action = {"label": "mouse_move", "dx": dx, "dy": dy, "confidence": min(1.0, mean_val / THRESH)}
+                    action = {"label": "wait"}
         self.last_action_ts = now
         return action
 
@@ -852,6 +1258,15 @@ class PolicyAgent:
         if now < self.forbidden_until:
             return False, "forbidden_cooldown"
         flags = state.get("flags") or {}
+        if POLICY_REQUIRE_IN_GAME:
+            in_game = flags.get("in_game")
+            if POLICY_REQUIRE_IN_GAME_STRICT:
+                if in_game is not True:
+                    return False, "not_in_game"
+            elif in_game is False:
+                return False, "not_in_game"
+        if POLICY_REQUIRE_EMBEDDINGS and not self._embeddings_fresh(state):
+            return False, "no_embeddings"
         if flags.get("death"):
             return True, None
         texts = self._collect_scene_texts(state)
@@ -1003,6 +1418,33 @@ class PolicyAgent:
         else:
             self.cursor_detected_ts = 0.0
 
+    def _handle_progress_status(self, payload: Dict[str, object]) -> None:
+        understanding = payload.get("understanding") or {}
+        locations = understanding.get("locations") or {}
+        objects = understanding.get("objects") or {}
+        last_reward_age = payload.get("last_reward_age")
+        try:
+            last_reward_age = float(last_reward_age) if last_reward_age is not None else None
+        except (TypeError, ValueError):
+            last_reward_age = None
+        self.progress_state = {
+            "last_reward_age": last_reward_age,
+            "locations_current_age_sec": locations.get("current_age_sec"),
+            "locations_new_rate": locations.get("new_rate"),
+            "objects_new_rate": objects.get("new_rate"),
+            "objects_vocab_size": objects.get("vocab_size"),
+            "timestamp": payload.get("timestamp", time.time()),
+        }
+
+    def _handle_reward(self, payload: Dict[str, object]) -> None:
+        reward = payload.get("reward")
+        try:
+            reward_val = float(reward)
+        except (TypeError, ValueError):
+            return
+        if abs(reward_val) >= POLICY_EXPLORATION_MIN_REWARD:
+            self.last_reward_ts = time.time()
+
     def _cursor_is_fresh(self) -> bool:
         return self.cursor_detected_ts > 0 and (time.time() - self.cursor_detected_ts) <= CURSOR_TIMEOUT_SEC
 
@@ -1013,6 +1455,240 @@ class PolicyAgent:
             abs(self.cursor_x_norm - x_norm) <= CURSOR_TOLERANCE
             and abs(self.cursor_y_norm - y_norm) <= CURSOR_TOLERANCE
         )
+
+    def _embeddings_fresh(self, state: dict) -> bool:
+        if not EMBED_FEATURE_ENABLED:
+            return False
+        embedding = state.get("embeddings") or state.get("embedding")
+        if not isinstance(embedding, (list, tuple)) or not embedding:
+            return False
+        if EMBED_FEATURE_SOURCE_DIM and len(embedding) < EMBED_FEATURE_SOURCE_DIM:
+            return False
+        ts = state.get("embeddings_ts") or state.get("embedding_ts")
+        if ts is None or POLICY_EMBED_MAX_AGE_SEC <= 0:
+            return True
+        try:
+            return (time.time() - float(ts)) <= POLICY_EMBED_MAX_AGE_SEC
+        except (TypeError, ValueError):
+            return True
+
+    def _reward_age_sec(self) -> Optional[float]:
+        age = self.progress_state.get("last_reward_age")
+        if isinstance(age, (int, float)):
+            return float(age)
+        if self.last_reward_ts:
+            return time.time() - self.last_reward_ts
+        return None
+
+    def _actions_repeating(self) -> bool:
+        if len(self.recent_action_labels) < POLICY_EXPLORATION_REPEAT_WINDOW:
+            return False
+        counts = Counter(self.recent_action_labels)
+        min_needed = min(POLICY_EXPLORATION_REPEAT_MIN, POLICY_EXPLORATION_REPEAT_WINDOW)
+        return max(counts.values()) >= min_needed
+
+    def _exploration_targets(self) -> List[Tuple[float, float]]:
+        margin = max(0.01, min(0.3, POLICY_EXPLORATION_MARGIN))
+        return [
+            (margin, margin),
+            (1.0 - margin, margin),
+            (margin, 1.0 - margin),
+            (1.0 - margin, 1.0 - margin),
+            (0.5, margin),
+            (0.5, 1.0 - margin),
+            (margin, 0.5),
+            (1.0 - margin, 0.5),
+            (0.5, 0.5),
+        ]
+
+    def _exploration_move_action(self, x_norm: float, y_norm: float) -> Dict[str, object]:
+        target_px, cursor_px, (delta_x, delta_y) = compute_cursor_motion(
+            x_norm,
+            y_norm,
+            self.cursor_x_norm,
+            self.cursor_y_norm,
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
+            CURSOR_OFFSET_X,
+            CURSOR_OFFSET_Y,
+        )
+        if abs(delta_x) < MIN_MOUSE_DELTA and abs(delta_y) < MIN_MOUSE_DELTA:
+            delta_x = self.rng.randint(-POLICY_EXPLORATION_MOUSE_RANGE, POLICY_EXPLORATION_MOUSE_RANGE)
+            delta_y = self.rng.randint(-POLICY_EXPLORATION_MOUSE_RANGE, POLICY_EXPLORATION_MOUSE_RANGE)
+        return {
+            "label": "mouse_move",
+            "dx": int(delta_x),
+            "dy": int(delta_y),
+            "target_norm": [x_norm, y_norm],
+            "target_px": target_px,
+            "cursor_px": cursor_px,
+            "source": "exploration",
+        }
+
+    def _queue_exploration_burst(self) -> None:
+        now = time.time()
+        if now < self.exploration_cooldown_until:
+            return
+        targets = self._exploration_targets()
+        self.rng.shuffle(targets)
+        actions: List[Dict[str, object]] = []
+        for target in targets:
+            if len(actions) >= max(1, POLICY_EXPLORATION_BURST_ACTIONS):
+                break
+            actions.append(self._exploration_move_action(target[0], target[1]))
+        if POLICY_EXPLORATION_ALLOW_CLICK and actions:
+            actions.append({"label": "click_primary", "source": "exploration"})
+        explore_keys = POLICY_EXPLORATION_KEYS
+        if not explore_keys and POLICY_EXPLORATION_KEYS_FROM_PROFILE:
+            explore_keys = self.profile_allowed_keys
+        if explore_keys:
+            keys_sorted = sorted(explore_keys)
+            if POLICY_EXPLORATION_KEY_BURST and now >= self.exploration_key_cooldown_until:
+                self.rng.shuffle(keys_sorted)
+                count = max(1, POLICY_EXPLORATION_KEY_BURST_COUNT)
+                for key in keys_sorted[:count]:
+                    actions.append({"label": "key_press", "key": key, "source": "exploration"})
+                self.exploration_key_cooldown_until = now + max(0.0, POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC)
+            elif self.rng.random() < 0.3:
+                key = self.rng.choice(keys_sorted)
+                actions.append({"label": "key_press", "key": key, "source": "exploration"})
+        if actions:
+            self.exploration_queue.extend(actions)
+            self.exploration_cooldown_until = now + POLICY_EXPLORATION_COOLDOWN_SEC
+            logger.info(
+                "Exploration burst queued | actions=%s reward_age=%.1fs loc_age=%s obj_new_rate=%s",
+                len(actions),
+                self._reward_age_sec() or -1,
+                self.progress_state.get("locations_current_age_sec"),
+                self.progress_state.get("objects_new_rate"),
+            )
+
+    def _maybe_exploration_action(self, state: dict) -> Optional[Dict[str, object]]:
+        if self.exploration_queue:
+            return self.exploration_queue.popleft()
+        if not POLICY_EXPLORATION_ENABLED:
+            return None
+        if self.current_task or self.respawn_macro_active or self.respawn_pending:
+            return None
+        if self._scene_is_forbidden():
+            return None
+        reward_age = self._reward_age_sec()
+        if reward_age is None or reward_age < POLICY_EXPLORATION_REWARD_TIMEOUT_SEC:
+            return None
+        loc_age = self.progress_state.get("locations_current_age_sec")
+        if isinstance(loc_age, (int, float)) and float(loc_age) < POLICY_EXPLORATION_LOCATION_AGE_SEC:
+            return None
+        obj_rate = self.progress_state.get("objects_new_rate")
+        if isinstance(obj_rate, (int, float)) and float(obj_rate) > POLICY_EXPLORATION_OBJECT_NEW_RATE_MAX:
+            return None
+        if not self._actions_repeating():
+            return None
+        self._queue_exploration_burst()
+        if self.exploration_queue:
+            return self.exploration_queue.popleft()
+        return None
+
+    @staticmethod
+    def _center_from_bbox(bbox: Optional[List[float]]) -> Optional[List[float]]:
+        if not bbox or len(bbox) != 4:
+            return None
+        try:
+            x1, y1, x2, y2 = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            return None
+        if max(x1, y1, x2, y2) > 1.5:
+            return None
+        cx = max(0.0, min(1.0, (x1 + x2) / 2.0))
+        cy = max(0.0, min(1.0, (y1 + y2) / 2.0))
+        return [cx, cy]
+
+    def _pick_object_target(self, objects: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
+        best_center = None
+        best_label = None
+        best_score = -1.0
+        for obj in objects:
+            center = obj.get("center") or self._center_from_bbox(obj.get("bbox") or obj.get("box"))
+            if not center:
+                continue
+            try:
+                score = float(obj.get("confidence") or obj.get("score") or 0.0)
+            except (TypeError, ValueError):
+                score = 0.0
+            if score > best_score:
+                best_score = score
+                best_center = center
+                best_label = str(obj.get("label") or obj.get("class") or "")
+        if not best_center:
+            return None
+        return best_center, best_label
+
+    def _pick_text_target(self, targets: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
+        best_center = None
+        best_label = None
+        best_len = 0
+        for target in targets:
+            label = str(target.get("label") or "").strip()
+            center = target.get("center") or self._center_from_bbox(target.get("bbox"))
+            if not label or not center:
+                continue
+            if len(label) > best_len:
+                best_len = len(label)
+                best_center = center
+                best_label = label
+        if not best_center:
+            return None
+        return best_center, best_label
+
+    def _move_or_click_target(self, center: List[float], label: Optional[str]) -> Dict[str, object]:
+        try:
+            x_norm = float(center[0])
+            y_norm = float(center[1])
+        except (TypeError, ValueError, IndexError):
+            return {"label": "wait"}
+        x_norm = max(0.0, min(1.0, x_norm))
+        y_norm = max(0.0, min(1.0, y_norm))
+        if self._cursor_near_target(x_norm, y_norm):
+            if self._click_ready():
+                payload = {"label": "click_primary", "target_norm": [x_norm, y_norm]}
+                if label:
+                    payload["target_label"] = label
+                return payload
+            return {"label": "wait"}
+        move = self._teacher_target_move([x_norm, y_norm])
+        if move:
+            return move
+        return {"label": "wait"}
+
+    def _meaningful_fallback_action(self, state: dict) -> Optional[Dict[str, object]]:
+        if not POLICY_MEANINGFUL_FALLBACK:
+            return None
+        if POLICY_REQUIRE_EMBEDDINGS and not self._embeddings_fresh(state):
+            return None
+
+        if self.active_target and time.time() <= self.active_target_expires:
+            center = self.active_target.get("center") or self.active_target.get("target_norm")
+            if center:
+                return self._move_or_click_target(center, self.active_target.get("label"))
+
+        enemies = state.get("enemies") or []
+        target = self._pick_object_target(enemies)
+        if target:
+            center, label = target
+            return self._move_or_click_target(center, label)
+
+        if POLICY_USE_OCR_TARGETS:
+            targets = state.get("targets") or []
+            target = self._pick_text_target(targets)
+            if target:
+                center, label = target
+                return self._move_or_click_target(center, label)
+
+        objects = state.get("objects") or []
+        target = self._pick_object_target(objects)
+        if target:
+            center, label = target
+            return self._move_or_click_target(center, label)
+        return None
 
     def _hover_confirms_target(self, task: Dict[str, object], target: Dict[str, object]) -> bool:
         if not HOVER_VERIFY_ENABLED:
@@ -1200,9 +1876,21 @@ class PolicyAgent:
         alpha = self.teacher_alpha_start * (1.0 - progress)
         return max(self.teacher_min_alpha, min(1.0, alpha))
 
+    @staticmethod
+    def _is_respawn_task(task: Optional[Dict[str, object]]) -> bool:
+        if not isinstance(task, dict):
+            return False
+        for field in ("task_id", "goal_id", "action_type"):
+            value = str(task.get(field) or "").lower()
+            if "respawn" in value:
+                return True
+        return False
+
     def _blend_with_teacher(self, policy_action: Dict[str, object]) -> Optional[Dict[str, object]]:
         teacher_alpha = self._current_alpha()
         teacher_action = self._teacher_to_action()
+        if self.respawn_macro_active or self.respawn_pending or self._is_respawn_task(self.current_task):
+            teacher_action = None
         if self.stage0_enabled and self.current_task:
             if teacher_action:
                 logger.info(
@@ -1213,6 +1901,14 @@ class PolicyAgent:
             teacher_action = None
 
         chosen = None
+        if (
+            teacher_action
+            and TEACHER_TARGET_PRIORITY
+            and policy_action
+            and policy_action.get("label") == "mouse_move"
+            and (teacher_action.get("target_norm") or teacher_action.get("target_label"))
+        ):
+            chosen = teacher_action
         if self.stage0_enabled and teacher_action:
             chosen = teacher_action
         elif teacher_action and teacher_alpha > 0:
@@ -1249,6 +1945,12 @@ class PolicyAgent:
                 )
                 return {"label": "wait"}
 
+            if label == "click_primary" and POLICY_ENEMY_SKILL_SUBSTITUTE and self._enemies_present():
+                skill_key = self._choose_skill_key()
+                if skill_key:
+                    logger.info("Enemy present -> substituting click_primary with key_press %s", skill_key)
+                    return {"label": "key_press", "key": skill_key, "source": "enemy_skill_substitute"}
+
             if label == "click_primary" and not self._click_ready():
                 if self.active_target and self._cursor_is_fresh():
                     center = self.active_target.get("center") or self.active_target.get("target_norm")
@@ -1281,6 +1983,11 @@ class PolicyAgent:
             return None
         if not self.teacher_action:
             return None
+        action_obj = self.teacher_action.get("action")
+        if isinstance(action_obj, dict):
+            structured = self._normalize_teacher_action_obj(action_obj)
+            if structured:
+                return structured
         raw_text = self.teacher_action.get("text") or ""
         if not raw_text:
             return None
@@ -1317,6 +2024,10 @@ class PolicyAgent:
                 return payload
             return {"label": button}
 
+        auto_click = self._maybe_teacher_autoclick(target_norm, target_label, text)
+        if auto_click:
+            return auto_click
+
         if "hold" in text and "mouse" in text:
             return {"label": "mouse_hold", "button": "left" if "left" in text else "right"}
 
@@ -1327,10 +2038,16 @@ class PolicyAgent:
             return {"label": "wait"}
 
         if target_move and any(term in text for term in ("move", "cursor", "hover", "aim", "place")):
+            auto_click = self._maybe_teacher_autoclick(target_norm, target_label, text)
+            if auto_click:
+                return auto_click
             return target_move
 
         key = self._teacher_key_from_text(text)
         if key:
+            if not self._key_allowed(key):
+                logger.info("Teacher requested key '%s' not in allowed_keys; ignoring", key)
+                return None
             return {"label": "key_press", "key": key}
 
         move_vec = self._direction_from_text(text)
@@ -1340,9 +2057,15 @@ class PolicyAgent:
 
         key = self._extract_key(text)
         if key:
+            if not self._key_allowed(key):
+                logger.info("Teacher extracted key '%s' not in allowed_keys; ignoring", key)
+                return None
             return {"label": "key_press", "key": key}
 
         if target_move:
+            auto_click = self._maybe_teacher_autoclick(target_norm, target_label, text)
+            if auto_click:
+                return auto_click
             return target_move
 
         return None
@@ -1377,6 +2100,35 @@ class PolicyAgent:
                 return token
         return None
 
+    def _key_allowed(self, key: Optional[str]) -> bool:
+        if not key:
+            return False
+        if not self.profile_allowed_keys:
+            return True
+        return str(key).lower() in self.profile_allowed_keys
+
+    def _enemies_present(self) -> bool:
+        state = self.latest_state or {}
+        enemies = state.get("enemies") or []
+        if isinstance(enemies, list) and enemies:
+            return True
+        stats = state.get("stats") or {}
+        try:
+            return float(stats.get("enemy_count", 0) or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _choose_skill_key(self) -> Optional[str]:
+        skill_set = set(POLICY_SKILL_KEYS)
+        if self.profile_allowed_key_order:
+            for key in self.profile_allowed_key_order:
+                if key in skill_set:
+                    return key
+        for key in POLICY_SKILL_KEYS:
+            if key in self.profile_allowed_keys:
+                return key
+        return None
+
     def _teacher_key_from_text(self, text: str) -> Optional[str]:
         patterns = [
             r"(?:press|tap|hit|use)\s+(?:key\s+)?(shift)",
@@ -1393,6 +2145,94 @@ class PolicyAgent:
                 if len(key) == 1 and key.isalpha():
                     return key.lower()
                 return key.lower()
+        return None
+
+    def _teacher_action_repr(self, action: dict) -> str:
+        label = str(action.get("label") or action.get("action") or "").lower()
+        if label == "key_press":
+            key = action.get("key") or ""
+            return f"press {key}".strip()
+        if label == "click_secondary":
+            return "click right"
+        if label == "click_primary":
+            return "click left"
+        if label == "mouse_move":
+            return "move mouse"
+        return label or "wait"
+
+    def _normalize_teacher_label(self, label: str) -> str:
+        label = str(label or "").strip().lower()
+        aliases = {
+            "click": "click_primary",
+            "attack": "click_primary",
+            "primary": "click_primary",
+            "secondary": "click_secondary",
+            "right_click": "click_secondary",
+            "left_click": "click_primary",
+            "move_mouse": "mouse_move",
+        }
+        return aliases.get(label, label)
+
+    def _normalize_teacher_action_obj(self, action: dict) -> Optional[Dict[str, object]]:
+        label = self._normalize_teacher_label(action.get("label") or action.get("action") or action.get("type"))
+        if not label:
+            return None
+        target_norm = action.get("target_norm") or action.get("target")
+        if isinstance(target_norm, dict):
+            try:
+                target_norm = [float(target_norm.get("x")), float(target_norm.get("y"))]
+            except (TypeError, ValueError):
+                target_norm = None
+        if isinstance(target_norm, (list, tuple)) and len(target_norm) >= 2:
+            try:
+                x_norm = max(0.0, min(1.0, float(target_norm[0])))
+                y_norm = max(0.0, min(1.0, float(target_norm[1])))
+                target_norm = [x_norm, y_norm]
+            except (TypeError, ValueError):
+                target_norm = None
+        else:
+            target_norm = None
+        target_label = action.get("target_label")
+        if label == "key_press":
+            key = str(action.get("key") or "").lower().strip()
+            if not key:
+                return None
+            if not self._key_allowed(key):
+                logger.info("Teacher requested key '%s' not in allowed_keys; ignoring", key)
+                return None
+            return {"label": "key_press", "key": key}
+        if label in {"click_primary", "click_secondary"}:
+            if target_norm:
+                if not self._cursor_is_fresh() or not self._cursor_near_target(*target_norm):
+                    move = self._teacher_target_move(target_norm)
+                    if move:
+                        logger.info(
+                            "Teacher requested %s but cursor not on target %s; moving cursor first",
+                            label,
+                            target_norm,
+                        )
+                        return move
+            payload = {"label": label}
+            if target_norm:
+                payload["target_norm"] = target_norm
+            if target_label:
+                payload["target_label"] = target_label
+            return payload
+        if label == "mouse_move":
+            dx = action.get("dx")
+            dy = action.get("dy")
+            if isinstance(dx, (int, float)) and isinstance(dy, (int, float)):
+                return {"label": "mouse_move", "dx": int(dx), "dy": int(dy)}
+            if target_norm:
+                move = self._teacher_target_move(target_norm)
+                if move:
+                    return move
+            return {"label": "wait"}
+        if label in {"mouse_hold", "mouse_release"}:
+            button = action.get("button") or "left"
+            return {"label": label, "button": button}
+        if label == "wait":
+            return {"label": "wait"}
         return None
 
     @staticmethod
@@ -1577,6 +2417,9 @@ class PolicyAgent:
             return {"label": "click_secondary", "confidence": 1.0}
         if label.startswith("key_"):
             key = label.split("_", 1)[1]
+            if not self._key_allowed(key):
+                logger.info("Policy suppressed key '%s' (not in allowed_keys)", key)
+                return {"label": "wait"}
             return {"label": "key_press", "key": key}
         if label in {"press_space", "space"}:
             return {"label": "key_press", "key": "space"}
@@ -1732,6 +2575,8 @@ class PolicyAgent:
         if label and str(label).startswith("click"):
             self.last_click_ts = time.time()
         self.last_label = label
+        if label:
+            self.recent_action_labels.append(str(label))
         if self.stage0_enabled and label and label != "wait":
             self.stage0_pending = True
             self.stage0_reference = self.stage0_last_signature

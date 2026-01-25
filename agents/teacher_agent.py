@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import threading
 import time
@@ -24,6 +25,11 @@ try:
     from .mem_rpc import MemRPC
 except ImportError:
     from mem_rpc import MemRPC
+from control_profile import load_profile, safe_profile
+try:
+    from .llm_gate import acquire_gate, blocked_reason, release_gate
+except ImportError:
+    from llm_gate import acquire_gate, blocked_reason, release_gate
 
 # --- Setup ---
 logging.basicConfig(level=os.getenv("TEACHER_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -34,6 +40,7 @@ stop_event = threading.Event()
 MQTT_HOST, MQTT_PORT = os.getenv("MQTT_HOST", "127.0.0.1"), int(os.getenv("MQTT_PORT", "1883"))
 SCENE_TOPIC, SIM_TOPIC = os.getenv("SCENE_TOPIC", "scene/state"), os.getenv("SIM_TOPIC", "sim_core/state")
 SNAPSHOT_TOPIC, ACT_RESULT_TOPIC = os.getenv("SNAPSHOT_TOPIC", "vision/snapshot"), os.getenv("ACT_RESULT_TOPIC", "act/result")
+GAME_IDENTITY_TOPIC = os.getenv("GAME_IDENTITY_TOPIC", "game/identity")
 TEACHER_TOPIC, MEM_STORE_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action"), os.getenv("MEM_STORE_TOPIC", "mem/store")
 MEM_QUERY_TOPIC, MEM_REPLY_TOPIC, MEM_RESPONSE_TOPIC = os.getenv("MEM_QUERY_TOPIC", "mem/query"), os.getenv("MEM_REPLY_TOPIC", "mem/reply"), os.getenv("MEM_RESPONSE_TOPIC", "mem/response")
 GOAL_TOPIC, GUIDE_KEY = os.getenv("GOAL_TOPIC", "goals/high_level"), os.getenv("TEACHER_GUIDE_KEY", "teacher_guides")
@@ -41,6 +48,7 @@ TEACHER_PROVIDER, OPENAI_MODEL = os.getenv("TEACHER_PROVIDER", "openai").lower()
 LOCAL_ENDPOINT, LOCAL_TIMEOUT = os.getenv("TEACHER_LOCAL_ENDPOINT"), float(os.getenv("TEACHER_LOCAL_TIMEOUT", "20"))
 MAX_HISTORY, REQUEST_INTERVAL = int(os.getenv("TEACHER_HISTORY", "6")), float(os.getenv("TEACHER_INTERVAL_SEC", "2.0"))
 MAX_ATTEMPTS, TEMPERATURE = int(os.getenv("TEACHER_MAX_ATTEMPTS", "3")), float(os.getenv("TEACHER_TEMPERATURE", "0.2"))
+LLM_GATE_LOG_SEC = float(os.getenv("LLM_GATE_LOG_SEC", "15"))
 LEARNING_STAGE = int(os.getenv("LEARNING_STAGE", "1"))
 DEATH_ACTION_TEXT = os.getenv("TEACHER_DEATH_ACTION", "Click 'Resurrect at Checkpoint'")
 DEATH_GOAL_HINT, DEATH_GOAL_TYPE = os.getenv("TEACHER_DEATH_HINT", "Death dialog detected; respawn immediately."), os.getenv("TEACHER_DEATH_GOAL_TYPE", "respawn")
@@ -55,6 +63,13 @@ TEACHER_CONTEXT_MIN_CHARS, TEACHER_CONTEXT_TEXT_LIMIT = int(os.getenv("TEACHER_C
 TEACHER_CONTEXT_OBJECT_LIMIT = int(os.getenv("TEACHER_CONTEXT_OBJECT_LIMIT", "8"))
 TEACHER_CONTEXT_SCOPE_FALLBACK = os.getenv("TEACHER_CONTEXT_SCOPE_FALLBACK", "generic_ui")
 TEACHER_CONTEXT_DIFF_JACCARD, TEACHER_CONTEXT_DIFF_MIN_CHARS = float(os.getenv("TEACHER_CONTEXT_DIFF_JACCARD", "0.4")), int(os.getenv("TEACHER_CONTEXT_DIFF_MIN_CHARS", "48"))
+TEACHER_PROMPT_TOP_K = int(os.getenv("TEACHER_PROMPT_TOP_K", "5"))
+TEACHER_PROMPT_MIN_SCORE = float(os.getenv("TEACHER_PROMPT_MIN_SCORE", "0.02"))
+TEACHER_PROMPT_ALLOW = {item.strip().lower() for item in os.getenv("TEACHER_PROMPT_ALLOW", "").split(",") if item.strip()}
+TEACHER_REQUIRE_IN_GAME = os.getenv("TEACHER_REQUIRE_IN_GAME", "0") != "0"
+TEACHER_REQUIRE_IN_GAME_STRICT = os.getenv("TEACHER_REQUIRE_IN_GAME_STRICT", "0") != "0"
+TEACHER_ALLOW_OCR_GAME_ID = os.getenv("TEACHER_ALLOW_OCR_GAME_ID", "0") != "0"
+TEACHER_ACTION_JSON = os.getenv("TEACHER_ACTION_JSON", "1") != "0"
 TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
 TEACHER_RESPAWN_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_RESPAWN_KEYWORDS", "resurrect,resurrect at checkpoint,respawn,revive").split(",") if item.strip()}
 TEACHER_DEATH_SCOPES = {item.strip().lower() for item in os.getenv("TEACHER_DEATH_SCOPES", "death_dialog,critical_dialog:death").split(",") if item.strip()}
@@ -66,6 +81,8 @@ TARGET_HINT_INSTRUCTIONS = ("Always identify the on-screen UI element the next a
                           "Estimate normalized screen coordinates in the [0.0, 1.0] range (0,0 is top-left). "
                           "End your reasoning with a line formatted exactly as 'TARGET_HINT: <short label> | target=(x.xx,y.yy)'. "
                           "If no pointer target is relevant, use label 'none' and target=(0.50,0.50).")
+TEACHER_INCLUDE_CONTROLS = os.getenv("TEACHER_INCLUDE_CONTROLS", "1") != "0"
+CONTROL_PROFILE_GAME_ID = os.getenv("TEACHER_CONTROL_PROFILE_GAME_ID") or os.getenv("CONTROL_PROFILE_GAME_ID") or os.getenv("RECORDER_GAME_ID") or os.getenv("GAME_ID") or "unknown_game"
 
 def _as_int(code) -> int:
     try:
@@ -82,10 +99,195 @@ def _text_change_ratio(prev: str, current: str) -> float:
     if not union: return 0.0
     return 1.0 - (len(prev_tokens & curr_tokens) / len(union))
 
+def _scene_in_game(scene: dict) -> bool:
+    flags = scene.get("flags") or {}
+    in_game = flags.get("in_game")
+    if TEACHER_REQUIRE_IN_GAME_STRICT:
+        return in_game is True
+    return in_game is not False
+
+def _normalize_game_id(value: str) -> str:
+    if not value:
+        return "unknown_game"
+    lowered = str(value).strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    return slug or "unknown_game"
+
+def _strip_code_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        parts = stripped.split("```")
+        if len(parts) >= 3:
+            return parts[1].strip()
+        return stripped.strip("`")
+    return stripped
+
+def _extract_json_block(text: str) -> str:
+    if not text:
+        return ""
+    stripped = _strip_code_fences(text)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start:end + 1]
+    return stripped
+
+def _normalize_action_label(label: str) -> str:
+    label = str(label or "").strip().lower()
+    aliases = {
+        "click": "click_primary",
+        "attack": "click_primary",
+        "primary": "click_primary",
+        "secondary": "click_secondary",
+        "right_click": "click_secondary",
+        "left_click": "click_primary",
+        "move_mouse": "mouse_move",
+    }
+    return aliases.get(label, label)
+
+def _normalize_target_norm(value) -> Optional[List[float]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        x = value.get("x")
+        y = value.get("y")
+        try:
+            x_norm = max(0.0, min(1.0, float(x)))
+            y_norm = max(0.0, min(1.0, float(y)))
+            return [x_norm, y_norm]
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            x_norm = max(0.0, min(1.0, float(value[0])))
+            y_norm = max(0.0, min(1.0, float(value[1])))
+            return [x_norm, y_norm]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+def _normalize_action_payload(raw) -> Optional[dict]:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        payload = raw
+    else:
+        try:
+            payload = json.loads(_extract_json_block(str(raw)))
+        except Exception:
+            return None
+    if not isinstance(payload, dict):
+        return None
+    action = payload.get("action")
+    if isinstance(action, str):
+        action = {"label": action}
+    if not isinstance(action, dict):
+        return None
+    label = _normalize_action_label(action.get("label") or action.get("action") or action.get("type"))
+    if not label:
+        return None
+    normalized = {"label": label}
+    key = action.get("key") or action.get("value")
+    if key:
+        normalized["key"] = str(key).strip().lower()
+    target_norm = _normalize_target_norm(action.get("target_norm") or action.get("target"))
+    if target_norm:
+        normalized["target_norm"] = target_norm
+    target_label = action.get("target_label") or action.get("target_name") or action.get("target")
+    if isinstance(target_label, str):
+        normalized["target_label"] = target_label.strip()
+    for name in ("dx", "dy", "button"):
+        if name in action:
+            normalized[name] = action[name]
+    return {
+        "action": normalized,
+        "reasoning": payload.get("reasoning") or payload.get("rationale") or payload.get("thought") or "",
+    }
+
+def _action_to_text(action: dict) -> str:
+    label = str(action.get("label") or "").lower()
+    if label == "key_press":
+        key = action.get("key") or ""
+        return f"press {key}".strip()
+    if label == "click_secondary":
+        return "click right"
+    if label == "click_primary":
+        return "click left"
+    if label == "mouse_move":
+        return "move mouse"
+    if label in {"mouse_hold", "mouse_release"}:
+        button = action.get("button") or "left"
+        return f"{label} {button}"
+    return label or "wait"
+
 class BaseChatClient:
-    def summarize(self, scene_summary: str, snapshot_hint: str, recent_actions: str) -> str: raise NotImplementedError
-    def propose_action(self, reasoning: str, scene_summary: str, recent_actions: str) -> str: raise NotImplementedError
-    def describe_environment(self, scene_text: str, objects: str) -> str: raise NotImplementedError
+    def _complete(self, messages):  # pragma: no cover - subclasses implement transport
+        raise NotImplementedError
+
+    def summarize(self, scene_summary: str, snapshot_hint: str, recent_actions: str) -> str:
+        prompt = [
+            {"role": "system", "content": "Summarize the current UI state and constraints for the agent."},
+            {
+                "role": "user",
+                "content": (
+                    f"Scene summary:\n{scene_summary}\n\n"
+                    f"Snapshot hint: {snapshot_hint}\n\n"
+                    f"Recent actions:\n{recent_actions}\n\n"
+                    "Return a concise summary the agent can act on."
+                ),
+            },
+        ]
+        return self._complete(prompt)
+
+    def propose_action(self, reasoning: str, scene_summary: str, recent_actions: str) -> str:
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "Propose one safe, concrete next action. "
+                    "Use only controls listed in the scene summary under Controls. "
+                    "When enemies are present and skill keys exist, you MUST choose a key_press action. "
+                    "Return ONLY valid JSON with this schema:\n"
+                    "{\n"
+                    "  \"action\": {\n"
+                    "    \"label\": \"mouse_move|click_primary|click_secondary|key_press|mouse_hold|mouse_release|wait\",\n"
+                    "    \"key\": \"q\",\n"
+                    "    \"target_norm\": [0.50, 0.50],\n"
+                    "    \"target_label\": \"enemy\"\n"
+                    "  },\n"
+                    "  \"reasoning\": \"short rationale\"\n"
+                    "}\n"
+                    "Use normalized 0..1 coordinates; omit target_norm/target_label when not relevant."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Reasoning:\n{reasoning}\n\n"
+                    f"Scene summary:\n{scene_summary}\n\n"
+                    f"Recent actions:\n{recent_actions}\n\n"
+                    "Return JSON only. No prose."
+                ),
+            },
+        ]
+        return self._complete(prompt)
+
+    def describe_environment(self, scene_text: str, objects: str) -> str:
+        prompt = [
+            {
+                "role": "system",
+                "content": "Identify the game and key UI context as a compact JSON object.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Scene text:\n{scene_text}\n\n"
+                    f"Objects:\n{objects}\n\n"
+                    "Return JSON with keys: game, summary, controls."
+                ),
+            },
+        ]
+        return self._complete(prompt)
 
 class OpenAIChatClient(BaseChatClient):
     def __init__(self, api_key: str, model: str = OPENAI_MODEL):
@@ -152,10 +354,28 @@ class TeacherAgent:
         self._context_cache, self._context_text_fingerprint, self._context_refresh_times, self._context_force_refresh = {}, {}, {}, set()
         self._watchdog_last: Dict[str, float] = {}
         self.game_id: Optional[str] = None
+        self.identity: Dict[str, object] = {}
+        self._last_gate_log = 0.0
+        self._gate_held = False
+
+    def _ensure_mem_rpc(self):
+        if self.mem_rpc:
+            return self.mem_rpc
+        try:
+            self.mem_rpc = MemRPC(
+                host=MQTT_HOST,
+                port=MQTT_PORT,
+                query_topic=MEM_QUERY_TOPIC,
+                reply_topic=MEM_RESPONSE_TOPIC,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MemRPC unavailable: %s", exc)
+            self.mem_rpc = None
+        return self.mem_rpc
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if _as_int(rc) == 0:
-            topics = [(t, 0) for t in [SCENE_TOPIC, SIM_TOPIC, SNAPSHOT_TOPIC, ACT_RESULT_TOPIC] if t]
+            topics = [(t, 0) for t in [SCENE_TOPIC, SIM_TOPIC, SNAPSHOT_TOPIC, ACT_RESULT_TOPIC, GAME_IDENTITY_TOPIC] if t]
             client.subscribe(topics)
             client.publish("teacher/status", json.dumps({"ok": True, "event": "teacher_ready"}))
             logger.info("Teacher agent connected and subscribed")
@@ -173,9 +393,13 @@ class TeacherAgent:
             if msg.topic in {SCENE_TOPIC, SIM_TOPIC} and isinstance(data, dict) and data.get("ok"):
                 self.scene = data
                 self._handle_scene_update(data)
+                if TEACHER_REQUIRE_IN_GAME and not _scene_in_game(data):
+                    return
                 self._maybe_request_action(client)
             elif msg.topic == SNAPSHOT_TOPIC and isinstance(data, dict) and data.get("ok"): self.snapshot = data.get("image_b64")
             elif msg.topic == ACT_RESULT_TOPIC and isinstance(data, dict) and data.get("applied"): self.actions.append(str(data["applied"]))
+            elif msg.topic == GAME_IDENTITY_TOPIC and isinstance(data, dict):
+                self._handle_identity_update(data)
     
     def _ensure_llm(self):
         if self.llm: return self.llm
@@ -186,14 +410,29 @@ class TeacherAgent:
         return self.llm
 
     def _handle_scene_update(self, scene: dict):
+        if not TEACHER_ALLOW_OCR_GAME_ID:
+            return
         if not self.game_id and scene.get("text"):
             text_content = " ".join(scene["text"])
             if len(text_content) > 20:
                 thread = threading.Thread(target=self._identify_game, args=(text_content,), daemon=True)
                 thread.start()
 
+    def _handle_identity_update(self, payload: dict) -> None:
+        self.identity = payload
+        raw = payload.get("game_id") or payload.get("app_name") or payload.get("window_title") or payload.get("bundle_id") or ""
+        normalized = _normalize_game_id(str(raw))
+        if normalized and normalized != "unknown_game":
+            if self.game_id != normalized:
+                self.game_id = normalized
+                logger.info("Identity game_id set: %s (source=%s)", self.game_id, payload.get("source") or "identity")
+
     def _identify_game(self, text_content):
+        acquired = False
         try:
+            acquired = acquire_gate("teacher_identify", wait_s=0.0)
+            if not acquired:
+                return
             llm = self._ensure_llm()
             if llm:
                 prompt = [
@@ -206,12 +445,195 @@ class TeacherAgent:
                 logger.info("Game Identified: %s", self.game_id)
         except Exception as e:
             logger.warning("Identification failed: %s", e)
+        finally:
+            if acquired:
+                release_gate()
+
+    def _scene_scope(self, scene: dict) -> str:
+        if scene.get("flags", {}).get("death"):
+            return "critical_dialog:death"
+        return TEACHER_CONTEXT_SCOPE_FALLBACK
+
+    def _format_scene_desc(self, scene: dict) -> str:
+        elements = []
+        for target in scene.get("targets", []) or []:
+            label = target.get("label", "ui")
+            center = target.get("center", [0.5, 0.5])
+            elements.append(f'UI "{label}" at ({center[0]:.2f}, {center[1]:.2f})')
+        for obj in scene.get("objects", []) or []:
+            label = obj.get("label") or obj.get("class") or "obj"
+            pos = obj.get("pos")
+            if not pos and obj.get("bbox"):
+                bbox = obj["bbox"]
+                pos = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+            pos = pos or [0.5, 0.5]
+            elements.append(f'Obj "{label}" at ({pos[0]:.2f}, {pos[1]:.2f})')
+        if elements:
+            scene_desc = " | ".join(elements)
+            raw_text = scene.get("text", [])
+            if len(raw_text) < 5:
+                scene_desc += f" | Raw Text: {raw_text}"
+            return scene_desc
+        return json.dumps(scene.get("text", []))
+
+    def _format_prompt_signals(self, scene: dict) -> str:
+        scores = scene.get("prompt_scores")
+        if not isinstance(scores, dict) or not scores:
+            return ""
+        items = []
+        for label, raw_score in scores.items():
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+            if score < TEACHER_PROMPT_MIN_SCORE:
+                continue
+            name = str(label).strip().lower()
+            if not name:
+                continue
+            if TEACHER_PROMPT_ALLOW and name not in TEACHER_PROMPT_ALLOW:
+                continue
+            items.append((name, score))
+        if not items:
+            return ""
+        items.sort(key=lambda pair: pair[1], reverse=True)
+        top = items[:max(1, TEACHER_PROMPT_TOP_K)]
+        return ", ".join(f"{label}({score:.3f})" for label, score in top)
+
+    def _format_recent_actions(self, actions: List[str]) -> str:
+        if not actions:
+            return "none"
+        return "\n".join(f"- {action}" for action in actions[-5:])
+
+    def _query_mem(self, payload: dict, timeout: float = 1.0) -> Optional[dict]:
+        mem = self._ensure_mem_rpc()
+        if not mem:
+            return None
+        try:
+            return mem.query(payload, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Mem query failed: %s", exc)
+            return None
+
+    def _build_scene_summary(self, scene: dict, rules: List[dict], recent_critical: List[dict]) -> str:
+        parts = []
+        game_id = scene.get("game_id") or self.game_id or CONTROL_PROFILE_GAME_ID
+        if game_id:
+            parts.append(f"Game: {game_id}")
+        if isinstance(self.identity, dict) and self.identity:
+            app = self.identity.get("app_name") or ""
+            title = self.identity.get("window_title") or ""
+            bundle = self.identity.get("bundle_id") or ""
+            ident_bits = [item for item in (app, title, bundle) if item]
+            if ident_bits:
+                parts.append(f"Identity: {' | '.join(str(item) for item in ident_bits[:3])}")
+        parts.append(self._format_scene_desc(scene))
+        stats = scene.get("stats")
+        if stats:
+            parts.append(f"Stats: {json.dumps(stats)}")
+        prompt_signals = self._format_prompt_signals(scene)
+        if prompt_signals:
+            parts.append(f"Prompt signals: {prompt_signals}")
+        enemies = scene.get("enemies") or []
+        if isinstance(enemies, list) and enemies:
+            parts.append(f"Enemies detected: {len(enemies)}")
+        if rules:
+            rules_text = "\n".join(f"- {rule.get('text')}" for rule in rules)
+            parts.append(f"Rules:\n{rules_text}")
+        if recent_critical:
+            crit_text = "\n".join(
+                f"- {entry.get('delta') or entry.get('event')} ({entry.get('episode_id')})"
+                for entry in recent_critical
+            )
+            parts.append(f"Recent critical:\n{crit_text}")
+        if TEACHER_INCLUDE_CONTROLS:
+            controls_note = self._format_control_summary(scene)
+            if controls_note:
+                parts.append(f"Controls: {controls_note}")
+        return "\n".join(parts)
+
+    def _format_control_summary(self, scene: dict) -> str:
+        game_id = scene.get("game_id") or self.game_id or CONTROL_PROFILE_GAME_ID
+        profile = load_profile(str(game_id)) or load_profile("unknown_game") or safe_profile(str(game_id))
+        controls = []
+        if profile.get("allow_mouse_move", True):
+            controls.append("mouse_move")
+        if profile.get("allow_primary", True):
+            controls.append("click_primary")
+        if profile.get("allow_secondary", False):
+            controls.append("click_secondary")
+        keys = [str(k).lower() for k in profile.get("allowed_keys", []) if k]
+        if keys:
+            controls.append(f"keys: {', '.join(sorted(keys))}")
+        forbidden = [str(k).lower() for k in profile.get("forbidden_keys", []) if k]
+        if forbidden:
+            controls.append(f"forbidden: {', '.join(sorted(forbidden))}")
+        mouse_mode = profile.get("mouse_mode")
+        if mouse_mode:
+            controls.append(f"mouse_mode={mouse_mode}")
+        return "; ".join(controls)
+
+    def _maybe_refresh_context(self, client, llm: BaseChatClient, scene: dict, scope: str) -> Optional[dict]:
+        if not hasattr(llm, "describe_environment"):
+            return None
+        scene_text = " ".join(scene.get("text", [])).strip()
+        objects = scene.get("objects") or []
+        if not scene_text and not objects:
+            return None
+        now = time.time()
+        last_refresh = self._context_refresh_times.get(scope, 0.0)
+        prev_text = self._context_text_fingerprint.get(scope, "")
+        text_fingerprint = _text_fingerprint(scene_text)
+        should_refresh = not last_refresh or (now - last_refresh) >= TEACHER_CONTEXT_REFRESH_SEC
+        if not should_refresh and scene_text and len(scene_text) >= TEACHER_CONTEXT_MIN_CHARS:
+            change_ratio = _text_change_ratio(prev_text, text_fingerprint)
+            if change_ratio >= TEACHER_CONTEXT_DIFF_JACCARD and len(scene_text) >= TEACHER_CONTEXT_DIFF_MIN_CHARS:
+                should_refresh = True
+        if not should_refresh:
+            return self._context_cache.get(scope)
+
+        object_labels = [str(obj.get("label") or obj.get("class") or "obj") for obj in objects[:TEACHER_CONTEXT_OBJECT_LIMIT]]
+        object_summary = ", ".join(object_labels)
+        try:
+            raw_context = llm.describe_environment(scene_text[:TEACHER_CONTEXT_TEXT_LIMIT], object_summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Context describe failed: %s", exc)
+            return None
+        try:
+            context_payload = json.loads(raw_context) if isinstance(raw_context, str) else raw_context
+        except Exception:
+            context_payload = {"summary": str(raw_context)}
+
+        if isinstance(context_payload, dict):
+            context_payload.setdefault("timestamp", now)
+            context_payload.setdefault("scope", scope)
+            context_key = f"{TEACHER_CONTEXT_KEY}:{scope}"
+            self._context_cache[scope] = context_payload
+            self._context_text_fingerprint[scope] = text_fingerprint
+            self._context_refresh_times[scope] = now
+            client.publish(
+                self.mem_store_topic,
+                json.dumps({"op": "set", "key": context_key, "value": context_payload, "timestamp": now}),
+            )
+        return context_payload if isinstance(context_payload, dict) else None
 
     def _maybe_request_action(self, client):
         now = time.time()
         if self._inflight: return
         if now - self._last_request < REQUEST_INTERVAL: return
+        reason = blocked_reason()
+        if reason:
+            if now - self._last_gate_log >= LLM_GATE_LOG_SEC:
+                logger.info("LLM blocked (%s); skipping request", reason)
+                self._last_gate_log = now
+            return
+        if not acquire_gate("teacher_action", wait_s=0.0):
+            if now - self._last_gate_log >= LLM_GATE_LOG_SEC:
+                logger.info("LLM gate busy; skipping request")
+                self._last_gate_log = now
+            return
         
+        self._gate_held = True
         self._inflight = True
         self._last_request = now
         thread = threading.Thread(target=self._generate_action, args=(client,), daemon=True)
@@ -222,76 +644,83 @@ class TeacherAgent:
             with self._lock:
                 if self.scene is None: return
                 scene, snapshot, actions = self.scene, self.snapshot, list(self.actions)
+            if TEACHER_REQUIRE_IN_GAME and not _scene_in_game(scene):
+                return
             
             llm = self._ensure_llm()
             if llm is None:
                 logger.warning("No LLM available")
                 return
-            
-            # Construct spatial map for the Teacher
-            elements = []
-            # 1. UI Targets (buttons, text zones with coords)
-            for t in scene.get('targets', []):
-                label = t.get('label', 'ui')
-                center = t.get('center', [0.5, 0.5])
-                # Format: UI "Save" at (0.2, 0.8)
-                elements.append(f'UI "{label}" at ({center[0]:.2f}, {center[1]:.2f})')
-            
-            # 2. Game Objects (enemies, player, loot)
-            for o in scene.get('objects', []):
-                label = o.get('label') or o.get('class') or 'obj'
-                # Some objects store pos as 'pos', others might calculate it from bbox
-                pos = o.get('pos')
-                if not pos and o.get('bbox'):
-                    b = o['bbox']
-                    pos = [(b[0]+b[2])/2, (b[1]+b[3])/2]
-                pos = pos or [0.5, 0.5]
-                elements.append(f'Obj "{label}" at ({pos[0]:.2f}, {pos[1]:.2f})')
 
-            # 3. Fallback or Append Raw Text
-            if not elements:
-                scene_desc = json.dumps(scene.get('text', []))
-            else:
-                scene_desc = " | ".join(elements)
-                raw_text = scene.get('text', [])
-                if len(raw_text) < 5:
-                    scene_desc += f" | Raw Text: {raw_text}"
+            scope = self._scene_scope(scene)
+            rules = []
+            recent_critical = []
+            rules_resp = self._query_mem({"mode": "rules", "scope": scope, "limit": TEACHER_RULE_LIMIT})
+            if rules_resp and isinstance(rules_resp.get("value"), list):
+                rules = rules_resp["value"]
+            critical_resp = self._query_mem({"mode": "recent_critical", "scope": scope, "limit": TEACHER_RECENT_CRITICAL_LIMIT})
+            if critical_resp and isinstance(critical_resp.get("value"), list):
+                recent_critical = critical_resp["value"]
 
-            # History for context
-            history_str = "\n".join([f"- {a}" for a in list(self.actions)[-5:]])
+            scene_summary = self._build_scene_summary(scene, rules, recent_critical)
+            snapshot_hint = f"{len(snapshot)} bytes" if snapshot else "none"
+            recent_actions = self._format_recent_actions(actions)
 
-            prompt = [
-                {"role": "system", "content": f"You are an expert player of {self.game_id or 'this game'}. {TARGET_HINT_INSTRUCTIONS}\n\nCRITICAL: If previous actions failed to move the character or change the scene, try a DIFFERENT approach (e.g., hold mouse, click elsewhere, use keyboard)."},
-                {"role": "user", "content": f"Scene: {scene_desc}\nStatus: {json.dumps(scene.get('stats', {}))}\nRecent Actions:\n{history_str}\n\nProblem: Character might be stuck. What exactly should I do?"}
-            ]
-            
-            response = llm._complete(prompt)
-            logger.info("Teacher says: %s", response)
+            context_payload = self._maybe_refresh_context(client, llm, scene, scope)
+            context_game = None
+            if isinstance(context_payload, dict):
+                context_game = context_payload.get("game")
 
-            # --- THOUGHT LOG ---
+            reasoning = llm.summarize(scene_summary, snapshot_hint, recent_actions)
+            raw_action = llm.propose_action(reasoning, scene_summary, recent_actions)
+            if not raw_action:
+                return
+            parsed_action = _normalize_action_payload(raw_action) if TEACHER_ACTION_JSON else None
+            if TEACHER_ACTION_JSON and not parsed_action:
+                logger.info("Teacher response missing valid JSON action; dropping")
+                return
+            action_obj = parsed_action["action"] if parsed_action else None
+            action_text = _action_to_text(action_obj) if action_obj else str(raw_action).strip()
+            enemies = scene.get("enemies") or []
+            stats = scene.get("stats") or {}
             try:
-                log_dir = "/app/logs"
-                if not os.path.exists(log_dir): os.makedirs(log_dir, exist_ok=True)
-                with open(f"{log_dir}/thought_process.log", "a") as f:
-                    entry = {
-                        "timestamp": time.time(),
-                        "game": self.game_id,
-                        "scene": scene_desc[:300],
-                        "history": list(self.actions)[-3:],
-                        "advice": response
-                    }
-                    f.write(json.dumps(entry) + "\n")
-            except Exception as e:
-                logger.error(f"Failed to write thought log: {e}")
-            # -------------------
-            
-            payload = {"ok": True, "text": response, "timestamp": time.time(), "game_id": self.game_id}
+                enemy_count = float(stats.get("enemy_count", 0) or 0)
+            except (TypeError, ValueError):
+                enemy_count = 0
+            has_enemies = bool(enemies) or enemy_count > 0
+            if has_enemies and action_obj and action_obj.get("label") != "key_press":
+                logger.info("Teacher rejected non-key action while enemies present: %s", action_obj.get("label"))
+                return
+            if has_enemies and not action_obj:
+                logger.info("Teacher rejected unstructured action while enemies present")
+                return
+
+            payload = {
+                "ok": True,
+                "timestamp": time.time(),
+                "action": action_obj or action_text,
+                "reasoning": parsed_action.get("reasoning") if parsed_action else reasoning,
+                "text": action_text,
+                "rules_used": len(rules),
+                "recent_critical_used": len(recent_critical),
+                "game_id": self.game_id,
+                "context_game": context_game,
+            }
+            if action_obj:
+                if "target_norm" in action_obj:
+                    payload["target_norm"] = action_obj.get("target_norm")
+                if "target_label" in action_obj:
+                    payload["target_label"] = action_obj.get("target_label")
             client.publish(TEACHER_TOPIC, json.dumps(payload))
-            
+
         except Exception as exc:
             logger.error("LLM error: %s", exc)
         finally:
-            with self._lock: self._inflight = False
+            with self._lock:
+                self._inflight = False
+                if self._gate_held:
+                    release_gate()
+                    self._gate_held = False
 
     def start(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)

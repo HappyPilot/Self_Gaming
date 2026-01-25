@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import cv2
@@ -35,7 +36,8 @@ DEBUG = os.getenv("PERCEPTION_DEBUG", "0").lower() not in {"0", "false", "no"}
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
-OBS_TOPIC = os.getenv("PERCEPTION_TOPIC", "vision/observation")
+OBS_TOPIC = os.getenv("PERCEPTION_TOPIC") or os.getenv("VISION_OBSERVATION_TOPIC", "vision/observation")
+PROMPT_CONFIG_TOPIC = os.getenv("VISION_PROMPT_CONFIG_TOPIC", "")
 YOLO_WEIGHTS = os.getenv("YOLO11_WEIGHTS", "/mnt/ssd/models/yolo/yolo11n.pt")
 YOLO_DEVICE = os.getenv("YOLO11_DEVICE", "cuda:0")
 YOLO_CONF = float(os.getenv("YOLO11_CONF", "0.35"))
@@ -45,6 +47,14 @@ YOLO_FALLBACK_CPU = os.getenv("YOLO_FALLBACK_CPU", "0").lower() not in {"0", "fa
 YOLO_CLIP_CPU = os.getenv("YOLO_CLIP_CPU", "1").lower() not in {"0", "false", "no"}
 DETECTOR_BACKEND = os.getenv("DETECTOR_BACKEND", "yolo11_torch")
 YOLO_WORLD_CLASSES = [token.strip() for token in os.getenv("YOLO_WORLD_CLASSES", "enemy,boss,player,npc,loot,portal,waypoint,quest_marker,dialog_button").split(",") if token.strip()]
+YOLO_DYNAMIC_PROMPTS = os.getenv("YOLO_DYNAMIC_PROMPTS", "1") != "0"
+YOLO_DYNAMIC_PROMPT_MAX = int(os.getenv("YOLO_DYNAMIC_PROMPT_MAX", "12"))
+YOLO_DYNAMIC_PROMPT_MIN_LEN = int(os.getenv("YOLO_DYNAMIC_PROMPT_MIN_LEN", "2"))
+YOLO_DYNAMIC_INTERVAL_SEC = float(os.getenv("YOLO_DYNAMIC_INTERVAL_SEC", "10.0"))
+YOLO_DYNAMIC_PROMPT_ALLOW = {token.strip().lower() for token in os.getenv("YOLO_DYNAMIC_PROMPT_ALLOW", "").split(",") if token.strip()}
+YOLO_DYNAMIC_PROMPT_DENY = {token.strip().lower() for token in os.getenv("YOLO_DYNAMIC_PROMPT_DENY", "").split(",") if token.strip()}
+YOLO_CLASS_LIST = os.getenv("YOLO_CLASS_LIST", "")
+YOLO_CLASS_PATH = os.getenv("YOLO_CLASS_PATH", "")
 OCR_BACKEND = os.getenv("OCR_BACKEND", "easyocr")
 OCR_LANGS = [token.strip() for token in os.getenv("OCR_LANGS", "en").split(",") if token.strip()]
 OCR_USE_GPU = os.getenv("OCR_USE_GPU", "1").lower() not in {"0", "false", "no"}
@@ -59,11 +69,65 @@ PLAYER_MIN_AREA = float(os.getenv("PLAYER_LOCATOR_MIN_AREA", "0.01"))
 PLAYER_ROI = os.getenv("PLAYER_LOCATOR_ROI", "0.25,0.25,0.75,0.9")
 PLAYER_MIN_ROI_AREA = float(os.getenv("PLAYER_LOCATOR_MIN_ROI_AREA", "0.02"))
 
+def _load_class_names(class_list: str, class_paths: str) -> List[str]:
+    if class_list:
+        names = [token.strip() for token in class_list.split(",") if token.strip()]
+        if names:
+            logger.info("Loaded %d class names from YOLO_CLASS_LIST", len(names))
+            return names
+
+    if class_paths:
+        for raw in class_paths.split(","):
+            cleaned = raw.strip()
+            if not cleaned:
+                continue
+            path = Path(cleaned)
+            if path.exists():
+                try:
+                    with open(path, "r", encoding="utf-8") as handle:
+                        names = [line.strip() for line in handle if line.strip()]
+                    if names:
+                        logger.info("Loaded %d class names from %s", len(names), path)
+                        return names
+                except Exception as exc:
+                    logger.warning("Failed to read class names from %s: %s", path, exc)
+    return []
+
+YOLO_CLASS_NAMES = _load_class_names(YOLO_CLASS_LIST, YOLO_CLASS_PATH)
+
 def _as_int(code) -> int:
     try:
         if hasattr(code, "value"): return int(code.value)
         return int(code)
     except (TypeError, ValueError): return 0
+
+def _normalize_prompt_classes(values: List[str]) -> List[str]:
+    cleaned: List[str] = []
+    seen = set()
+    for value in values:
+        token = str(value).strip().lower()
+        if not token or len(token) < YOLO_DYNAMIC_PROMPT_MIN_LEN:
+            continue
+        if YOLO_DYNAMIC_PROMPT_ALLOW and token not in YOLO_DYNAMIC_PROMPT_ALLOW:
+            continue
+        if token in YOLO_DYNAMIC_PROMPT_DENY:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        cleaned.append(token)
+        if YOLO_DYNAMIC_PROMPT_MAX and len(cleaned) >= YOLO_DYNAMIC_PROMPT_MAX:
+            break
+    return cleaned
+
+
+def _extract_prompt_classes(payload: dict) -> List[str]:
+    if not isinstance(payload, dict):
+        return []
+    prompts = payload.get("object_prompts") or payload.get("prompts") or []
+    if not isinstance(prompts, list) or not prompts:
+        return []
+    return _normalize_prompt_classes(prompts)
 
 def decode_frame(message: dict) -> np.ndarray | None:
     data = get_frame_bytes(message)
@@ -103,7 +167,7 @@ class _NullDetector:
 class PerceptionAgent:
     def __init__(self) -> None:
         logger.info(
-            "Starting perception backend=%s weights=%s device=%s conf=%.3f imgsz=%s max_size=%s classes=%s",
+            "Starting perception backend=%s weights=%s device=%s conf=%.3f imgsz=%s max_size=%s classes=%s class_names=%s",
             DETECTOR_BACKEND,
             YOLO_WEIGHTS,
             YOLO_DEVICE,
@@ -111,6 +175,7 @@ class PerceptionAgent:
             YOLO_IMGSZ,
             YOLO_MAX_SIZE,
             YOLO_WORLD_CLASSES,
+            len(YOLO_CLASS_NAMES),
         )
         self.pipeline = None
         self.pipeline_lock = threading.Lock()
@@ -120,6 +185,9 @@ class PerceptionAgent:
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
         self.lock = threading.Lock()
+        self.active_classes = [c.strip().lower() for c in YOLO_WORLD_CLASSES if c.strip()]
+        self.pending_classes: List[str] = []
+        self.last_class_update = 0.0
 
     def _init_detector_backend(self):
         try:
@@ -134,6 +202,7 @@ class PerceptionAgent:
                 max_size=YOLO_MAX_SIZE,
                 fallback_cpu=YOLO_FALLBACK_CPU,
                 clip_cpu=YOLO_CLIP_CPU,
+                class_names=YOLO_CLASS_NAMES,
             )
         except Exception as exc:
             logger.error("Detector backend error: %s", exc)
@@ -163,6 +232,8 @@ class PerceptionAgent:
             ocr = self._init_ocr_backend()
             player_locator = self._init_player_locator()
             self.pipeline = PerceptionPipeline(detector=detector, ocr=ocr, text_regions=TEXT_REGIONS, player_locator=player_locator)
+            if self.pending_classes:
+                self._update_detector_classes(self.pending_classes, reason="pending")
 
     def _init_player_locator(self) -> Optional[PlayerLocator]:
         if not PLAYER_LOCATOR_ENABLED: return None
@@ -174,6 +245,31 @@ class PerceptionAgent:
         cfg = PlayerLocatorConfig(center_x=PLAYER_CENTER_X, center_y=PLAYER_CENTER_Y, max_offset=PLAYER_MAX_OFFSET, min_area=PLAYER_MIN_AREA, roi_box=roi_tuple, min_roi_area=PLAYER_MIN_ROI_AREA)
         return PlayerLocator(cfg)
 
+    def _update_detector_classes(self, classes: List[str], reason: str = "prompt_config") -> None:
+        if not classes:
+            return
+        now = time.time()
+        if YOLO_DYNAMIC_INTERVAL_SEC > 0 and (now - self.last_class_update) < YOLO_DYNAMIC_INTERVAL_SEC:
+            self.pending_classes = classes
+            return
+        if self.active_classes == classes:
+            return
+        detector = None
+        if self.pipeline is not None:
+            detector = self.pipeline.detector
+        if detector is None or not hasattr(detector, "set_classes"):
+            self.pending_classes = classes
+            return
+        try:
+            if detector.set_classes(classes):  # type: ignore[call-arg]
+                self.active_classes = classes
+                self.last_class_update = now
+                self.pending_classes = []
+                logger.info("Updated detector classes (%s) count=%d", reason, len(classes))
+        except Exception as exc:
+            logger.warning("Detector class update failed: %s", exc)
+            self.pending_classes = classes
+
     def run(self) -> None:
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
         self.client.loop_start()
@@ -184,7 +280,10 @@ class PerceptionAgent:
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if _as_int(rc) == 0:
-            client.subscribe([(FRAME_TOPIC, 0)])
+            topics = [(FRAME_TOPIC, 0)]
+            if PROMPT_CONFIG_TOPIC and YOLO_DYNAMIC_PROMPTS:
+                topics.append((PROMPT_CONFIG_TOPIC, 0))
+            client.subscribe(topics)
             self.client.publish(OBS_TOPIC, json.dumps({"ok": True, "event": "perception_agent_ready"}))
             logger.info("Connected to MQTT")
         else:
@@ -195,9 +294,16 @@ class PerceptionAgent:
         if _as_int(rc) != 0: logger.warning("Disconnected rc=%s", _as_int(rc))
 
     def _on_message(self, client, _userdata, msg):
-        try: data = json.loads(msg.payload.decode("utf-8", "ignore"))
+        try:
+            data = json.loads(msg.payload.decode("utf-8", "ignore"))
         except Exception:
-            logger.exception("Failed to decode frame message")
+            logger.exception("Failed to decode message")
+            return
+        if PROMPT_CONFIG_TOPIC and YOLO_DYNAMIC_PROMPTS and msg.topic == PROMPT_CONFIG_TOPIC:
+            classes = _extract_prompt_classes(data)
+            if classes:
+                merged = list(dict.fromkeys([c.strip().lower() for c in YOLO_WORLD_CLASSES if c.strip()] + classes))
+                self._update_detector_classes(merged, reason="prompt_config")
             return
         frame = decode_frame(data)
         if frame is None:

@@ -10,6 +10,7 @@ import queue
 import signal
 import threading
 import time
+import zlib
 from typing import Optional, Sequence
 
 import numpy as np
@@ -24,6 +25,15 @@ try:
     import torch
 except Exception:  # noqa: BLE001
     torch = None
+try:
+    from transformers import AutoImageProcessor, AutoModel
+except Exception:  # noqa: BLE001
+    AutoImageProcessor = None
+    AutoModel = None
+try:
+    from transformers import SiglipVisionModel
+except Exception:  # noqa: BLE001
+    SiglipVisionModel = None
 
 logging.basicConfig(level=os.getenv("VL_JEPA_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("vl_jepa_agent")
@@ -44,8 +54,13 @@ FRAME_QUEUE_MAX = int(os.getenv("VL_JEPA_QUEUE", "2"))
 FP16 = os.getenv("VL_JEPA_FP16", "0") not in {"0", "false", "False"}
 MEAN_STR = os.getenv("VL_JEPA_MEAN", "")
 STD_STR = os.getenv("VL_JEPA_STD", "")
+SIGLIP_MODEL_ID = os.getenv("VL_JEPA_MODEL_ID", "").strip()
+SIGLIP_POOL = os.getenv("VL_JEPA_POOL", "pooler").strip().lower()
+SIGLIP_ATTN_IMPL = os.getenv("VL_JEPA_ATTN_IMPL", "").strip().lower()
 MAX_EMBED_DIM = int(os.getenv("VL_JEPA_MAX_EMBED_DIM", "4096"))
 MAX_PAYLOAD_BYTES = int(os.getenv("VL_JEPA_MAX_PAYLOAD_BYTES", "262144"))
+EMBED_FPS = float(os.getenv("VL_JEPA_EMBED_FPS", "0") or 0)
+CACHE_HASH = os.getenv("VL_JEPA_CACHE_HASH", "1") not in {"0", "false", "False"}
 SLA_STAGE_EMBED_MS = get_sla_ms("SLA_STAGE_EMBED_MS")
 
 
@@ -167,6 +182,91 @@ class TensorRTEncoder(BaseEncoder):
             return None
 
 
+class SiglipEncoder(BaseEncoder):
+    backend = "siglip2"
+
+    def __init__(self, model_id: str, device: str, input_size: int, fp16: bool, pool: str, attn_impl: str):
+        if torch is None or AutoModel is None or AutoImageProcessor is None:
+            raise RuntimeError("transformers/torch not available for siglip2 backend")
+        self.device = device
+        self.input_size = max(1, input_size)
+        self.fp16 = fp16 and device.startswith("cuda")
+        self.pool = pool or "pooler"
+        self.attn_impl = attn_impl or ""
+        self.model_id = model_id or "google/siglip2-base-patch16-224"
+
+        self.processor = AutoImageProcessor.from_pretrained(self.model_id)
+        self.model = self._load_model()
+        self.model.eval()
+        self.model.to(self.device)
+
+    def _load_model(self):
+        kwargs = {}
+        if self.fp16:
+            kwargs["torch_dtype"] = torch.float16
+        if self.attn_impl:
+            kwargs["attn_implementation"] = self.attn_impl
+        if SiglipVisionModel is not None:
+            try:
+                return SiglipVisionModel.from_pretrained(self.model_id, **kwargs)
+            except TypeError:
+                kwargs.pop("attn_implementation", None)
+                return SiglipVisionModel.from_pretrained(self.model_id, **kwargs)
+        try:
+            model = AutoModel.from_pretrained(self.model_id, **kwargs)
+        except TypeError:
+            kwargs.pop("attn_implementation", None)
+            model = AutoModel.from_pretrained(self.model_id, **kwargs)
+        if hasattr(model, "vision_model"):
+            return model.vision_model
+        return model
+
+    def _prepare_inputs(self, image: Image.Image):
+        if self.input_size:
+            image = image.resize((self.input_size, self.input_size), resample=Image.BILINEAR)
+        inputs = self.processor(images=image, return_tensors="pt")
+        pixel_values = inputs.get("pixel_values")
+        if pixel_values is None:
+            return None
+        pixel_values = pixel_values.to(self.device)
+        if self.fp16:
+            pixel_values = pixel_values.half()
+        return {"pixel_values": pixel_values}
+
+    def _pool_output(self, outputs):
+        if self.pool in {"image_embeds", "image"} and hasattr(outputs, "image_embeds"):
+            return outputs.image_embeds
+        if self.pool in {"pooler", "pool"} and hasattr(outputs, "pooler_output"):
+            return outputs.pooler_output
+        if hasattr(outputs, "last_hidden_state"):
+            last = outputs.last_hidden_state
+            if self.pool in {"mean", "avg"}:
+                return last.mean(dim=1)
+            return last[:, 0]
+        if isinstance(outputs, (list, tuple)) and outputs:
+            return outputs[0]
+        if isinstance(outputs, dict):
+            for key in ("pooler_output", "image_embeds", "last_hidden_state"):
+                if key in outputs:
+                    return outputs[key]
+        return None
+
+    def encode(self, image: Image.Image) -> Optional[np.ndarray]:
+        if torch is None:
+            return None
+        inputs = self._prepare_inputs(image)
+        if not inputs:
+            return None
+        with torch.inference_mode():
+            outputs = self.model(**inputs)
+        pooled = self._pool_output(outputs)
+        if pooled is None:
+            return None
+        if pooled.ndim >= 2:
+            pooled = pooled[0]
+        return pooled.float().cpu().numpy()
+
+
 def _extract_embedding(output) -> Optional[np.ndarray]:
     if torch is None:
         return None
@@ -192,6 +292,12 @@ def _extract_embedding(output) -> Optional[np.ndarray]:
     return tensor.float().cpu().numpy()
 
 
+def _frame_hash(data: bytes) -> Optional[int]:
+    if not data:
+        return None
+    return zlib.adler32(data)
+
+
 class VlJepaAgent:
     def __init__(self):
         self.client = mqtt.Client(client_id="vl_jepa_agent", protocol=mqtt.MQTTv311)
@@ -205,6 +311,10 @@ class VlJepaAgent:
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.frame_stride = max(1, FRAME_STRIDE)
         self._frame_counter = 0
+        self._last_publish_ts = 0.0
+        self._embed_min_interval_s = 1.0 / EMBED_FPS if EMBED_FPS > 0 else 0.0
+        self._last_embedding = None
+        self._last_frame_hash = None
 
     def start(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
@@ -268,12 +378,33 @@ class VlJepaAgent:
                     encoder = TensorRTEncoder(ENGINE_PATH, INPUT_SIZE, mean, std)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("TensorRT init failed: %s", exc)
+            elif BACKEND in {"siglip", "siglip2"}:
+                try:
+                    encoder = SiglipEncoder(
+                        SIGLIP_MODEL_ID,
+                        device,
+                        INPUT_SIZE,
+                        FP16,
+                        SIGLIP_POOL,
+                        SIGLIP_ATTN_IMPL,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("SigLIP init failed: %s", exc)
             elif BACKEND not in {"dummy", ""}:
                 logger.warning("Unknown VL_JEPA_BACKEND=%s; falling back to dummy", BACKEND)
             if encoder is None:
                 encoder = DummyEncoder(EMBED_DIM)
             self.encoder = encoder
-            logger.info("VL-JEPA encoder ready: backend=%s device=%s input=%s", self.encoder.backend, device, INPUT_SIZE)
+            if isinstance(self.encoder, SiglipEncoder):
+                logger.info(
+                    "VL-JEPA encoder ready: backend=%s device=%s input=%s model=%s",
+                    self.encoder.backend,
+                    device,
+                    INPUT_SIZE,
+                    self.encoder.model_id,
+                )
+            else:
+                logger.info("VL-JEPA encoder ready: backend=%s device=%s input=%s", self.encoder.backend, device, INPUT_SIZE)
 
     def _worker_loop(self):
         while not stop_event.is_set():
@@ -285,6 +416,9 @@ class VlJepaAgent:
                 payload = json.loads(payload_bytes.decode("utf-8", "ignore"))
             except Exception:
                 continue
+            now = time.time()
+            if self._embed_min_interval_s and (now - self._last_publish_ts) < self._embed_min_interval_s:
+                continue
             frame_bytes = get_frame_bytes(payload)
             if not frame_bytes:
                 continue
@@ -293,20 +427,31 @@ class VlJepaAgent:
                 continue
             self._ensure_encoder()
             frame_ts = payload.get("frame_ts") or payload.get("timestamp")
-            embed_start = time.perf_counter()
-            embedding = self.encoder.encode(image) if self.encoder else None
-            embed_ms = (time.perf_counter() - embed_start) * 1000.0
-            emit_latency(
-                self.client,
-                "embed",
-                embed_ms,
-                sla_ms=SLA_STAGE_EMBED_MS,
-                tags={"frame_ts": frame_ts},
-                agent="vl_jepa_agent",
-            )
-            if embedding is None:
-                continue
-            embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
+            cached = False
+            embedding_list = None
+            frame_hash = _frame_hash(frame_bytes) if CACHE_HASH else None
+            if self._last_embedding and frame_hash is not None and frame_hash == self._last_frame_hash:
+                embedding_list = self._last_embedding["embedding"]
+                cached = True
+            else:
+                embed_start = time.perf_counter()
+                try:
+                    embedding = self.encoder.encode(image) if self.encoder else None
+                except Exception:  # noqa: BLE001
+                    logger.exception("VL-JEPA encode failed")
+                    embedding = None
+                embed_ms = (time.perf_counter() - embed_start) * 1000.0
+                emit_latency(
+                    self.client,
+                    "embed",
+                    embed_ms,
+                    sla_ms=SLA_STAGE_EMBED_MS,
+                    tags={"frame_ts": frame_ts, "cached": "0"},
+                    agent="vl_jepa_agent",
+                )
+                if embedding is None:
+                    continue
+                embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
             if MAX_EMBED_DIM and len(embedding_list) > MAX_EMBED_DIM:
                 logger.warning("Embedding dim too large (%s > %s); dropping payload.", len(embedding_list), MAX_EMBED_DIM)
                 continue
@@ -314,19 +459,31 @@ class VlJepaAgent:
                 logger.warning("Embedding dim mismatch: got=%s expected=%s", len(embedding_list), EMBED_DIM)
             out_payload = {
                 "ok": True,
-                "timestamp": time.time(),
+                "timestamp": now,
                 "frame_ts": frame_ts or time.time(),
                 "frame_id": payload.get("frame_id"),
                 "embedding": embedding_list,
                 "dim": len(embedding_list),
                 "backend": self.encoder.backend if self.encoder else "unknown",
                 "model_path": MODEL_PATH,
+                "model_id": getattr(self.encoder, "model_id", ""),
             }
+            if cached:
+                out_payload["cached"] = True
+                if self._last_embedding and self._last_embedding.get("timestamp"):
+                    out_payload["cache_age_ms"] = round((now - self._last_embedding["timestamp"]) * 1000.0, 3)
             payload_json = json.dumps(out_payload)
             if MAX_PAYLOAD_BYTES and len(payload_json) > MAX_PAYLOAD_BYTES:
                 logger.warning("Embedding payload too large (%s bytes > %s); dropping.", len(payload_json), MAX_PAYLOAD_BYTES)
                 continue
             self.client.publish(EMBED_TOPIC, payload_json)
+            self._last_publish_ts = now
+            if not cached and embedding_list is not None:
+                self._last_embedding = {
+                    "embedding": embedding_list,
+                    "timestamp": now,
+                }
+                self._last_frame_hash = frame_hash
 
 
 def _decode_image(data: bytes) -> Optional[Image.Image]:

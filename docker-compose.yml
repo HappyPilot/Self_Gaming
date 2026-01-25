@@ -45,6 +45,7 @@ services:
     working_dir: /app
     volumes:
     - ./agents:/app
+    - /mnt/ssd/models:/mnt/ssd/models
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
@@ -52,7 +53,7 @@ services:
     - MQTT_TOPIC_CMD=vision/cmd
     - MQTT_TOPIC_METRIC=vision/mean
     - MQTT_TOPIC_SNAPSHOT=vision/snapshot
-    - VISION_FRAME_TOPIC=vision/frame/preview
+    - VISION_FRAME_TOPIC=vision/frame/full
     - VISION_FRAME_PREVIEW_TOPIC=vision/frame/preview
     - VISION_FRAME_FULL_TOPIC=vision/frame/full
     - VISION_FRAME_PREVIEW_QUALITY=50
@@ -90,7 +91,7 @@ services:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
     - DEBUG_PORT=5008
-    - VISION_OBJECT_TOPIC=vision/observation
+    - VISION_OBJECT_TOPIC=vision/objects
     ipc: host
     depends_on:
     - mq
@@ -111,7 +112,7 @@ services:
     - PYTHONPATH=/app
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_FRAME_TOPIC=vision/frame/preview
+    - VISION_FRAME_TOPIC=vision/frame/full
     - CURSOR_TOPIC=cursor/state
     - CURSOR_MIN_AREA=5
     - CURSOR_MAX_AREA=12000
@@ -152,12 +153,13 @@ services:
     - ./agents:/app
     - ./sg_platform:/app/sg_platform
     - /mnt/ssd:/data
+    - /mnt/ssd:/mnt/ssd
     env_file: *id001
     environment:
     - PYTHONUNBUFFERED=1
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - OBS_TOPIC=vision/mean
+    - OBS_TOPIC=scene/state
     - SIM_TOPIC=scene/state
     - ACT_TOPIC=control/keys
     - ACT_CMD_TOPIC=act/cmd
@@ -171,7 +173,7 @@ services:
     - SHOP_SUPPRESS_DEATH_ONLY=1
     - POLICY_HOVER_VERIFY=1
     - POLICY_HOVER_DEBUG=1
-    - RESPAWN_TRIGGER_TEXTS=respawn,revive,restart,try again,game over,you died,continue,loading
+    - RESPAWN_TRIGGER_TEXTS=respawn,revive,resurrect,resurrect at checkpoint,resurrect in town,restart,try again,game over,you died,continue,loading,checkpoint
     - RESPAWN_FUZZY_THRESHOLD=0.6
     - RESPAWN_DEBUG=0
     - THRESH=120.0
@@ -204,19 +206,16 @@ services:
     - /app/game_onboarding_agent.py
     volumes:
     - ./agents:/app
+    - /mnt/ssd/logs:/mnt/ssd/logs
     env_file: *id001
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_FRAME_TOPIC=vision/frame/preview
+    - VISION_FRAME_TOPIC=vision/frame/full
     - SCENE_TOPIC=scene/state
     - CURSOR_TOPIC=cursor/state
     - ACT_CMD_TOPIC=act/cmd
     - GAME_SCHEMA_TOPIC=game/schema
-    - LLM_MODEL=models/qwen2.5-7b-instruct-q4_k_m.gguf
-    - LLM_API_KEY=dummy
-    - LLM_TIMEOUT=8.0
-    - LLM_DETECT_GAME=1
     - ONBOARD_REQUEST_LLM_GAME_ID=1
     - ONBOARD_REQUEST_LLM_PROFILE=1
     - ONBOARD_PHASE_A_SEC=6.0
@@ -251,7 +250,7 @@ services:
     depends_on:
     - mq
     - vision
-    - perception
+    - scene
     - ocr_easy
   ocr:
     container_name: ocr_agent
@@ -402,7 +401,7 @@ services:
     network_mode: host
     restart: unless-stopped
     profiles:
-    - heavy
+    - experimental
     working_dir: /app
     entrypoint:
     - python3
@@ -415,7 +414,7 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - VISION_FRAME_TOPIC=vision/frame/preview
+    - VISION_FRAME_TOPIC=vision/frame/full
     - OBJECT_TOPIC=vision/objects
     - ZSD_MODEL_ID=google/owlvit-base-patch32
     - HF_HOME=/mnt/ssd/models/zeroshot/hf
@@ -437,6 +436,7 @@ services:
     working_dir: /app
     volumes:
     - ./agents:/app
+    - /mnt/ssd/models:/mnt/ssd/models
     env_file: *id001
     entrypoint:
     - python3
@@ -458,6 +458,28 @@ services:
     - ocr
     - ocr_easy
     - simple_ocr
+  embedding_guard:
+    container_name: embedding_guard
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/embedding_guard_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_EMBEDDINGS_TOPIC=vision/embeddings
+    - SCENE_FLAGS_TOPIC=scene/flags
+    depends_on:
+    - mq
+    - vl_jepa
+    - scene
   teach:
     container_name: teach_agent
     image: local/policy-agent:latest
@@ -597,7 +619,6 @@ services:
     - TEACHER_ACTION_TOPIC=teacher/action
     - REWARD_TOPIC=train/reward
     - RECORDER_DIR=/mnt/ssd/datasets/episodes
-    - RECORDER_MAX=2000
     depends_on:
     - mq
     - scene
@@ -703,6 +724,7 @@ services:
     working_dir: /app
     volumes:
     - ./agents:/app
+    - /mnt/ssd/logs:/mnt/ssd/logs
     env_file: *id001
     entrypoint:
     - python3
@@ -793,6 +815,23 @@ services:
     depends_on:
     - mq
     - object_detection
+  game_identity:
+    container_name: game_identity_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/game_identity_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    depends_on:
+    - mq
   http_bridge:
     container_name: http_bridge
     image: local/policy-agent:latest
@@ -859,11 +898,12 @@ services:
     - MQTT_PORT=1883
     - VISION_FRAME_TOPIC=vision/frame/preview
     - OBJECT_TOPIC=vision/objects
+    - OBJECT_DETECTOR_BACKEND=onnx
     - OBJECT_MODEL_PATH=/mnt/ssd/models/yolo/yolo11n_416_fp32.onnx
     - OBJECT_DEVICE=cpu
     - OBJECT_IMAGE_SIZE=416
-    - OBJECT_CLASS_PATH=/mnt/ssd/models/yolo/classes_generic.txt
-    - OBJECT_CONF_THRESHOLD=0.25
+    - OBJECT_CLASS_PATH=/mnt/ssd/models/yolo/coco.names
+    - OBJECT_CONF_THRESHOLD=0.1
     - OBJECT_IOU_THRESHOLD=0.45
     ipc: host
     depends_on:
@@ -895,6 +935,30 @@ services:
     depends_on:
     - mq
     - vision
+  siglip_prompt:
+    container_name: siglip_prompt_agent
+    image: local/vl-jepa-agent:latest
+    runtime: nvidia
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/models:/mnt/ssd/models
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/siglip_prompt_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - VISION_FRAME_TOPIC=vision/frame/preview
+    - VISION_PROMPT_TOPIC=vision/prompt_scores
+    - HF_HOME=/mnt/ssd/models/hf
+    ipc: host
+    depends_on:
+    - mq
+    - vision
   perception:
     container_name: perception_agent
     image: local/policy-agent:perception-gpu
@@ -902,7 +966,7 @@ services:
     network_mode: host
     restart: unless-stopped
     profiles:
-    - heavy
+    - experimental
     working_dir: /app
     entrypoint:
     - python3
@@ -918,14 +982,15 @@ services:
     - MQTT_PORT=1883
     - VISION_FRAME_TOPIC=vision/frame/preview
     - PERCEPTION_TOPIC=vision/observation
-    - YOLO11_WEIGHTS=/mnt/ssd/models/yolo/yolo11n.pt
-    - YOLO11_DEVICE=cuda:0
-    - YOLO11_CONF=0.20
-    - YOLO11_IMGSZ=416
-    - YOLO_MAX_SIZE=416
+    - YOLO11_WEIGHTS=/mnt/ssd/models/yolo/yolov8s-worldv2.pt
+    - YOLO11_DEVICE=cpu
+    - YOLO11_CONF=0.01
+    - YOLO11_IMGSZ=320
+    - YOLO_MAX_SIZE=320
+    - YOLO_CLASS_PATH=/mnt/ssd/models/yolo/coco.names
+    - YOLO_WORLD_CLASSES=person,character,enemy,monster,boss,npc,loot,chest,portal,waypoint,quest_marker,dialog_button,ui_button
     - YOLO_FALLBACK_CPU=1
-    - YOLO_WORLD_CLASSES=enemy,boss,player,npc,loot,portal,waypoint,quest_marker,dialog_button
-    - DETECTOR_BACKEND=yolo11_torch
+    - DETECTOR_BACKEND=yoloworld
     - PERCEPTION_DEBUG=1
     - OCR_BACKEND=null
     - OCR_LANGS=en
@@ -1167,7 +1232,7 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - PERCEPTION_TOPIC=vision/observation
+    - PERCEPTION_TOPIC=vision/observation_ds
     - HEARTBEAT_INTERVAL=5.0
     - CONF_THRESHOLD=${CONF_THRESHOLD:-0.05}
     - NMS_IOU=${NMS_IOU:-0.6}
@@ -1231,3 +1296,17 @@ services:
     - vision
     - scene
     - policy
+  llm_queue:
+    container_name: llm_queue
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/services/llm_queue.py
+    depends_on:
+    - mq

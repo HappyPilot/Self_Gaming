@@ -44,6 +44,8 @@ All payloads are JSON.
 - metrics/control: control loop metrics (see schemas/control_metric.schema.json)
 - logs/summary: log monitor summary
 - logs/alerts: log monitor alerts
+- progress/status: progress agent summary/status
+- progress/understanding: progress agent understanding metrics (location memory + grounding)
 
 ## Payload examples
 
@@ -146,6 +148,7 @@ Required: ok, timestamp, embedding, dim
   "backend": "torchscript"
 }
 ```
+Note: backend is typically `torchscript`, `tensorrt`, `siglip2`, or `dummy` depending on vl_jepa_agent config.
 
 ### ocr_easy/text
 Required: ok, text, results, backend
@@ -191,13 +194,18 @@ Schema: `schemas/action.schema.json`
 ```
 
 ### teacher/action
-Required: ok, text, timestamp
+Required: ok, action, reasoning, timestamp
 ```json
 {
   "ok": true,
+  "action": "Click the Play button",
+  "reasoning": "The Play button is highlighted and expected to continue.",
   "text": "Click the Play button",
   "timestamp": 1712345678.4,
-  "game_id": "poe"
+  "rules_used": 1,
+  "recent_critical_used": 0,
+  "game_id": "poe",
+  "context_game": "Path of Exile"
 }
 ```
 
@@ -209,6 +217,76 @@ Required: ok, reward, timestamp
   "reward": 0.2,
   "components": {"loot": 0.1, "progress": 0.1},
   "timestamp": 1712345678.5
+}
+```
+
+### progress/status
+High-level health snapshot from progress_agent.
+```json
+{
+  "ok": true,
+  "event": "progress_status",
+  "timestamp": 1712345678.6,
+  "status": "OK",
+  "total_reward": 12.34,
+  "last_reward_age": 8,
+  "scene_age": 1,
+  "understanding": { "...": "see progress/understanding" }
+}
+```
+
+### progress/understanding
+Location memory + grounding metrics (game-agnostic).
+```json
+{
+  "ok": true,
+  "event": "understanding_update",
+  "timestamp": 1712345678.7,
+  "understanding": {
+    "locations": {
+      "count": 12,
+      "unique": 12,
+      "assignments": 340,
+      "new_rate": 0.18,
+      "revisit_rate": 0.82,
+      "current_id": 7,
+      "current_similarity": 0.92,
+      "current_age_sec": 14,
+      "transitions": 36,
+      "top": [{"id": 3, "visits": 120, "last_seen_sec": 4}]
+    },
+    "embeddings": {
+      "delta_last": 0.0123,
+      "delta_avg": 0.0345
+    },
+    "objects": {
+      "vocab_size": 58,
+      "new_rate": 0.07,
+      "last_new": ["monster", "altar"],
+      "last_count": 6
+    },
+    "ocr": {
+      "vocab_size": 140,
+      "new_rate": 0.05,
+      "last_new": ["victory"],
+      "last_count": 12
+    },
+    "grounding": {
+      "clicks": 430,
+      "hits": 140,
+      "hit_rate": 0.325,
+      "targeted_clicks": 210,
+      "cursor_clicks": 45,
+      "clicks_with_targets": 180,
+      "clicks_with_objects": 260,
+      "hits_on_targets": 90,
+      "hits_on_objects": 50,
+      "target_hit_rate": 0.5,
+      "object_hit_rate": 0.192,
+      "last_hit": true,
+      "last_reason": "bbox"
+    }
+  }
 }
 ```
 

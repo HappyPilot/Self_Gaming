@@ -49,3 +49,7 @@ mosquitto/certs/*.crt
 
 # Local control profiles
 agents/data/control_profiles.json
+
+# NitroGen local assets
+tools/nitrogen/.venv/
+tools/nitrogen/_vendor/

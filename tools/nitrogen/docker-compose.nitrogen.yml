@@ -5,14 +5,15 @@ services:
     volumes:
       - ./_vendor/NitroGen:/app/NitroGen
       - ./_vendor/ng.pt:/app/ng.pt
+      - ./agents:/app/agents
     command: >
       bash -lc "
       pip install -U pip &&
       pip install -e /app/NitroGen &&
-      python /app/NitroGen/scripts/serve.py /app/ng.pt
+      python /app/agents/nitrogen_serve.py /app/ng.pt --port 5555
       "
     ports:
-      - "8000:8000"
+      - "5555:5555"
 
   nitrogen-proxy:
     image: python:3.12-slim
@@ -24,7 +25,7 @@ services:
     command: >
       bash -lc "
       pip install -U pip &&
-      pip install paho-mqtt requests pillow &&
+      pip install paho-mqtt pyzmq pillow numpy &&
       python /app/agents/nitrogen_proxy.py
       "
     depends_on:

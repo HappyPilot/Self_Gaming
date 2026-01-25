@@ -79,7 +79,7 @@ services:
       - PYTHONUNBUFFERED=1
       - MQTT_HOST=127.0.0.1
       - MQTT_PORT=1883
-      - OBS_TOPIC=vision/mean
+      - OBS_TOPIC=scene/state
       - ACT_TOPIC=control/keys
       - ACT_CMD_TOPIC=act/cmd
       - TEACHER_ACTION_TOPIC=teacher/action

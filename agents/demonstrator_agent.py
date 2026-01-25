@@ -29,6 +29,9 @@ MAX_REPEAT = int(os.getenv("ACTION_MAX_REPEAT", "3"))
 RULES_ENV = os.getenv("DEMO_RULES", "")
 MOUSE_RANGE = int(os.getenv("DEMO_MOUSE_RANGE", "80"))
 MIN_MOUSE_DELTA = int(os.getenv("DEMO_MOUSE_MIN_DELTA", "10"))
+DEMO_REQUIRE_IN_GAME = os.getenv("DEMO_REQUIRE_IN_GAME", "0") != "0"
+DEMO_REQUIRE_IN_GAME_STRICT = os.getenv("DEMO_REQUIRE_IN_GAME_STRICT", "0") != "0"
+DEMO_ALLOW_KEYS = os.getenv("DEMO_ALLOW_KEYS", "0") != "0"
 
 stop_event = threading.Event()
 
@@ -160,6 +163,13 @@ class Demonstrator:
         now = time.time()
         if now - self.last_action_ts < ACTION_INTERVAL:
             return None
+        if DEMO_REQUIRE_IN_GAME:
+            flags = scene.get("flags") or {}
+            if DEMO_REQUIRE_IN_GAME_STRICT:
+                if flags.get("in_game") is not True:
+                    return None
+            elif flags.get("in_game") is False:
+                return None
         text_entries = scene.get("text") or []
         text_blob = " ".join(str(item) for item in text_entries)
         mean = scene.get("mean")
@@ -177,6 +187,8 @@ class Demonstrator:
                 return
         else:
             self.repeat_count = 1
+        if action == "pause":
+            return
         payload = {
             "ok": True,
             "source": AGENT_NAME,
@@ -193,6 +205,18 @@ class Demonstrator:
             act_payload["action"] = "mouse_move"
             act_payload["dx"] = dx
             act_payload["dy"] = dy
+        elif action == "press_enter":
+            if DEMO_ALLOW_KEYS:
+                act_payload["action"] = "key_press"
+                act_payload["key"] = "enter"
+            else:
+                act_payload["action"] = "click_primary"
+        elif action == "focus_field":
+            act_payload["action"] = "click_primary"
+        elif action == "scroll_down":
+            act_payload["action"] = "mouse_move"
+            act_payload["dx"] = 0
+            act_payload["dy"] = self._random_delta()
         for topic in _act_topics():
             self.client.publish(topic, json.dumps(act_payload), qos=0)
         if CONTROL_TOPIC:

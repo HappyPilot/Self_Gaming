@@ -95,10 +95,10 @@
 - `vision/hints`
 - `vision/mean`
 - `vision/objects`
-- `vision/obs`
 - `vision/observation`
 - `vision/snapshot`
 - `vision/status`
+- `scene/state`
 - `world_model/pred_error`
 
             ## Data flow (expected)

@@ -65,6 +65,7 @@ class YoloWorldBackend(ObjectDetectorBackend):
         self.classes = classes
         self.max_size = max_size if max_size and max_size > 0 else None
         self.fallback_cpu = fallback_cpu
+        self._clip_cpu = clip_cpu
         logger.info(
             "YOLO-World backend ready weights=%s device=%s conf=%.3f imgsz=%s classes=%s max_size=%s fallback_cpu=%s clip_cpu=%s",
             weights_path,
@@ -77,15 +78,32 @@ class YoloWorldBackend(ObjectDetectorBackend):
             clip_cpu,
         )
 
+    def set_classes(self, classes: list[str]) -> bool:
+        if not classes:
+            return False
+        self.classes = classes
+        try:
+            if self._clip_cpu:
+                with _clip_on_cpu():
+                    self.model.set_classes(classes)
+            else:
+                self.model.set_classes(classes)
+        except Exception:  # noqa: BLE001
+            logger.exception("YOLO-World dynamic set_classes failed")
+            return False
+        logger.info("YOLO-World classes updated count=%d", len(classes))
+        return True
+
     def _predict(self, frame: np.ndarray, device: str):
         ctx = torch.no_grad() if torch is not None else nullcontext()
         with ctx:
+            use_half = device.startswith("cuda")
             return self.model.predict(
                 source=frame,
                 device=device,
                 conf=self.conf,
                 imgsz=self.imgsz,
-                half=True,
+                half=use_half,
                 verbose=False,
             )
 
@@ -121,7 +139,10 @@ class YoloWorldBackend(ObjectDetectorBackend):
             return []
         frame_h, frame_w = frame.shape[:2]
         detected: List[DetectedObject] = []
-        names = res.names or {}
+        if self.classes:
+            names = {i: name for i, name in enumerate(self.classes)}
+        else:
+            names = res.names or {}
         raw_boxes = boxes.xyxy.cpu().numpy()
         scores = boxes.conf.cpu().numpy()
         classes = boxes.cls.cpu().numpy()

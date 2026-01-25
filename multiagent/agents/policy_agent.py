@@ -22,7 +22,7 @@ logger = logging.getLogger("policy_agent")
 
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-OBS_TOPIC = os.getenv("OBS_TOPIC", "vision/obs")
+OBS_TOPIC = os.getenv("OBS_TOPIC", "scene/state")
 SIM_TOPIC = os.getenv("SIM_TOPIC", "sim_core/state")
 GOAP_TOPIC = os.getenv("GOAP_TASK_TOPIC", "goap/tasks")
 CONTROL_TOPIC = os.getenv("ACT_TOPIC", "control/keys")

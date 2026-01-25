@@ -3,11 +3,13 @@
 import json
 import logging
 import os
+import re
 import signal
 import threading
 import time
 from collections import deque
-from typing import Dict
+from pathlib import Path
+from typing import Dict, List, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -20,15 +22,35 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 VISION_MEAN_TOPIC = os.getenv("VISION_MEAN_TOPIC", "vision/mean")
 VISION_SNAPSHOT_TOPIC = os.getenv("VISION_SNAPSHOT_TOPIC", "vision/snapshot")
 VISION_EMBEDDINGS_TOPIC = os.getenv("VISION_EMBEDDINGS_TOPIC", "vision/embeddings")
+VISION_PROMPT_TOPIC = os.getenv("VISION_PROMPT_TOPIC", "")
 OBJECT_TOPIC = os.getenv("VISION_OBJECT_TOPIC", "vision/objects")
 OBSERVATION_TOPIC = os.getenv("VISION_OBSERVATION_TOPIC", "")
+SCENE_FLAGS_TOPIC = os.getenv("SCENE_FLAGS_TOPIC", "scene/flags")
 OCR_TEXT_TOPIC = os.getenv("OCR_TEXT_TOPIC", "ocr/text")
 OCR_EASY_TOPIC = os.getenv("OCR_EASY_TOPIC", "ocr_easy/text")
 SIMPLE_OCR_TOPIC = os.getenv("SIMPLE_OCR_TOPIC", "simple_ocr/text")
 SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 WINDOW_SEC = float(os.getenv("SCENE_WINDOW_SEC", "2.0"))
 EMBED_PUBLISH_INTERVAL = float(os.getenv("SCENE_EMBED_PUBLISH_INTERVAL", "1.0"))
+SCENE_CLASS_PATH = os.getenv("SCENE_CLASS_PATH", "")
+YOLO_CLASS_PATH = os.getenv("YOLO_CLASS_PATH", "")
+DEEPSTREAM_INPUT_SIZE = int(os.getenv("ENGINE_INPUT_SIZE", "0"))
+PROMPT_SCORE_TTL_SEC = float(os.getenv("PROMPT_SCORE_TTL_SEC", "2.5"))
+PROMPT_TAG_MIN_SCORE = float(os.getenv("PROMPT_TAG_MIN_SCORE", "0.2"))
+PROMPT_TAG_TOP_K = int(os.getenv("PROMPT_TAG_TOP_K", "4"))
+PROMPT_TAG_PREFIX = os.getenv("PROMPT_TAG_PREFIX", "prompt_").strip() or "prompt_"
+PROMPT_TAG_ALLOW = {label.strip().lower() for label in os.getenv("PROMPT_TAG_ALLOW", "").split(",") if label.strip()}
+OBJECT_PREFER_OBSERVATION = os.getenv("OBJECT_PREFER_OBSERVATION", "1") != "0"
+OBJECT_ALLOW_OBSERVATION_FALLBACK = os.getenv("OBJECT_ALLOW_OBSERVATION_FALLBACK", "1") != "0"
+OBJECT_FALLBACK_AFTER_SEC = float(os.getenv("OBJECT_FALLBACK_AFTER_SEC", "1.0"))
 NORMALIZE_TEXT = os.getenv("SCENE_NORMALIZE_TEXT", "1") != "0"
+OCR_TARGET_MIN_LEN = int(os.getenv("OCR_TARGET_MIN_LEN", "2"))
+OCR_TARGET_MIN_CONF = float(os.getenv("OCR_TARGET_MIN_CONF", "0.55"))
+OCR_TARGET_MIN_ALPHA_RATIO = float(os.getenv("OCR_TARGET_MIN_ALPHA_RATIO", "0.3"))
+OCR_TARGET_EXCLUDE_REGEX = os.getenv("OCR_TARGET_EXCLUDE_REGEX", "").strip()
+OCR_TARGET_EXCLUDE = re.compile(OCR_TARGET_EXCLUDE_REGEX) if OCR_TARGET_EXCLUDE_REGEX else None
+OCR_TARGET_STABLE_FRAMES = max(1, int(os.getenv("OCR_TARGET_STABLE_FRAMES", "2")))
+OCR_TARGET_CONSECUTIVE_MIN = max(1, int(os.getenv("OCR_TARGET_CONSECUTIVE_MIN", "2")))
 TEXT_TRANSLATION = str.maketrans({"Я": "R", "я": "r", "С": "C", "с": "c", "Н": "H", "н": "h", "К": "K", "к": "k", "Т": "T", "т": "t", "А": "A", "а": "a", "В": "B", "в": "b", "Е": "E", "е": "e", "М": "M", "м": "m", "О": "O", "о": "o", "Р": "P", "р": "p", "Ь": "b", "Ы": "y", "Л": "L", "л": "l", "Д": "D", "д": "d"})
 DEATH_KEYWORDS = [kw.strip().lower() for kw in os.getenv("SCENE_DEATH_KEYWORDS", "you have died,resurrect,revive,respawn,resurrect in town,checkpoint").split(",") if kw.strip()]
 DEATH_SYMBOLS = [sym.strip() for sym in os.getenv("SCENE_DEATH_SYMBOLS", "*,†,+,☠").split(",") if sym.strip()]
@@ -41,9 +63,151 @@ ENEMY_KEYWORDS = {label.strip().lower() for label in os.getenv("SCENE_ENEMY_KEYW
 RESOURCE_KEYWORDS = {"life": ["life", "hp", "health"], "mana": ["mana", "mp"]}
 ALLOW_GENERIC_PLAYER = os.getenv("SCENE_GENERIC_PLAYER", "1") != "0"
 ALLOW_GENERIC_ENEMIES = os.getenv("SCENE_GENERIC_ENEMIES", "1") != "0"
+GENERIC_ENEMY_LABELS = {label.strip().lower() for label in os.getenv("SCENE_GENERIC_ENEMY_LABELS", "person,character,npc").split(",") if label.strip()}
+GENERIC_ENEMY_EXCLUDE_RADIUS = float(os.getenv("SCENE_GENERIC_ENEMY_EXCLUDE_RADIUS", "0.08"))
 SLA_STAGE_FUSE_MS = get_sla_ms("SLA_STAGE_FUSE_MS")
 
 stop_event = threading.Event()
+
+def _load_class_names(paths: List[str]) -> List[str]:
+    for raw in paths:
+        cleaned = (raw or "").strip()
+        if not cleaned:
+            continue
+        for token in cleaned.split(","):
+            path = Path(token.strip())
+            if not path.exists():
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    names = [line.strip() for line in handle if line.strip()]
+                if names:
+                    logger.info("Loaded %d class names from %s", len(names), path)
+                    return names
+            except Exception as exc:
+                logger.warning("Failed to read class names from %s: %s", path, exc)
+    return []
+
+
+CLASS_NAMES = _load_class_names([SCENE_CLASS_PATH, YOLO_CLASS_PATH])
+
+
+def _target_text_valid(text: str, zone: dict) -> bool:
+    trimmed = "".join(ch for ch in text if not ch.isspace())
+    if not trimmed or len(trimmed) < OCR_TARGET_MIN_LEN:
+        return False
+    conf = zone.get("confidence")
+    if conf is not None:
+        try:
+            if float(conf) < OCR_TARGET_MIN_CONF:
+                return False
+        except (TypeError, ValueError):
+            pass
+    if OCR_TARGET_EXCLUDE and OCR_TARGET_EXCLUDE.search(trimmed):
+        return False
+    alpha = sum(1 for ch in trimmed if ch.isalpha())
+    if (alpha / max(1, len(trimmed))) < OCR_TARGET_MIN_ALPHA_RATIO:
+        return False
+    return True
+
+
+def _normalize_target_text(text: str) -> str:
+    if not text:
+        return ""
+    normalized = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.lower())
+    return " ".join(normalized.split())
+
+
+def _normalize_xyxy(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    frame_w: Optional[float],
+    frame_h: Optional[float],
+) -> Optional[List[float]]:
+    coords = [x1, y1, x2, y2]
+    max_val, min_val = max(coords), min(coords)
+    if max_val <= 1.5 and min_val >= -0.1:
+        nx1, ny1, nx2, ny2 = coords
+    else:
+        if frame_w and frame_h:
+            nx1, ny1, nx2, ny2 = x1 / frame_w, y1 / frame_h, x2 / frame_w, y2 / frame_h
+        elif DEEPSTREAM_INPUT_SIZE > 0:
+            size = float(DEEPSTREAM_INPUT_SIZE)
+            nx1, ny1, nx2, ny2 = x1 / size, y1 / size, x2 / size, y2 / size
+        else:
+            return None
+    nx1, ny1, nx2, ny2 = [max(0.0, min(1.0, float(v))) for v in (nx1, ny1, nx2, ny2)]
+    if nx2 <= nx1 or ny2 <= ny1:
+        return None
+    return [round(nx1, 4), round(ny1, 4), round(nx2, 4), round(ny2, 4)]
+
+
+def _extract_frame_dims(payload: dict) -> tuple[Optional[float], Optional[float]]:
+    for key in ("frame_width", "image_width", "width"):
+        if key in payload:
+            try:
+                frame_w = float(payload[key])
+                break
+            except (TypeError, ValueError):
+                frame_w = None
+                break
+    else:
+        frame_w = None
+    for key in ("frame_height", "image_height", "height"):
+        if key in payload:
+            try:
+                frame_h = float(payload[key])
+                break
+            except (TypeError, ValueError):
+                frame_h = None
+                break
+    else:
+        frame_h = None
+    return frame_w, frame_h
+
+
+def _convert_detections_to_objects(payload: dict) -> List[Dict[str, object]]:
+    detections = payload.get("detections")
+    if not isinstance(detections, list):
+        return []
+    frame_w, frame_h = _extract_frame_dims(payload)
+    objects: List[Dict[str, object]] = []
+    for det in detections:
+        if not isinstance(det, dict):
+            continue
+        bbox = det.get("bbox") or det.get("box")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        try:
+            x1, y1, w, h = [float(v) for v in bbox]
+        except (TypeError, ValueError):
+            continue
+        x2, y2 = x1 + w, y1 + h
+        norm_bbox = _normalize_xyxy(x1, y1, x2, y2, frame_w, frame_h)
+        if not norm_bbox:
+            continue
+        class_id = det.get("class_id")
+        label = det.get("label")
+        if not label and class_id is not None and CLASS_NAMES:
+            try:
+                label = CLASS_NAMES[int(class_id)]
+            except Exception:
+                label = None
+        if not label and class_id is not None:
+            label = f"class_{class_id}"
+        conf = det.get("score")
+        if conf is None:
+            conf = det.get("confidence")
+        if conf is None:
+            conf = det.get("conf")
+        try:
+            conf_val = float(conf) if conf is not None else 0.0
+        except (TypeError, ValueError):
+            conf_val = 0.0
+        objects.append({"label": label or "object", "confidence": round(conf_val, 4), "bbox": norm_bbox})
+    return objects
 
 def _as_int(code) -> int:
     try:
@@ -61,10 +225,13 @@ class SceneAgent:
         self.state = {
             "mean": deque(maxlen=10), "easy_text": "", "simple_text": "", "snapshot_ts": 0.0,
             "objects": [], "objects_ts": 0.0, "text_zones": {}, "observation": {}, "observation_ts": 0.0,
-            "embeddings": [], "embeddings_ts": 0.0,
+            "objects_source": "", "embeddings": [], "embeddings_ts": 0.0, "flags": {}, "flags_ts": 0.0,
+            "prompt_scores": {}, "prompt_ts": 0.0,
         }
         self._last_embed_publish_ts = 0.0
         self._symbolic_candidate_since = 0.0
+        self._ocr_token_history = deque(maxlen=OCR_TARGET_STABLE_FRAMES)
+        self._ocr_token_consecutive: Dict[str, int] = {}
 
     def _symbolic_text_only(self, entries):
         lines = 0
@@ -77,6 +244,58 @@ class SceneAgent:
             else:
                 return False
         return lines >= DEATH_SYMBOL_LINES
+
+    def _update_ocr_stability(self, tokens: List[str]) -> None:
+        if OCR_TARGET_STABLE_FRAMES <= 1 and OCR_TARGET_CONSECUTIVE_MIN <= 1:
+            return
+        normalized = {token for token in tokens if token}
+        self._ocr_token_history.append(normalized)
+        consecutive = {}
+        for token in normalized:
+            consecutive[token] = self._ocr_token_consecutive.get(token, 0) + 1
+        self._ocr_token_consecutive = consecutive
+
+    def _ocr_target_is_stable(self, token: str) -> bool:
+        if OCR_TARGET_STABLE_FRAMES <= 1 and OCR_TARGET_CONSECUTIVE_MIN <= 1:
+            return True
+        if OCR_TARGET_CONSECUTIVE_MIN > 1:
+            if self._ocr_token_consecutive.get(token, 0) >= OCR_TARGET_CONSECUTIVE_MIN:
+                return True
+        if OCR_TARGET_STABLE_FRAMES > 1 and len(self._ocr_token_history) >= OCR_TARGET_STABLE_FRAMES:
+            history = list(self._ocr_token_history)[-OCR_TARGET_STABLE_FRAMES:]
+            if all(token in frame for frame in history):
+                return True
+        return False
+
+    def _prompt_tokens(self, now: float) -> tuple[list[str], Optional[dict]]:
+        scores = self.state.get("prompt_scores")
+        if not isinstance(scores, dict) or not scores:
+            return [], None
+        if PROMPT_SCORE_TTL_SEC > 0 and (now - self.state.get("prompt_ts", 0.0)) > PROMPT_SCORE_TTL_SEC:
+            return [], None
+        items = []
+        for label, raw_score in scores.items():
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+            normalized = str(label).strip().lower()
+            if not normalized:
+                continue
+            if PROMPT_TAG_ALLOW and normalized not in PROMPT_TAG_ALLOW:
+                continue
+            items.append((normalized, score))
+        if not items:
+            return [], None
+        items.sort(key=lambda item: item[1], reverse=True)
+        tokens = []
+        for label, score in items:
+            if score < PROMPT_TAG_MIN_SCORE:
+                continue
+            tokens.append(f"{PROMPT_TAG_PREFIX}{label}")
+            if len(tokens) >= PROMPT_TAG_TOP_K:
+                break
+        return tokens, {label: round(score, 4) for label, score in items}
 
     def _normalize_text(self, entry: str) -> str:
         return entry.translate(TEXT_TRANSLATION) if isinstance(entry, str) else entry
@@ -108,14 +327,32 @@ class SceneAgent:
                 fallback_score, fallback = dist, {"label": obj.get("label"), "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)}
         return best or fallback
 
-    def _extract_enemies(self, objects):
+    def _extract_enemies(self, objects, player_entry=None):
         matches = []
+        player_center = None
+        if isinstance(player_entry, dict) and player_entry.get("bbox"):
+            try:
+                pb = player_entry["bbox"]
+                player_center = ((pb[0] + pb[2]) / 2.0, (pb[1] + pb[3]) / 2.0)
+            except Exception:
+                player_center = None
         for obj in objects:
             bbox = obj.get("bbox") or obj.get("box")
             if not bbox: continue
             label = str(obj.get("label") or "").lower()
             if not ENEMY_KEYWORDS or any(keyword in label for keyword in ENEMY_KEYWORDS):
                 matches.append({"label": obj.get("label"), "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)})
+                continue
+            if ALLOW_GENERIC_ENEMIES and label in GENERIC_ENEMY_LABELS:
+                if player_center:
+                    try:
+                        cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+                        dist = (cx - player_center[0]) ** 2 + (cy - player_center[1]) ** 2
+                        if dist <= (GENERIC_ENEMY_EXCLUDE_RADIUS ** 2):
+                            continue
+                    except Exception:
+                        pass
+                matches.append({"label": obj.get("label") or "enemy", "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)})
         return matches[:5]
 
     def _extract_resources(self, text_zones: Dict[str, Dict[str, object]]):
@@ -152,6 +389,8 @@ class SceneAgent:
             if OBJECT_TOPIC: topics.append((OBJECT_TOPIC, 0))
             if OBSERVATION_TOPIC: topics.append((OBSERVATION_TOPIC, 0))
             if VISION_EMBEDDINGS_TOPIC: topics.append((VISION_EMBEDDINGS_TOPIC, 0))
+            if VISION_PROMPT_TOPIC: topics.append((VISION_PROMPT_TOPIC, 0))
+            if SCENE_FLAGS_TOPIC: topics.append((SCENE_FLAGS_TOPIC, 0))
             client.subscribe(topics)
             client.publish(SCENE_TOPIC, json.dumps({"ok": True, "event": "scene_agent_ready"}))
         else:
@@ -163,6 +402,12 @@ class SceneAgent:
         fuse_start = time.perf_counter()
         entries = [self.state["easy_text"]] if self.state["easy_text"] else [self.state["simple_text"]] if self.state["simple_text"] else []
         text_payload = [self._normalize_text(entry) for entry in entries] if entries and NORMALIZE_TEXT else entries
+        prompt_tokens, prompt_scores = self._prompt_tokens(now)
+        if prompt_tokens:
+            text_payload = list(text_payload) if text_payload else []
+            for token in prompt_tokens:
+                if token not in text_payload:
+                    text_payload.append(token)
         obs = self.state.get("observation", {})
         objects = obs.get("yolo_objects") or self.state.get("objects", [])
         text_zones = obs.get("text_zones") or self.state.get("text_zones", {})
@@ -171,29 +416,47 @@ class SceneAgent:
         if not player_entry: player_entry = self._extract_player(objects)
         if not player_entry and objects: player_entry = {"label": objects[0].get("label") or "player", "confidence": objects[0].get("confidence"), "bbox": self._normalize_bbox(objects[0].get("bbox") or objects[0].get("box"))}
         if not player_entry: player_entry = self.state.get("player_candidate") or {"label": "player_estimate", "confidence": 0.05, "bbox": [0.35, 0.35, 0.65, 0.85]}
-        enemies = self._extract_enemies(objects)
+        enemies = self._extract_enemies(objects, player_entry)
         resources = self._extract_resources(text_zones) or self._extract_resources({"aggregate": {"text": "\n".join(text_payload)}})
+        flags = dict(self.state.get("flags") or {})
         payload = {"ok": True, "event": "scene_update", "mean": self.state["mean"][-1], "trend": list(self.state["mean"]),
                    "text": text_payload, "objects": objects, "objects_ts": self.state.get("objects_ts", 0.0),
+                   "objects_source": self.state.get("objects_source", ""),
                    "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now,
                    "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0)}
+        if prompt_scores:
+            payload["prompt_scores"] = prompt_scores
+        if flags:
+            payload["flags"] = dict(flags)
         if isinstance(player_entry, dict) and player_entry.get("bbox"):
             bbox = player_entry["bbox"]
             payload["player_center"] = [round((bbox[0] + bbox[2]) / 2.0, 4), round((bbox[1] + bbox[3]) / 2.0, 4)]
         targets = []
+        seen_targets = set()
         for name, zone in (text_zones or {}).items():
             text, bbox = str(zone.get("text") or "").strip(), zone.get("bbox") or zone.get("box")
             if not text or not bbox: continue
+            normalized = _normalize_target_text(text)
+            if not normalized or normalized in seen_targets:
+                continue
+            if not _target_text_valid(text, zone):
+                continue
+            if not self._ocr_target_is_stable(normalized):
+                continue
             norm_bbox = self._normalize_bbox(bbox)
             if not norm_bbox: continue
             targets.append({"label": text, "zone": name, "bbox": norm_bbox, "center": [round((norm_bbox[0] + norm_bbox[2]) / 2.0, 4), round((norm_bbox[1] + norm_bbox[3]) / 2.0, 4)]})
+            seen_targets.add(normalized)
         if targets: payload["targets"] = targets
         lower_text = " ".join(text_payload).lower()
         if (lower_text and any(kw in lower_text for kw in DEATH_KEYWORDS)) or self._object_matches(objects):
-            payload["flags"], payload["death_reason"] = {"death": True}, "text_or_object_match"
+            flags["death"] = True
+            payload["flags"], payload["death_reason"] = flags, "text_or_object_match"
         elif text_payload and self._symbolic_text_only(text_payload) and payload.get("mean") <= DEATH_SYMBOL_MEAN_THRESHOLD and len(objects) <= DEATH_OBJECT_THRESHOLD:
             if self._symbolic_candidate_since == 0.0: self._symbolic_candidate_since = now
-            if (now - self._symbolic_candidate_since) >= DEATH_SYMBOL_PERSIST: payload["flags"], payload["death_reason"] = {"death": True}, "symbolic_text"
+            if (now - self._symbolic_candidate_since) >= DEATH_SYMBOL_PERSIST:
+                flags["death"] = True
+                payload["flags"], payload["death_reason"] = flags, "symbolic_text"
         else: self._symbolic_candidate_since = 0.0
         if payload.get("flags", {}).get("death"): payload["death_text"] = text_payload
         client.publish(SCENE_TOPIC, json.dumps(payload))
@@ -217,16 +480,62 @@ class SceneAgent:
                 self.state["mean"].append(float(data["mean"]))
                 self.state["snapshot_ts"] = time.time()
         elif msg.topic == VISION_SNAPSHOT_TOPIC: self.state["snapshot_ts"] = time.time()
-        elif OBJECT_TOPIC and msg.topic == OBJECT_TOPIC:
-            if isinstance(data, dict) and isinstance(data.get("objects"), list):
-                self.state["objects"], self.state["objects_ts"] = data["objects"], time.time()
         elif OBSERVATION_TOPIC and msg.topic == OBSERVATION_TOPIC:
             if isinstance(data, dict):
-                self.state["observation"], self.state["observation_ts"] = data, time.time()
-                if isinstance(data.get("yolo_objects"), list): self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], time.time()
-                if isinstance(data.get("text_zones"), dict): self.state["text_zones"] = data["text_zones"]
+                now = time.time()
+                if not isinstance(data.get("yolo_objects"), list):
+                    converted = _convert_detections_to_objects(data)
+                    if converted:
+                        data["yolo_objects"] = converted
+                self.state["observation"], self.state["observation_ts"] = data, now
+                if isinstance(data.get("yolo_objects"), list):
+                    should_use_obs = OBJECT_PREFER_OBSERVATION
+                    if not should_use_obs:
+                        last_src = self.state.get("objects_source")
+                        last_ts = self.state.get("objects_ts", 0.0)
+                        if (
+                            OBJECT_ALLOW_OBSERVATION_FALLBACK
+                            and OBJECT_FALLBACK_AFTER_SEC > 0
+                            and (last_src != "objects_topic" or (now - last_ts) > OBJECT_FALLBACK_AFTER_SEC)
+                        ):
+                            should_use_obs = True
+                    if should_use_obs:
+                        self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], now
+                        self.state["objects_source"] = "observation"
+                if isinstance(data.get("text_zones"), dict):
+                    self.state["text_zones"] = data["text_zones"]
+                    tokens = []
+                    for zone in data["text_zones"].values():
+                        text = str(zone.get("text") or "").strip()
+                        normalized = _normalize_target_text(text)
+                        if normalized:
+                            tokens.append(normalized)
+                    self._update_ocr_stability(tokens)
                 if self.state["text_zones"]: self.state["easy_text"] = "\n".join([str(z.get("text") or "") for z in self.state["text_zones"].values() if z.get("text")])
                 if self._sanitize_player(data.get("player_candidate")): self.state["player_candidate"], self.state["player_candidate_ts"] = self._sanitize_player(data["player_candidate"]), time.time()
+        elif OBJECT_TOPIC and msg.topic == OBJECT_TOPIC and msg.topic != OBSERVATION_TOPIC:
+            if isinstance(data, dict):
+                if OBJECT_PREFER_OBSERVATION and self.state.get("observation_ts"):
+                    obs_age = time.time() - self.state.get("observation_ts", 0.0)
+                    obs_objects = (self.state.get("observation") or {}).get("yolo_objects") or []
+                    if obs_age <= OBJECT_FALLBACK_AFTER_SEC and obs_objects:
+                        publish_now = False
+                        return
+                converted = _convert_detections_to_objects(data)
+                if converted:
+                    self.state["objects"], self.state["objects_ts"] = converted, time.time()
+                    self.state["objects_source"] = "objects_topic"
+                elif isinstance(data.get("objects"), list):
+                    self.state["objects"], self.state["objects_ts"] = data["objects"], time.time()
+                    self.state["objects_source"] = "objects_topic"
+        elif SCENE_FLAGS_TOPIC and msg.topic == SCENE_FLAGS_TOPIC:
+            if isinstance(data, dict):
+                flags = data.get("flags") if isinstance(data.get("flags"), dict) else data
+                if isinstance(flags, dict):
+                    merged = dict(self.state.get("flags") or {})
+                    merged.update(flags)
+                    self.state["flags"] = merged
+                    self.state["flags_ts"] = time.time()
         elif msg.topic in (OCR_TEXT_TOPIC, OCR_EASY_TOPIC):
             if isinstance(data, dict):
                 self.state["easy_text"] = (str(data.get("text") or "")).strip()
@@ -243,11 +552,22 @@ class SceneAgent:
                             "confidence": res.get("conf", 1.0)
                         }
                     self.state["text_zones"] = new_zones
+                    tokens = []
+                    for zone in new_zones.values():
+                        text = str(zone.get("text") or "").strip()
+                        normalized = _normalize_target_text(text)
+                        if normalized:
+                            tokens.append(normalized)
+                    self._update_ocr_stability(tokens)
             else:
                 self.state["easy_text"] = str(data).strip()
         elif msg.topic == SIMPLE_OCR_TOPIC:
             raw = data.get("text") if isinstance(data, dict) else data
             self.state["simple_text"] = (str(raw) if raw is not None else "").strip()
+        elif VISION_PROMPT_TOPIC and msg.topic == VISION_PROMPT_TOPIC:
+            if isinstance(data, dict) and isinstance(data.get("scores"), dict):
+                self.state["prompt_scores"] = data["scores"]
+                self.state["prompt_ts"] = float(data.get("timestamp") or time.time())
         elif msg.topic == VISION_EMBEDDINGS_TOPIC:
             publish_now = False
             if isinstance(data, dict):

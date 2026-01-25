@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 import signal
+import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Deque, Dict, List, Optional, Tuple
@@ -16,7 +17,8 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 from control_profile import load_profile, safe_profile, upsert_profile
-from llm_client import fetch_control_profile, guess_game_id
+from llm_client import fetch_control_profile, fetch_visual_prompts, guess_game_id
+from prompt_profile import fallback_prompt_profile, load_prompt_profile, upsert_prompt_profile
 from utils.frame_transport import get_frame_bytes
 
 logging.basicConfig(level=os.getenv("ONBOARD_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -30,6 +32,7 @@ CURSOR_TOPIC = os.getenv("CURSOR_TOPIC", "cursor/state")
 ACT_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
 SCHEMA_TOPIC = os.getenv("GAME_SCHEMA_TOPIC", "game/schema")
 MEM_STORE_TOPIC = os.getenv("MEM_STORE_TOPIC", "mem/store")
+PROMPT_CONFIG_TOPIC = os.getenv("VISION_PROMPT_CONFIG_TOPIC", "vision/prompts")
 
 PHASE_A_SECONDS = float(os.getenv("ONBOARD_PHASE_A_SEC", "6.0"))
 CONTROL_SETTLE_SEC = float(os.getenv("ONBOARD_CONTROL_SETTLE", "1.0"))
@@ -39,6 +42,7 @@ VARIANCE_THRESHOLD = float(os.getenv("ONBOARD_VARIANCE_THRESHOLD", "35.0"))
 HUD_AREA_MIN = float(os.getenv("ONBOARD_HUD_AREA_MIN", "0.01"))
 HUD_AREA_MAX = float(os.getenv("ONBOARD_HUD_AREA_MAX", "0.2"))
 CONTROL_DIFF_THRESHOLD = float(os.getenv("ONBOARD_CONTROL_DIFF", "8.0"))
+EXTENDED_DIFF_MIN = float(os.getenv("ONBOARD_EXTENDED_DIFF_MIN", str(CONTROL_DIFF_THRESHOLD)))
 
 CONTROL_PROBES = [
     ("KEY_W", {"action": "key_press", "key": "w"}, "move_forward"),
@@ -53,6 +57,9 @@ CONTROL_PROBES = [
     ("MOUSE_RIGHT", {"action": "click_secondary"}, "alt_attack"),
 ]
 
+# Default skill/flask keys for click-to-move ARPGs.
+ARPG_DEFAULT_KEYS = ["q", "w", "e", "r", "t", "1", "2", "3", "4", "5", "space"]
+
 # Safe probes used only when LLM/profile is low-confidence: avoid risky/system keys.
 SAFE_PROBES = [
     ("MOUSE_MOVE", {"action": "mouse_move", "dx": 0, "dy": 0}, "mouse_move"),
@@ -63,15 +70,73 @@ stop_event = threading.Event()
 PROBE_WITHOUT_PROFILE = os.getenv("ONBOARD_PROBE_WITHOUT_PROFILE", "0") != "0"
 REQUEST_LLM_PROFILE = os.getenv("ONBOARD_REQUEST_LLM_PROFILE", "1") != "0"
 REQUEST_LLM_GAME_ID = os.getenv("ONBOARD_REQUEST_LLM_GAME_ID", "1") != "0"
+REQUEST_LLM_PROMPTS = os.getenv("ONBOARD_REQUEST_LLM_PROMPTS", "1") != "0"
+PREFER_LOCAL_PROMPTS = os.getenv("ONBOARD_PREFER_LOCAL_PROMPTS", "1") != "0"
 LLM_CONF_MIN_KEYS = int(os.getenv("LLM_CONF_MIN_KEYS", "1"))
 DISABLE_PROBES = os.getenv("ONBOARD_DISABLE_PROBES", "1") == "1"
 SAFE_KEY_BLACKLIST = {k.strip().lower() for k in os.getenv("ONBOARD_SAFE_KEY_BLACKLIST", "m,tab,i,esc").split(",") if k.strip()}
+FORCE_MOUSE_MOVE = os.getenv("ONBOARD_FORCE_MOUSE_MOVE", "1") != "0"
+PREFER_LOCAL_PROFILE = os.getenv("ONBOARD_PREFER_LOCAL_PROFILE", "1") != "0"
+EXTENDED_PROBE = os.getenv("ONBOARD_EXTENDED_PROBE", "1") != "0"
+GAME_ID_OVERRIDE = os.getenv("ONBOARD_GAME_ID_OVERRIDE", "").strip()
+GAME_IDENTITY_TOPIC = os.getenv("GAME_IDENTITY_TOPIC", "game/identity")
+IDENTITY_WAIT_SEC = float(os.getenv("ONBOARD_IDENTITY_WAIT_SEC", "2.0"))
+PROMPT_MIN_LEN = int(os.getenv("ONBOARD_PROMPT_MIN_LEN", "2"))
+PROMPT_MAX = int(os.getenv("ONBOARD_PROMPT_MAX", "18"))
+PROMPT_FALLBACK_ENABLED = os.getenv("ONBOARD_PROMPT_FALLBACK", "1") != "0"
 
 def _as_int(code) -> int:
     try:
         if hasattr(code, "value"): return int(code.value)
         return int(code)
     except (TypeError, ValueError): return 0
+
+def _normalize_game_id(value: str) -> str:
+    if not value:
+        return "unknown_game"
+    lowered = str(value).strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
+    return slug or "unknown_game"
+
+def _normalize_keys(keys) -> List[str]:
+    if not keys:
+        return []
+    if isinstance(keys, str):
+        keys = [keys]
+    normalized = []
+    for key in keys:
+        if key is None:
+            continue
+        value = str(key).strip().lower()
+        if value:
+            normalized.append(value)
+    return normalized
+
+def _dedupe_keys(keys: List[str]) -> List[str]:
+    seen = set()
+    ordered = []
+    for key in keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return ordered
+
+
+def _normalize_prompts(values: List[str]) -> List[str]:
+    cleaned: List[str] = []
+    seen = set()
+    for value in values:
+        token = str(value).strip().lower()
+        if not token or len(token) < PROMPT_MIN_LEN:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        cleaned.append(token)
+        if PROMPT_MAX and len(cleaned) >= PROMPT_MAX:
+            break
+    return cleaned
 
 @dataclass
 class FrameRecord:
@@ -108,11 +173,16 @@ class GameOnboardingAgent:
         self.profile_status: str = "unknown"
         self.game_id: str = "unknown_game"
         self.llm_status: str = "not_requested"
+        self.identity_game_id: Optional[str] = None
+        self.prompt_profile: Dict[str, object] = {}
+        self.prompt_status: str = "not_requested"
 
     # MQTT wiring -------------------------------------------------------------
     def _on_connect(self, client, _userdata, _flags, rc):
         if _as_int(rc) == 0:
             topics = [(FRAME_TOPIC, 0), (SCENE_TOPIC, 0), (CURSOR_TOPIC, 0)]
+            if GAME_IDENTITY_TOPIC:
+                topics.append((GAME_IDENTITY_TOPIC, 0))
             client.subscribe(topics)
             logger.info("Onboarding connected, topics: %s", [t for t, _ in topics])
         else:
@@ -132,7 +202,7 @@ class GameOnboardingAgent:
                 if isinstance(data, dict):
                     self.latest_state = data
                     if data.get("game_id"):
-                        self.game_id = str(data.get("game_id"))
+                        self.game_id = _normalize_game_id(str(data.get("game_id")))
             elif msg.topic == CURSOR_TOPIC:
                 try:
                     data = json.loads(msg.payload.decode("utf-8", "ignore"))
@@ -140,6 +210,17 @@ class GameOnboardingAgent:
                     return
                 if isinstance(data, dict):
                     self.latest_cursor = data
+            elif GAME_IDENTITY_TOPIC and msg.topic == GAME_IDENTITY_TOPIC:
+                try:
+                    data = json.loads(msg.payload.decode("utf-8", "ignore"))
+                except Exception:
+                    return
+                if isinstance(data, dict):
+                    raw_id = data.get("game_id") or data.get("app_name") or data.get("window_title") or ""
+                    normalized = _normalize_game_id(str(raw_id))
+                    if normalized and normalized != "unknown_game":
+                        self.game_id = normalized
+                        self.identity_game_id = normalized
 
     # Analysis ----------------------------------------------------------------
     def _collect_phase_a(self):
@@ -187,26 +268,30 @@ class GameOnboardingAgent:
 
     def _detect_game_id(self):
         """Infer game_id from state text or LLM."""
+        if GAME_ID_OVERRIDE:
+            self.game_id = _normalize_game_id(GAME_ID_OVERRIDE)
+            return
+        deadline = time.time() + max(0.0, IDENTITY_WAIT_SEC)
+        while not self.identity_game_id and time.time() < deadline:
+            time.sleep(0.2)
+        if self.identity_game_id and self.identity_game_id != "unknown_game":
+            self.game_id = self.identity_game_id
+            return
         # Prefer explicit game_id if present
         with self.lock:
             explicit = self.latest_state.get("game_id")
             texts = list(self.latest_state.get("text") or [])[:20]
         if explicit:
-            self.game_id = str(explicit)
-            return
-        # Quick heuristic: look for known tokens in text
-        joined = " ".join(texts).lower()
-        if "path of exile" in joined or "dying exile" in joined:
-            self.game_id = "path_of_exile"
-            return
-        if "diablo" in joined:
-            self.game_id = "diablo"
-            return
+            normalized = _normalize_game_id(str(explicit))
+            if normalized not in {"unknown_game", "unknown"}:
+                self.game_id = normalized
+                return
         if REQUEST_LLM_GAME_ID:
             guessed, status = guess_game_id(self.game_id, texts)
             if guessed:
-                self.game_id = guessed
+                self.game_id = _normalize_game_id(guessed)
                 self.llm_status = status
+        self.game_id = _normalize_game_id(self.game_id)
 
     def _mask_to_bbox(self, mask: np.ndarray) -> Dict[str, float]:
         coords = cv2.findNonZero(mask)
@@ -239,9 +324,10 @@ class GameOnboardingAgent:
     def _probe_controls(self, probes=None):
         logger.info("Control probe start")
         probes = probes or CONTROL_PROBES
+        results = []
         for name, action, label in probes:
             if stop_event.is_set():
-                return
+                return results
             before = self._latest_frame_gray()
             baseline = self._capture_state_snapshot()
             self._publish_action(action)
@@ -256,8 +342,10 @@ class GameOnboardingAgent:
             }
             result.update(baseline)
             self.control_results.append(result)
+            results.append(result)
             logger.info("Control probe result: %s", result)
             time.sleep(POST_PROBE_SEC)
+        return results
 
     def _frame_difference(self, before: Optional[np.ndarray], after: Optional[np.ndarray]) -> float:
         if before is None or after is None:
@@ -367,6 +455,22 @@ class GameOnboardingAgent:
         }
         logger.info("Schema summary: %s", summary)
 
+    def _publish_prompt_config(self, prompt_profile: Dict[str, object]) -> None:
+        if not PROMPT_CONFIG_TOPIC:
+            return
+        payload = {
+            "ok": True,
+            "timestamp": time.time(),
+            "game_id": self.game_id,
+            "source": "onboarding",
+            "prompts": _normalize_prompts(prompt_profile.get("prompts") or []),
+            "object_prompts": _normalize_prompts(prompt_profile.get("object_prompts") or []),
+            "ui_prompts": _normalize_prompts(prompt_profile.get("ui_prompts") or []),
+            "confidence": prompt_profile.get("confidence"),
+            "status": self.prompt_status,
+        }
+        self.client.publish(PROMPT_CONFIG_TOPIC, json.dumps(payload))
+
     # Main -------------------------------------------------------------------
     def run(self):
         self.client.connect(MQTT_HOST, MQTT_PORT, 30)
@@ -377,31 +481,70 @@ class GameOnboardingAgent:
             layout = self._compute_layout()
             if stop_event.is_set(): return
             self._detect_game_id()
-            # LLM-first attempt to get a schema/profile
+            # Resolve control profile
             llm_confident = False
             texts = []
             with self.lock:
                 texts = list(self.latest_state.get("text") or [])[:20]
-            if REQUEST_LLM_PROFILE:
-                llm_profile, status = fetch_control_profile(self.game_id, texts)
-                self.llm_status = status
-                if llm_profile:
-                    llm_profile.setdefault("game_id", self.game_id)
-                    llm_profile.setdefault("profile_version", 1)
-                    self.profile = llm_profile
-                    self.profile_status = "llm_generated"
-                    upsert_profile(llm_profile)
-                    allowed_keys = llm_profile.get("allowed_keys") or []
-                    llm_confident = len(allowed_keys) >= LLM_CONF_MIN_KEYS
-            if not llm_confident:
-                loaded = load_profile(self.game_id)
-                if loaded:
-                    self.profile = loaded
-                    self.profile_status = "loaded"
-                else:
-                    self.profile = safe_profile(self.game_id)
-                    self.profile_status = "safe_fallback"
-                    upsert_profile(self.profile)
+            local_profile = load_profile(self.game_id)
+            if PREFER_LOCAL_PROFILE and local_profile:
+                self.profile = local_profile
+                self.profile_status = "loaded"
+            else:
+                if REQUEST_LLM_PROFILE:
+                    llm_profile, status = fetch_control_profile(self.game_id, texts)
+                    self.llm_status = status
+                    if llm_profile:
+                        llm_profile["game_id"] = self.game_id
+                        llm_profile.setdefault("profile_version", 1)
+                        if FORCE_MOUSE_MOVE and not llm_profile.get("allow_mouse_move", True):
+                            llm_profile["allow_mouse_move"] = True
+                            llm_profile.setdefault("notes", []).append("allow_mouse_move forced")
+                        safe_keys = _normalize_keys(llm_profile.get("allowed_keys_safe") or llm_profile.get("allowed_keys") or [])
+                        extended_keys = _normalize_keys(llm_profile.get("allowed_keys_extended") or [])
+                        safe_keys = [k for k in safe_keys if k not in SAFE_KEY_BLACKLIST]
+                        extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
+                        mouse_mode = str(llm_profile.get("mouse_mode") or "").lower()
+                        if mouse_mode == "click_to_move":
+                            if safe_keys and all(k in {"w", "a", "s", "d"} for k in safe_keys):
+                                extended_keys = _dedupe_keys(extended_keys + safe_keys)
+                                safe_keys = []
+                            if not safe_keys and extended_keys:
+                                promote = [k for k in extended_keys if k in ARPG_DEFAULT_KEYS]
+                                if promote:
+                                    safe_keys = promote
+                                    extended_keys = [k for k in extended_keys if k not in promote]
+                        llm_profile["allowed_keys"] = _dedupe_keys(safe_keys)
+                        llm_profile["allowed_keys_extended"] = _dedupe_keys(extended_keys)
+                        self.profile = llm_profile
+                        self.profile_status = "llm_generated"
+                        logger.info(
+                            "LLM profile loaded status=%s safe_keys=%s extended_keys=%s allow_mouse_move=%s",
+                            status,
+                            len(llm_profile.get("allowed_keys") or []),
+                            len(llm_profile.get("allowed_keys_extended") or []),
+                            llm_profile.get("allow_mouse_move"),
+                        )
+                        llm_confident = len(llm_profile.get("allowed_keys") or []) >= LLM_CONF_MIN_KEYS
+                    else:
+                        logger.warning("LLM profile unavailable status=%s", status)
+                        llm_confident = False
+                if not llm_confident:
+                    if local_profile:
+                        self.profile = local_profile
+                        self.profile_status = "loaded"
+                    else:
+                        self.profile = safe_profile(self.game_id)
+                        self.profile_status = "safe_fallback"
+
+            # Normalize profile keys
+            safe_keys = _normalize_keys(self.profile.get("allowed_keys") or [])
+            extended_keys = _normalize_keys(self.profile.get("allowed_keys_extended") or [])
+            safe_keys = [k for k in safe_keys if k not in SAFE_KEY_BLACKLIST]
+            extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
+            self.profile["allowed_keys"] = _dedupe_keys(safe_keys)
+            if extended_keys:
+                self.profile["allowed_keys_extended"] = _dedupe_keys(extended_keys)
 
             # Probe only if we lack a confident schema/profile; use the safe subset.
             should_probe = (
@@ -416,7 +559,7 @@ class GameOnboardingAgent:
             # If we have a confident profile (loaded or LLM) and allowed_keys, run a limited validation
             validate_keys = (
                 not DISABLE_PROBES
-                and llm_confident or self.profile_status in {"loaded", "llm_generated"}
+                and (llm_confident or self.profile_status in {"loaded", "llm_generated"})
             )
             allowed_keys = [k.lower() for k in self.profile.get("allowed_keys", []) if k]
             allowed_keys = [k for k in allowed_keys if k not in SAFE_KEY_BLACKLIST]
@@ -424,7 +567,66 @@ class GameOnboardingAgent:
                 key_probes = [("KEY_" + k.upper(), {"action": "key_press", "key": k}, f"key_{k}") for k in allowed_keys]
                 probes = SAFE_PROBES + key_probes
                 self._probe_controls(probes)
+            # Validate extended keys via probes before activating them
+            if EXTENDED_PROBE and validate_keys:
+                extended_keys = [k for k in self.profile.get("allowed_keys_extended", []) if k]
+                extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
+                extended_keys = [k for k in extended_keys if k not in allowed_keys]
+                if extended_keys:
+                    ext_probes = [("KEY_" + k.upper(), {"action": "key_press", "key": k}, f"key_{k}") for k in extended_keys]
+                    results = self._probe_controls(ext_probes)
+                    verified = []
+                    for result in results or []:
+                        if float(result.get("diff_score") or 0.0) < EXTENDED_DIFF_MIN:
+                            continue
+                        label = str(result.get("label") or "")
+                        if label.startswith("key_"):
+                            verified.append(label.replace("key_", "", 1))
+                    verified = _dedupe_keys([k for k in verified if k])
+                    if verified:
+                        self.profile["allowed_keys"] = _dedupe_keys(self.profile.get("allowed_keys", []) + verified)
+                    self.profile["allowed_keys_extended_verified"] = verified
+            upsert_profile(self.profile)
             if stop_event.is_set(): return
+            prompt_profile = None
+            if PREFER_LOCAL_PROMPTS:
+                local_prompt = load_prompt_profile(self.game_id)
+                if local_prompt:
+                    prompt_profile = local_prompt
+                    self.prompt_status = "loaded"
+                    self.prompt_profile = prompt_profile
+                    self._publish_prompt_config(prompt_profile)
+                    logger.info(
+                        "Prompt profile loaded prompts=%s objects=%s ui=%s",
+                        len(prompt_profile.get("prompts") or []),
+                        len(prompt_profile.get("object_prompts") or []),
+                        len(prompt_profile.get("ui_prompts") or []),
+                    )
+            if not prompt_profile and REQUEST_LLM_PROMPTS:
+                prompt_profile, status = fetch_visual_prompts(self.game_id, texts)
+                self.prompt_status = status
+                if prompt_profile:
+                    prompt_profile["game_id"] = self.game_id
+                    self.prompt_profile = prompt_profile
+                    self._publish_prompt_config(prompt_profile)
+                    upsert_prompt_profile(prompt_profile)
+                    logger.info(
+                        "Prompt profile published status=%s prompts=%s objects=%s ui=%s",
+                        status,
+                        len(prompt_profile.get("prompts") or []),
+                        len(prompt_profile.get("object_prompts") or []),
+                        len(prompt_profile.get("ui_prompts") or []),
+                    )
+            if not prompt_profile:
+                status = self.prompt_status or "unknown"
+                if PROMPT_FALLBACK_ENABLED:
+                    fallback = fallback_prompt_profile(self.game_id)
+                    self.prompt_profile = fallback
+                    self.prompt_status = f"{status}_fallback"
+                    self._publish_prompt_config(fallback)
+                    logger.warning("Prompt profile unavailable status=%s; published fallback prompts", status)
+                else:
+                    logger.warning("Prompt profile unavailable status=%s", status)
             self._build_schema(layout)
         finally:
             self.client.loop_stop()
