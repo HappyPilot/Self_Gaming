@@ -61,6 +61,8 @@ TEACHER_CONTEXT_MIN_CHARS, TEACHER_CONTEXT_TEXT_LIMIT = int(os.getenv("TEACHER_C
 TEACHER_CONTEXT_OBJECT_LIMIT = int(os.getenv("TEACHER_CONTEXT_OBJECT_LIMIT", "8"))
 TEACHER_CONTEXT_SCOPE_FALLBACK = os.getenv("TEACHER_CONTEXT_SCOPE_FALLBACK", "generic_ui")
 TEACHER_CONTEXT_DIFF_JACCARD, TEACHER_CONTEXT_DIFF_MIN_CHARS = float(os.getenv("TEACHER_CONTEXT_DIFF_JACCARD", "0.4")), int(os.getenv("TEACHER_CONTEXT_DIFF_MIN_CHARS", "48"))
+TEACHER_PROMPT_TOP_K = int(os.getenv("TEACHER_PROMPT_TOP_K", "5"))
+TEACHER_PROMPT_MIN_SCORE = float(os.getenv("TEACHER_PROMPT_MIN_SCORE", "0.02"))
 TEACHER_REQUIRE_IN_GAME = os.getenv("TEACHER_REQUIRE_IN_GAME", "0") != "0"
 TEACHER_REQUIRE_IN_GAME_STRICT = os.getenv("TEACHER_REQUIRE_IN_GAME_STRICT", "0") != "0"
 TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
@@ -321,6 +323,27 @@ class TeacherAgent:
             return scene_desc
         return json.dumps(scene.get("text", []))
 
+    def _format_prompt_signals(self, scene: dict) -> str:
+        scores = scene.get("prompt_scores")
+        if not isinstance(scores, dict) or not scores:
+            return ""
+        items = []
+        for label, raw_score in scores.items():
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+            if score < TEACHER_PROMPT_MIN_SCORE:
+                continue
+            name = str(label).strip().lower()
+            if name:
+                items.append((name, score))
+        if not items:
+            return ""
+        items.sort(key=lambda pair: pair[1], reverse=True)
+        top = items[:max(1, TEACHER_PROMPT_TOP_K)]
+        return ", ".join(f"{label}({score:.3f})" for label, score in top)
+
     def _format_recent_actions(self, actions: List[str]) -> str:
         if not actions:
             return "none"
@@ -341,6 +364,9 @@ class TeacherAgent:
         stats = scene.get("stats")
         if stats:
             parts.append(f"Stats: {json.dumps(stats)}")
+        prompt_signals = self._format_prompt_signals(scene)
+        if prompt_signals:
+            parts.append(f"Prompt signals: {prompt_signals}")
         if rules:
             rules_text = "\n".join(f"- {rule.get('text')}" for rule in rules)
             parts.append(f"Rules:\n{rules_text}")
