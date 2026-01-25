@@ -814,7 +814,6 @@ services:
     - LOG_MONITOR_INTERVAL=5
     depends_on:
     - mq
-    - object_detection
   game_identity:
     container_name: game_identity_agent
     image: local/policy-agent:latest
@@ -1255,6 +1254,8 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - legacy
     working_dir: /app
     entrypoint:
     - python3
