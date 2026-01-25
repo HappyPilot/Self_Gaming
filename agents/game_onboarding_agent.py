@@ -18,6 +18,7 @@ import numpy as np
 import paho.mqtt.client as mqtt
 from control_profile import load_profile, safe_profile, upsert_profile
 from llm_client import fetch_control_profile, fetch_visual_prompts, guess_game_id
+from prompt_profile import fallback_prompt_profile, load_prompt_profile, upsert_prompt_profile
 from utils.frame_transport import get_frame_bytes
 
 logging.basicConfig(level=os.getenv("ONBOARD_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -70,6 +71,7 @@ PROBE_WITHOUT_PROFILE = os.getenv("ONBOARD_PROBE_WITHOUT_PROFILE", "0") != "0"
 REQUEST_LLM_PROFILE = os.getenv("ONBOARD_REQUEST_LLM_PROFILE", "1") != "0"
 REQUEST_LLM_GAME_ID = os.getenv("ONBOARD_REQUEST_LLM_GAME_ID", "1") != "0"
 REQUEST_LLM_PROMPTS = os.getenv("ONBOARD_REQUEST_LLM_PROMPTS", "1") != "0"
+PREFER_LOCAL_PROMPTS = os.getenv("ONBOARD_PREFER_LOCAL_PROMPTS", "1") != "0"
 LLM_CONF_MIN_KEYS = int(os.getenv("LLM_CONF_MIN_KEYS", "1"))
 DISABLE_PROBES = os.getenv("ONBOARD_DISABLE_PROBES", "1") == "1"
 SAFE_KEY_BLACKLIST = {k.strip().lower() for k in os.getenv("ONBOARD_SAFE_KEY_BLACKLIST", "m,tab,i,esc").split(",") if k.strip()}
@@ -82,26 +84,6 @@ IDENTITY_WAIT_SEC = float(os.getenv("ONBOARD_IDENTITY_WAIT_SEC", "2.0"))
 PROMPT_MIN_LEN = int(os.getenv("ONBOARD_PROMPT_MIN_LEN", "2"))
 PROMPT_MAX = int(os.getenv("ONBOARD_PROMPT_MAX", "18"))
 PROMPT_FALLBACK_ENABLED = os.getenv("ONBOARD_PROMPT_FALLBACK", "1") != "0"
-
-DEFAULT_PROMPT_FALLBACK = [
-    "enemy",
-    "boss",
-    "player",
-    "npc",
-    "loot",
-    "chest",
-    "portal",
-    "waypoint",
-    "minimap",
-    "inventory",
-    "quest",
-    "dialog",
-    "health bar",
-    "mana bar",
-    "death screen",
-    "loading screen",
-    "pause menu",
-]
 
 def _as_int(code) -> int:
     try:
@@ -606,13 +588,28 @@ class GameOnboardingAgent:
                     self.profile["allowed_keys_extended_verified"] = verified
             upsert_profile(self.profile)
             if stop_event.is_set(): return
-            if REQUEST_LLM_PROMPTS:
+            prompt_profile = None
+            if PREFER_LOCAL_PROMPTS:
+                local_prompt = load_prompt_profile(self.game_id)
+                if local_prompt:
+                    prompt_profile = local_prompt
+                    self.prompt_status = "loaded"
+                    self.prompt_profile = prompt_profile
+                    self._publish_prompt_config(prompt_profile)
+                    logger.info(
+                        "Prompt profile loaded prompts=%s objects=%s ui=%s",
+                        len(prompt_profile.get("prompts") or []),
+                        len(prompt_profile.get("object_prompts") or []),
+                        len(prompt_profile.get("ui_prompts") or []),
+                    )
+            if not prompt_profile and REQUEST_LLM_PROMPTS:
                 prompt_profile, status = fetch_visual_prompts(self.game_id, texts)
                 self.prompt_status = status
                 if prompt_profile:
                     prompt_profile["game_id"] = self.game_id
                     self.prompt_profile = prompt_profile
                     self._publish_prompt_config(prompt_profile)
+                    upsert_prompt_profile(prompt_profile)
                     logger.info(
                         "Prompt profile published status=%s prompts=%s objects=%s ui=%s",
                         status,
@@ -620,21 +617,16 @@ class GameOnboardingAgent:
                         len(prompt_profile.get("object_prompts") or []),
                         len(prompt_profile.get("ui_prompts") or []),
                     )
+            if not prompt_profile:
+                status = self.prompt_status or "unknown"
+                if PROMPT_FALLBACK_ENABLED:
+                    fallback = fallback_prompt_profile(self.game_id)
+                    self.prompt_profile = fallback
+                    self.prompt_status = f"{status}_fallback"
+                    self._publish_prompt_config(fallback)
+                    logger.warning("Prompt profile unavailable status=%s; published fallback prompts", status)
                 else:
-                    if PROMPT_FALLBACK_ENABLED:
-                        fallback = {
-                            "game_id": self.game_id,
-                            "prompts": list(DEFAULT_PROMPT_FALLBACK),
-                            "object_prompts": ["enemy", "boss", "player", "npc", "loot", "chest", "portal", "waypoint"],
-                            "ui_prompts": ["inventory", "minimap", "quest", "dialog", "health bar", "mana bar", "death screen", "loading screen", "pause menu"],
-                            "confidence": 0.0,
-                        }
-                        self.prompt_profile = fallback
-                        self.prompt_status = f"{status}_fallback"
-                        self._publish_prompt_config(fallback)
-                        logger.warning("Prompt profile unavailable status=%s; published fallback prompts", status)
-                    else:
-                        logger.warning("Prompt profile unavailable status=%s", status)
+                    logger.warning("Prompt profile unavailable status=%s", status)
             self._build_schema(layout)
         finally:
             self.client.loop_stop()

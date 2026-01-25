@@ -168,6 +168,10 @@ export VISION_PROMPT_CONFIG_TOPIC=vision/prompts
 export ONBOARD_REQUEST_LLM_PROMPTS=1
 ```
 
+Onboarding also supports local prompt profiles, loaded from `PROMPT_PROFILE_PATH` (default `/app/data/prompt_profiles.json`).
+Use `agents/data/prompt_profiles.example.json` as a template and key entries by `game_id`.
+If the local file is missing, the example profile is used as a fallback.
+
 Tune `PROMPT_TAG_MIN_SCORE` / `PROMPT_TAG_TOP_K` to adjust how many tags are injected into `scene/state`.
 
 ## Embedding Guard (In-Game Gate)

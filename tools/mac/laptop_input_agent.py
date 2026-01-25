@@ -373,7 +373,7 @@ def _maybe_publish_identity(now: float, name: str, title: str, bundle: str):
 def _front_app_loop():
     global last_front_app, last_front_app_ts, last_front_app_ok_ts, last_front_app_error_log
     global last_front_window_title, last_front_bundle_id
-    if not FRONT_APP_REQUIRED and not PUBLISH_IDENTITY:
+    if not FRONT_APP_REQUIRED and not PUBLISH_IDENTITY and not INPUT_BOUNDS_DYNAMIC:
         return
     sleep_sec = max(0.2, FRONT_APP_CHECK_SEC)
     while True:
