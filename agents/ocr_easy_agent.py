@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import socket
 import signal
 import threading
 import time
@@ -53,6 +54,7 @@ stop_event = threading.Event()
 # --- Constants ---
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+OCR_CLIENT_ID = os.getenv("OCR_CLIENT_ID")
 VISION_CMD = os.getenv("VISION_CMD", "vision/cmd")
 VISION_SNAPSHOT = os.getenv("VISION_SNAPSHOT", "vision/snapshot")
 VISION_FRAME = os.getenv("VISION_FRAME", os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview"))
@@ -106,7 +108,8 @@ def _frame_hash(img: Image.Image) -> str:
 
 class OcrEasyAgent:
     def __init__(self):
-        self.client = mqtt.Client(client_id="ocr_easy", protocol=mqtt.MQTTv311)
+        client_id = OCR_CLIENT_ID or f"ocr_easy_{socket.gethostname()}_{os.getpid()}"
+        self.client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
         self.client.on_connect = self._on_connect
         self.client.message_callback_add(VISION_SNAPSHOT, self._on_snapshot)
         self.client.message_callback_add(VISION_FRAME, self._on_frame)
