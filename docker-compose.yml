@@ -966,7 +966,6 @@ services:
     - YOLO_CLASS_PATH=/mnt/ssd/models/yolo/coco.names
     - YOLO_WORLD_CLASSES=person,character,enemy,monster,boss,npc,loot,chest,portal,waypoint,quest_marker,dialog_button,ui_button
     - YOLO_FALLBACK_CPU=1
-    - YOLO_WORLD_CLASSES=enemy,boss,player,npc,loot,portal,waypoint,quest_marker,dialog_button
     - DETECTOR_BACKEND=yoloworld
     - PERCEPTION_DEBUG=1
     - OCR_BACKEND=null
