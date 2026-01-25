@@ -50,9 +50,10 @@ export STRATEGY_STATE_AUTHKEY=strategy
 
 If using Docker Compose, enable the optional `strategy_state` service (profile `shared_state`). Use `STRATEGY_STATE_HOST=strategy_state` for bridged networking or `127.0.0.1` when running other services with host networking.
 
-## Object-Detection Agent
+## Object-Detection Agent (Legacy)
 
 - `object_detection_agent.py` subscribes to `vision/frame/preview` by default (set `VISION_FRAME_TOPIC=vision/frame/full` for full quality), runs a pluggable YOLO backend (Ultralytics by default), and emits structured detections on `vision/objects`.
+- In Docker Compose this service is under the `legacy` profile to avoid polluting `vision/objects` when the perception pipeline is active. Enable it explicitly with `--profile legacy` if you need the old path.
 - The agent is packaged in its own container (`local/object-detection-agent`). Drop TensorRT/Ultralytics weights under `/mnt/ssd/models/yolo/<checkpoint>` and point `OBJECT_MODEL_PATH` there.
 - Relevant environment switches (see `docker-compose.yml`):
   - `VISION_FRAME_INTERVAL` / `VISION_FRAME_JPEG_QUALITY` - sampling rate + encoding coming from `vision_agent`.
@@ -98,7 +99,7 @@ Controls:
 ## Perception Agent (YOLO + OCR)
 
 `perception_agent.py` builds `vision/observation` (consumed by `scene_agent` for `scene/state`). It uses `DETECTOR_BACKEND` + the `YOLO11_*` settings, not the `OBJECT_*` settings.
-This GPU-backed path is experimental; enable it via the `experimental` docker-compose profile if needed.
+This is the primary open-vocabulary perception path (YOLO-World + OCR) and is enabled by default in docker-compose.
 
 Relevant environment switches:
 - `DETECTOR_BACKEND` - `yolo11_torch`, `yolo11_trt`, `yolo_trt_engine`, or `yoloworld`.
