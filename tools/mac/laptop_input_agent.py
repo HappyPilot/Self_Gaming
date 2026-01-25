@@ -41,6 +41,7 @@ HTTP_ENABLED = os.environ.get("INPUT_HTTP_ENABLED", "1").strip().lower() not in 
 INPUT_BOUNDS_CFG = os.environ.get("INPUT_BOUNDS") or os.environ.get("GAME_BOUNDS") or ""
 INPUT_BOUNDS_MODE = INPUT_BOUNDS_CFG.strip().lower()
 INPUT_BOUNDS_DYNAMIC = INPUT_BOUNDS_MODE in ("window", "front_window", "auto")
+BOUNDS_LOCK_FRONT_APP = os.environ.get("INPUT_BOUNDS_LOCK_APP", "1").strip().lower() not in ("0", "false", "no", "")
 SCENE_TOPIC = os.environ.get("INPUT_SCENE_TOPIC") or os.environ.get("SCENE_TOPIC", "scene/state")
 REQUIRE_GAME = os.environ.get("INPUT_REQUIRE_GAME", "0").strip().lower() not in ("0", "false", "no", "")
 SCENE_STALE_SEC = float(os.environ.get("INPUT_SCENE_STALE_SEC", "2.0"))
@@ -329,6 +330,11 @@ def _maybe_update_bounds_from_front_window(name: str):
         return
     if FRONT_APP_REQUIRED and name and not _front_app_matches(name):
         return
+    if BOUNDS_LOCK_FRONT_APP:
+        if not name:
+            return
+        if last_front_app_allowed and not _front_app_matches(name):
+            return
     try:
         bounds = _get_front_window_bounds()
     except Exception as exc:
@@ -727,6 +733,9 @@ def _status_payload() -> dict:
         "front_app_ok_age_sec": round(now - front_ok_ts, 3) if front_ok_ts else None,
         "front_app_allowed": front_allowed,
         "front_app_allowed_age_sec": round(now - front_allowed_ts, 3) if front_allowed_ts else None,
+        "input_bounds": INPUT_BOUNDS,
+        "input_bounds_dynamic": INPUT_BOUNDS_DYNAMIC,
+        "input_bounds_lock_app": BOUNDS_LOCK_FRONT_APP,
         "topic": TOPIC,
         "control_topic": CONTROL_TOPIC or None,
         "scene_topic": SCENE_TOPIC or None,
