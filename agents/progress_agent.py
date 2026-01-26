@@ -440,6 +440,14 @@ def on_message(client, userdata, msg):
                 last_scene_targets = targets if isinstance(targets, list) else []
                 last_scene_ts = now
                 last_scene_emb_ts = payload.get("embeddings_ts", 0.0) or payload.get("embedding_ts", 0.0) or 0.0
+                labels = _extract_labels(objects)
+                with lock:
+                    state["objects"] = {
+                        "count": len(objects),
+                        "labels": labels[:8],
+                        "ts": payload.get("timestamp", now),
+                        "source": "scene",
+                    }
             if isinstance(embedding, list):
                 global last_embed_processed
                 if (now - last_embed_processed) >= UNDERSTANDING_EMBED_SAMPLE_SEC:
