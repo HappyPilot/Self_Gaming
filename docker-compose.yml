@@ -1272,6 +1272,29 @@ services:
     depends_on:
     - mq
     - object_detection
+  observation_logger:
+    container_name: observation_logger
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    profiles:
+    - logging
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /app/tools/snapshot_logger.py
+    volumes:
+    - ./agents:/app
+    - /mnt/ssd/logs:/mnt/ssd/logs
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - YOLO_LOG_TOPIC=vision/observation
+    - YOLO_LOG_DIR=/mnt/ssd/logs/yolo
+    - YOLO_LOG_FILE=vision_observation.log
+    depends_on:
+    - mq
   system_health:
     container_name: system_health_agent
     image: local/policy-agent:latest

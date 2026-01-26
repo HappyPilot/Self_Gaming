@@ -207,6 +207,15 @@ The calculator mirrors the curriculum in `poe_reward_system_v1.md`: stage-specif
 2. During early training epochs, the policy will follow the teacher's commands; as `teacher_alpha` decays, it transitions to autonomous behaviour.
 3. Rewards emitted on `train/reward` guide the trainer and are stored with each recorded sample.
 
+## Detection Logging
+
+Use `observation_logger` to capture raw detection payloads from `vision/observation` into `/mnt/ssd/logs/yolo/vision_observation.log`:
+
+```bash
+docker compose --profile logging up -d observation_logger
+docker compose stop observation_logger
+```
+
 ## Testing
 
 Unit tests cover the teacher prompt pipeline, the policy annealing logic, the object-detection helpers, and the reward calculator:
