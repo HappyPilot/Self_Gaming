@@ -1282,9 +1282,10 @@ services:
     working_dir: /app
     entrypoint:
     - python3
-    - /app/tools/snapshot_logger.py
+    - /repo/tools/snapshot_logger.py
     volumes:
     - ./agents:/app
+    - ./:/repo
     - /mnt/ssd/logs:/mnt/ssd/logs
     env_file: *id001
     environment:
