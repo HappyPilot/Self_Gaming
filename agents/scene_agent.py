@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 import paho.mqtt.client as mqtt
 
 from utils.latency import emit_latency, get_sla_ms
+from utils.frame_transport import get_frame_bytes
 
 logger = logging.getLogger("scene_agent")
 # --- Constants ---
@@ -24,6 +25,7 @@ VISION_MEAN_TOPIC = os.getenv("VISION_MEAN_TOPIC", "vision/mean")
 VISION_SNAPSHOT_TOPIC = os.getenv("VISION_SNAPSHOT_TOPIC", "vision/snapshot")
 VISION_EMBEDDINGS_TOPIC = os.getenv("VISION_EMBEDDINGS_TOPIC", "vision/embeddings")
 VISION_PROMPT_TOPIC = os.getenv("VISION_PROMPT_TOPIC", "")
+VISION_FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
 OBJECT_TOPIC = os.getenv("VISION_OBJECT_TOPIC", "vision/objects")
 OBSERVATION_TOPIC = os.getenv("VISION_OBSERVATION_TOPIC", "")
 SCENE_FLAGS_TOPIC = os.getenv("SCENE_FLAGS_TOPIC", "scene/flags")
@@ -41,6 +43,20 @@ PROMPT_TAG_MIN_SCORE = float(os.getenv("PROMPT_TAG_MIN_SCORE", "0.2"))
 PROMPT_TAG_TOP_K = int(os.getenv("PROMPT_TAG_TOP_K", "4"))
 PROMPT_TAG_PREFIX = os.getenv("PROMPT_TAG_PREFIX", "prompt_").strip() or "prompt_"
 PROMPT_TAG_ALLOW = {label.strip().lower() for label in os.getenv("PROMPT_TAG_ALLOW", "").split(",") if label.strip()}
+ENEMY_BAR_ENABLE = os.getenv("SCENE_ENEMY_BAR_ENABLE", "0") != "0"
+ENEMY_BAR_FRAME_TOPIC = os.getenv("SCENE_ENEMY_BAR_FRAME_TOPIC", VISION_FRAME_TOPIC)
+ENEMY_BAR_INTERVAL = float(os.getenv("SCENE_ENEMY_BAR_INTERVAL", "0.5"))
+ENEMY_BAR_MAX_AGE_SEC = float(os.getenv("SCENE_ENEMY_BAR_MAX_AGE_SEC", "1.5"))
+ENEMY_BAR_MIN_ASPECT = float(os.getenv("SCENE_ENEMY_BAR_MIN_ASPECT", "3.5"))
+ENEMY_BAR_MIN_WIDTH = float(os.getenv("SCENE_ENEMY_BAR_MIN_WIDTH", "0.04"))
+ENEMY_BAR_MAX_WIDTH = float(os.getenv("SCENE_ENEMY_BAR_MAX_WIDTH", "0.35"))
+ENEMY_BAR_MAX_HEIGHT = float(os.getenv("SCENE_ENEMY_BAR_MAX_HEIGHT", "0.03"))
+ENEMY_BAR_MIN_Y = float(os.getenv("SCENE_ENEMY_BAR_MIN_Y", "0.08"))
+ENEMY_BAR_MAX_Y = float(os.getenv("SCENE_ENEMY_BAR_MAX_Y", "0.85"))
+ENEMY_BAR_MIN_RED_RATIO = float(os.getenv("SCENE_ENEMY_BAR_MIN_RED_RATIO", "0.55"))
+ENEMY_BAR_MAX_BARS = int(os.getenv("SCENE_ENEMY_BAR_MAX_BARS", "5"))
+ENEMY_BAR_MAX_WIDTH_PX = int(os.getenv("SCENE_ENEMY_BAR_MAX_WIDTH_PX", "720"))
+ENEMY_BAR_DEBUG = os.getenv("SCENE_ENEMY_BAR_DEBUG", "0") != "0"
 OBJECT_PREFER_OBSERVATION = os.getenv("OBJECT_PREFER_OBSERVATION", "1") != "0"
 OBJECT_ALLOW_OBSERVATION_FALLBACK = os.getenv("OBJECT_ALLOW_OBSERVATION_FALLBACK", "1") != "0"
 OBJECT_FALLBACK_AFTER_SEC = float(os.getenv("OBJECT_FALLBACK_AFTER_SEC", "1.0"))
@@ -263,6 +279,7 @@ class SceneAgent:
             "objects": [], "objects_ts": 0.0, "text_zones": {}, "observation": {}, "observation_ts": 0.0,
             "objects_source": "", "embeddings": [], "embeddings_ts": 0.0, "flags": {}, "flags_ts": 0.0,
             "prompt_scores": {}, "prompt_ts": 0.0,
+            "enemy_bars": [], "enemy_bars_ts": 0.0,
         }
         self._last_embed_publish_ts = 0.0
         self._symbolic_candidate_since = 0.0
@@ -412,6 +429,101 @@ class SceneAgent:
                 break
         return tokens, {label: round(score, 4) for label, score in items}
 
+    def _decode_frame(self, payload: dict) -> Optional["np.ndarray"]:
+        if not payload or not isinstance(payload, dict):
+            return None
+        frame_bytes = get_frame_bytes(payload)
+        if not frame_bytes:
+            return None
+        try:
+            import cv2
+            import numpy as np
+        except Exception as exc:
+            if ENEMY_BAR_DEBUG:
+                logger.warning("Enemy bar detection disabled: cv2/numpy unavailable (%s)", exc)
+            return None
+        data = np.frombuffer(frame_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        return frame
+
+    def _detect_enemy_bars(self, frame: "np.ndarray") -> List[Dict[str, object]]:
+        try:
+            import cv2
+            import numpy as np
+        except Exception:
+            return []
+        if frame is None or not hasattr(frame, "shape"):
+            return []
+        height, width = frame.shape[:2]
+        if width <= 0 or height <= 0:
+            return []
+        scale = 1.0
+        if ENEMY_BAR_MAX_WIDTH_PX > 0 and width > ENEMY_BAR_MAX_WIDTH_PX:
+            scale = ENEMY_BAR_MAX_WIDTH_PX / float(width)
+            frame = cv2.resize(frame, (int(width * scale), int(height * scale)))
+            height, width = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower1 = np.array([0, 70, 70], dtype=np.uint8)
+        upper1 = np.array([10, 255, 255], dtype=np.uint8)
+        lower2 = np.array([170, 70, 70], dtype=np.uint8)
+        upper2 = np.array([180, 255, 255], dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower1, upper1)
+        mask |= cv2.inRange(hsv, lower2, upper2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=1)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        bars: List[Dict[str, object]] = []
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            if h <= 0 or w <= 0:
+                continue
+            aspect = w / float(h)
+            w_ratio = w / float(width)
+            h_ratio = h / float(height)
+            y_center = (y + h / 2.0) / float(height)
+            if aspect < ENEMY_BAR_MIN_ASPECT:
+                continue
+            if w_ratio < ENEMY_BAR_MIN_WIDTH or w_ratio > ENEMY_BAR_MAX_WIDTH:
+                continue
+            if h_ratio > ENEMY_BAR_MAX_HEIGHT:
+                continue
+            if y_center < ENEMY_BAR_MIN_Y or y_center > ENEMY_BAR_MAX_Y:
+                continue
+            roi = mask[y : y + h, x : x + w]
+            if roi.size == 0:
+                continue
+            red_ratio = float(cv2.countNonZero(roi)) / float(roi.size)
+            if red_ratio < ENEMY_BAR_MIN_RED_RATIO:
+                continue
+            x1 = max(0.0, min(1.0, x / float(width)))
+            y1 = max(0.0, min(1.0, y / float(height)))
+            x2 = max(0.0, min(1.0, (x + w) / float(width)))
+            y2 = max(0.0, min(1.0, (y + h) / float(height)))
+            bars.append(
+                {
+                    "label": "enemy_bar",
+                    "confidence": round(red_ratio, 3),
+                    "bbox": [round(x1, 4), round(y1, 4), round(x2, 4), round(y2, 4)],
+                    "center": [round((x1 + x2) / 2.0, 4), round((y1 + y2) / 2.0, 4)],
+                }
+            )
+        bars.sort(key=lambda b: b.get("confidence", 0.0), reverse=True)
+        return bars[: max(1, ENEMY_BAR_MAX_BARS)]
+
+    def _maybe_update_enemy_bars(self, payload: dict) -> None:
+        if not ENEMY_BAR_ENABLE:
+            return
+        now = time.time()
+        if ENEMY_BAR_INTERVAL > 0 and (now - self.state.get("enemy_bars_ts", 0.0)) < ENEMY_BAR_INTERVAL:
+            return
+        frame = self._decode_frame(payload)
+        if frame is None:
+            return
+        bars = self._detect_enemy_bars(frame)
+        if ENEMY_BAR_DEBUG and bars:
+            logger.info("Enemy bars detected: %s", bars)
+        self.state["enemy_bars"] = bars
+        self.state["enemy_bars_ts"] = now
+
     def _normalize_text(self, entry: str) -> str:
         return entry if isinstance(entry, str) else entry
 
@@ -545,6 +657,8 @@ class SceneAgent:
             if VISION_EMBEDDINGS_TOPIC: topics.append((VISION_EMBEDDINGS_TOPIC, 0))
             if VISION_PROMPT_TOPIC: topics.append((VISION_PROMPT_TOPIC, 0))
             if SCENE_FLAGS_TOPIC: topics.append((SCENE_FLAGS_TOPIC, 0))
+            if ENEMY_BAR_ENABLE and ENEMY_BAR_FRAME_TOPIC:
+                topics.append((ENEMY_BAR_FRAME_TOPIC, 0))
             client.subscribe(topics)
             client.publish(SCENE_TOPIC, json.dumps({"ok": True, "event": "scene_agent_ready"}))
         else:
@@ -584,6 +698,14 @@ class SceneAgent:
         if not player_entry and objects: player_entry = {"label": objects[0].get("label") or "player", "confidence": objects[0].get("confidence"), "bbox": self._normalize_bbox(objects[0].get("bbox") or objects[0].get("box"))}
         if not player_entry: player_entry = self.state.get("player_candidate") or {"label": "player_estimate", "confidence": 0.05, "bbox": [0.35, 0.35, 0.65, 0.85]}
         enemies = self._extract_enemies(objects, player_entry)
+        enemy_bars = []
+        if ENEMY_BAR_ENABLE:
+            bars_age = now - self.state.get("enemy_bars_ts", 0.0)
+            if bars_age <= ENEMY_BAR_MAX_AGE_SEC:
+                enemy_bars = list(self.state.get("enemy_bars") or [])
+        if enemy_bars:
+            for bar in enemy_bars:
+                enemies.append(bar)
         resources = self._extract_resources(text_zones) or self._extract_resources({"aggregate": {"text": "\n".join(text_payload)}})
         flags = dict(self.state.get("flags") or {})
         payload = {"ok": True, "event": "scene_update", "mean": self.state["mean"][-1], "trend": list(self.state["mean"]),
@@ -591,6 +713,8 @@ class SceneAgent:
                    "objects_source": self.state.get("objects_source", ""),
                    "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now,
                    "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0)}
+        if enemy_bars:
+            payload["enemy_bars"] = enemy_bars
         if text_zones is not raw_text_zones:
             payload["text_zones_raw"] = raw_text_zones
             payload["text_zones_agg"] = text_zones
@@ -649,6 +773,9 @@ class SceneAgent:
                 self.state["mean"].append(float(data["mean"]))
                 self.state["snapshot_ts"] = time.time()
         elif msg.topic == VISION_SNAPSHOT_TOPIC: self.state["snapshot_ts"] = time.time()
+        elif ENEMY_BAR_ENABLE and ENEMY_BAR_FRAME_TOPIC and msg.topic == ENEMY_BAR_FRAME_TOPIC:
+            if isinstance(data, dict):
+                self._maybe_update_enemy_bars(data)
         elif OBSERVATION_TOPIC and msg.topic == OBSERVATION_TOPIC:
             if isinstance(data, dict):
                 now = time.time()
