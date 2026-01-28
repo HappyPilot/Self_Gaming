@@ -857,7 +857,7 @@ class SceneAgent:
                     if should_use_obs:
                         self.state["objects"], self.state["objects_ts"] = data["yolo_objects"], now
                         self.state["objects_source"] = "observation"
-                if isinstance(data.get("text_zones"), dict):
+                if isinstance(data.get("text_zones"), dict) and data.get("text_zones"):
                     self.state["text_zones"] = data["text_zones"]
                     tokens = []
                     for zone in data["text_zones"].values():
