@@ -186,6 +186,12 @@ POLICY_EXTENDED_KEYS_ALLOW = {
     for item in os.getenv("POLICY_EXTENDED_KEYS_ALLOW", "q,w,e,r,1,2,3,4,5").split(",")
     if item.strip()
 }
+POLICY_FALLBACK_SKILL_KEYS = [
+    item.strip().lower()
+    for item in os.getenv("POLICY_FALLBACK_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",")
+    if item.strip()
+]
+POLICY_USE_UI_LAYOUT = os.getenv("POLICY_USE_UI_LAYOUT", "1") != "0"
 POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
 POLICY_DIALOG_SCORE_MIN = float(os.getenv("POLICY_DIALOG_SCORE_MIN", "0.01"))
 RESPAWN_TEXTS = _parse_env_list(
@@ -535,6 +541,8 @@ class PolicyAgent:
         self.last_reward_ts = 0.0
         self.exploration_queue: Deque[Dict[str, object]] = deque()
         self.exploration_cooldown_until = 0.0
+        self.play_area = None
+        self.hud_boxes: List[Dict[str, float]] = []
         self.exploration_key_cooldown_until = 0.0
         self.recent_action_labels: Deque[str] = deque(maxlen=POLICY_EXPLORATION_REPEAT_WINDOW)
         self.last_autoclick = None
@@ -853,6 +861,15 @@ class PolicyAgent:
                 if not isinstance(schema, dict):
                     schema = data if isinstance(data, dict) else None
                 if isinstance(schema, dict):
+                    if POLICY_USE_UI_LAYOUT:
+                        layout = schema.get("ui_layout") or {}
+                        if isinstance(layout, dict):
+                            play_area = layout.get("play_area")
+                            hud = layout.get("hud_candidates")
+                            if isinstance(play_area, dict):
+                                self.play_area = play_area
+                            if isinstance(hud, list):
+                                self.hud_boxes = [box for box in hud if isinstance(box, dict)]
                     profile = schema.get("profile")
                     allowed = profile.get("allowed_keys") if isinstance(profile, dict) else None
                     if isinstance(allowed, list):
@@ -1668,6 +1685,25 @@ class PolicyAgent:
         cy = max(0.0, min(1.0, (y1 + y2) / 2.0))
         return [cx, cy]
 
+    def _center_in_box(self, center: Tuple[float, float], box: Dict[str, float]) -> bool:
+        try:
+            x, y = float(center[0]), float(center[1])
+            bx = float(box.get("x", 0.0))
+            by = float(box.get("y", 0.0))
+            bw = float(box.get("w", 0.0))
+            bh = float(box.get("h", 0.0))
+        except (TypeError, ValueError):
+            return False
+        return bx <= x <= (bx + bw) and by <= y <= (by + bh)
+
+    def _center_in_hud(self, center: Tuple[float, float]) -> bool:
+        if not self.hud_boxes:
+            return False
+        for box in self.hud_boxes:
+            if self._center_in_box(center, box):
+                return True
+        return False
+
     def _pick_object_target(self, objects: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
         best_center = None
         best_label = None
@@ -1703,6 +1739,10 @@ class PolicyAgent:
                 continue
             cx = max(0.0, min(1.0, cx))
             cy = max(0.0, min(1.0, cy))
+            if POLICY_USE_UI_LAYOUT and self._center_in_hud((cx, cy)):
+                continue
+            if POLICY_USE_UI_LAYOUT and self.play_area and not self._center_in_box((cx, cy), self.play_area):
+                continue
             centers.append((cx, cy))
         if not centers:
             return None
@@ -1769,6 +1809,8 @@ class PolicyAgent:
             ordered = [k for k in self.profile_allowed_key_order if k in skill_set]
             if ordered:
                 candidates = ordered
+        if not candidates and POLICY_FALLBACK_SKILL_KEYS:
+            candidates = list(POLICY_FALLBACK_SKILL_KEYS)
         if not candidates:
             return None
         # epsilon-greedy based on observed hit rate
@@ -1805,6 +1847,10 @@ class PolicyAgent:
                 continue
             cx = max(0.0, min(1.0, cx))
             cy = max(0.0, min(1.0, cy))
+            if POLICY_USE_UI_LAYOUT and self._center_in_hud((cx, cy)):
+                continue
+            if POLICY_USE_UI_LAYOUT and self.play_area and not self._center_in_box((cx, cy), self.play_area):
+                continue
             dist = (cx - px) ** 2 + (cy - py) ** 2
             length_bonus = min(1.0, len(label) / 20.0) * 0.15
             score = (1.0 - dist) + length_bonus
