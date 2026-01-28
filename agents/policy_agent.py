@@ -174,6 +174,7 @@ POLICY_PREFER_TARGETS = os.getenv("POLICY_PREFER_TARGETS", "1") != "0"
 POLICY_RANDOM_FALLBACK = os.getenv("POLICY_RANDOM_FALLBACK", "1") != "0"
 POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
 POLICY_ENEMY_SKILL_SUBSTITUTE = os.getenv("POLICY_ENEMY_SKILL_SUBSTITUTE", "1") != "0"
+POLICY_ENEMY_SKILL_MIN_INTERVAL = float(os.getenv("POLICY_ENEMY_SKILL_MIN_INTERVAL", "0.4"))
 POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
 POLICY_DIALOG_SCORE_MIN = float(os.getenv("POLICY_DIALOG_SCORE_MIN", "0.01"))
 RESPAWN_TEXTS = _parse_env_list(
@@ -451,6 +452,7 @@ class PolicyAgent:
         self.client.on_disconnect = self._on_disconnect
 
         self.last_action_ts = 0.0
+        self.last_enemy_skill_ts = 0.0
         self.teacher_action: Optional[dict] = None
         self.latest_state: Optional[dict] = None
         self.current_task: Optional[dict] = None
@@ -1988,14 +1990,16 @@ class PolicyAgent:
                 return {"label": "wait"}
 
             if (
-                label == "click_primary"
-                and POLICY_ENEMY_SKILL_SUBSTITUTE
+                POLICY_ENEMY_SKILL_SUBSTITUTE
                 and self._enemies_present()
                 and not self._scene_dialog_present()
+                and label in {"click_primary", "mouse_move"}
+                and self._enemy_skill_ready()
             ):
                 skill_key = self._choose_skill_key()
                 if skill_key:
-                    logger.info("Enemy present -> substituting click_primary with key_press %s", skill_key)
+                    self.last_enemy_skill_ts = time.time()
+                    logger.info("Enemy present -> substituting %s with key_press %s", label, skill_key)
                     return {"label": "key_press", "key": skill_key, "source": "enemy_skill_substitute"}
 
             if label == "click_primary" and not self._click_ready():
@@ -2175,6 +2179,11 @@ class PolicyAgent:
             if key in self.profile_allowed_keys:
                 return key
         return None
+
+    def _enemy_skill_ready(self) -> bool:
+        if POLICY_ENEMY_SKILL_MIN_INTERVAL <= 0:
+            return True
+        return (time.time() - self.last_enemy_skill_ts) >= POLICY_ENEMY_SKILL_MIN_INTERVAL
 
     def _scene_dialog_present(self) -> bool:
         state = self.latest_state or {}
