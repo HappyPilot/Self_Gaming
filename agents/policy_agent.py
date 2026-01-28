@@ -175,6 +175,7 @@ POLICY_RANDOM_FALLBACK = os.getenv("POLICY_RANDOM_FALLBACK", "1") != "0"
 POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
 POLICY_ENEMY_SKILL_SUBSTITUTE = os.getenv("POLICY_ENEMY_SKILL_SUBSTITUTE", "1") != "0"
 POLICY_ENEMY_SKILL_MIN_INTERVAL = float(os.getenv("POLICY_ENEMY_SKILL_MIN_INTERVAL", "0.4"))
+POLICY_COMBAT_AIM = os.getenv("POLICY_COMBAT_AIM", "1") != "0"
 POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
 POLICY_DIALOG_SCORE_MIN = float(os.getenv("POLICY_DIALOG_SCORE_MIN", "0.01"))
 RESPAWN_TEXTS = _parse_env_list(
@@ -1666,6 +1667,28 @@ class PolicyAgent:
             return None
         return best_center, best_label
 
+    def _pick_enemy_target(self, enemies: List[dict]) -> Optional[List[float]]:
+        if not enemies:
+            return None
+        px, py = self.player_center if self.player_center else (0.5, 0.5)
+        best_center = None
+        best_dist = 1e9
+        for obj in enemies:
+            center = obj.get("center") or self._center_from_bbox(obj.get("bbox") or obj.get("box"))
+            if not center:
+                continue
+            try:
+                cx, cy = float(center[0]), float(center[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            cx = max(0.0, min(1.0, cx))
+            cy = max(0.0, min(1.0, cy))
+            dist = (cx - px) ** 2 + (cy - py) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best_center = [cx, cy]
+        return best_center
+
     def _pick_text_target(self, targets: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
         best_center = None
         best_label = None
@@ -2001,11 +2024,20 @@ class PolicyAgent:
                 )
                 return {"label": "wait"}
 
+            if POLICY_COMBAT_AIM and self._enemies_present() and not self._scene_dialog_present():
+                enemies = (self.latest_state or {}).get("enemies") or []
+                target_center = self._pick_enemy_target(enemies)
+                if target_center and not self._cursor_near_target(target_center[0], target_center[1]):
+                    move = self._teacher_target_move(target_center)
+                    if move:
+                        logger.info("Combat aim -> moving cursor toward enemy")
+                        return move
+
             if (
                 POLICY_ENEMY_SKILL_SUBSTITUTE
                 and self._enemies_present()
                 and not self._scene_dialog_present()
-                and label in {"click_primary", "mouse_move"}
+                and label in {"click_primary", "mouse_move", "wait"}
                 and self._enemy_skill_ready()
             ):
                 skill_key = self._choose_skill_key()
