@@ -180,6 +180,12 @@ POLICY_SKILL_EPS = float(os.getenv("POLICY_SKILL_EPS", "0.15"))
 POLICY_SKILL_FEEDBACK_SEC = float(os.getenv("POLICY_SKILL_FEEDBACK_SEC", "0.7"))
 POLICY_ENEMY_CLUSTER_MIN = int(os.getenv("POLICY_ENEMY_CLUSTER_MIN", "3"))
 POLICY_ENEMY_BAR_MIN_DELTA = float(os.getenv("POLICY_ENEMY_BAR_MIN_DELTA", "0.002"))
+POLICY_INCLUDE_EXTENDED_KEYS = os.getenv("POLICY_INCLUDE_EXTENDED_KEYS", "1") != "0"
+POLICY_EXTENDED_KEYS_ALLOW = {
+    item.strip().lower()
+    for item in os.getenv("POLICY_EXTENDED_KEYS_ALLOW", "q,w,e,r,1,2,3,4,5").split(",")
+    if item.strip()
+}
 POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
 POLICY_DIALOG_SCORE_MIN = float(os.getenv("POLICY_DIALOG_SCORE_MIN", "0.01"))
 RESPAWN_TEXTS = _parse_env_list(
@@ -883,7 +889,13 @@ class PolicyAgent:
 
     def _load_profile_allowed_keys_ordered(self, game_id: str) -> List[str]:
         profile = load_profile(str(game_id)) or load_profile("unknown_game") or safe_profile(str(game_id))
-        return [str(k).lower() for k in profile.get("allowed_keys", []) if k]
+        keys = [str(k).lower() for k in profile.get("allowed_keys", []) if k]
+        if POLICY_INCLUDE_EXTENDED_KEYS:
+            extended = [str(k).lower() for k in profile.get("allowed_keys_extended", []) if k]
+            if POLICY_EXTENDED_KEYS_ALLOW:
+                extended = [k for k in extended if k in POLICY_EXTENDED_KEYS_ALLOW]
+            keys = keys + extended
+        return keys
 
     def _merge_profile_key_order(self, keys: List[str], source: str) -> None:
         if not keys:
