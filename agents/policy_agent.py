@@ -176,6 +176,10 @@ POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
 POLICY_ENEMY_SKILL_SUBSTITUTE = os.getenv("POLICY_ENEMY_SKILL_SUBSTITUTE", "1") != "0"
 POLICY_ENEMY_SKILL_MIN_INTERVAL = float(os.getenv("POLICY_ENEMY_SKILL_MIN_INTERVAL", "0.4"))
 POLICY_COMBAT_AIM = os.getenv("POLICY_COMBAT_AIM", "1") != "0"
+POLICY_SKILL_EPS = float(os.getenv("POLICY_SKILL_EPS", "0.15"))
+POLICY_SKILL_FEEDBACK_SEC = float(os.getenv("POLICY_SKILL_FEEDBACK_SEC", "0.7"))
+POLICY_ENEMY_CLUSTER_MIN = int(os.getenv("POLICY_ENEMY_CLUSTER_MIN", "3"))
+POLICY_ENEMY_BAR_MIN_DELTA = float(os.getenv("POLICY_ENEMY_BAR_MIN_DELTA", "0.002"))
 POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
 POLICY_DIALOG_SCORE_MIN = float(os.getenv("POLICY_DIALOG_SCORE_MIN", "0.01"))
 RESPAWN_TEXTS = _parse_env_list(
@@ -454,6 +458,10 @@ class PolicyAgent:
 
         self.last_action_ts = 0.0
         self.last_enemy_skill_ts = 0.0
+        self.last_combat_key: Optional[str] = None
+        self.last_combat_score = None
+        self.last_combat_ts = 0.0
+        self.skill_stats: Dict[str, Dict[str, float]] = {}
         self.teacher_action: Optional[dict] = None
         self.latest_state: Optional[dict] = None
         self.current_task: Optional[dict] = None
@@ -775,6 +783,7 @@ class PolicyAgent:
                 self.latest_state = data
                 self._update_game_id_from_scene(data)
                 self._maybe_refresh_profile_keys(self.game_id, "control_profile")
+                self._update_skill_feedback(data)
                 tick_start = time.perf_counter()
                 policy_action = self._policy_from_observation(data)
                 if policy_action is None:
@@ -1671,8 +1680,7 @@ class PolicyAgent:
         if not enemies:
             return None
         px, py = self.player_center if self.player_center else (0.5, 0.5)
-        best_center = None
-        best_dist = 1e9
+        centers = []
         for obj in enemies:
             center = obj.get("center") or self._center_from_bbox(obj.get("bbox") or obj.get("box"))
             if not center:
@@ -1683,11 +1691,89 @@ class PolicyAgent:
                 continue
             cx = max(0.0, min(1.0, cx))
             cy = max(0.0, min(1.0, cy))
+            centers.append((cx, cy))
+        if not centers:
+            return None
+        if len(centers) >= max(2, POLICY_ENEMY_CLUSTER_MIN):
+            avg_x = sum(c[0] for c in centers) / len(centers)
+            avg_y = sum(c[1] for c in centers) / len(centers)
+            return [avg_x, avg_y]
+        best_center = None
+        best_dist = 1e9
+        for cx, cy in centers:
             dist = (cx - px) ** 2 + (cy - py) ** 2
             if dist < best_dist:
                 best_dist = dist
                 best_center = [cx, cy]
         return best_center
+
+    def _enemy_bar_score(self, state: dict) -> Optional[float]:
+        bars = state.get("enemy_bars")
+        if isinstance(bars, list) and bars:
+            score = 0.0
+            for bar in bars:
+                bbox = bar.get("bbox") or bar.get("box")
+                if not bbox or len(bbox) != 4:
+                    continue
+                try:
+                    score += max(0.0, float(bbox[2]) - float(bbox[0]))
+                except (TypeError, ValueError):
+                    continue
+            return score
+        enemies = state.get("enemies")
+        if isinstance(enemies, list) and enemies:
+            return float(len(enemies))
+        return None
+
+    def _update_skill_feedback(self, state: dict) -> None:
+        if not self.last_combat_key:
+            return
+        if (time.time() - self.last_combat_ts) < POLICY_SKILL_FEEDBACK_SEC:
+            return
+        score = self._enemy_bar_score(state)
+        if score is None or self.last_combat_score is None:
+            self.last_combat_key = None
+            return
+        delta = self.last_combat_score - score
+        if delta < POLICY_ENEMY_BAR_MIN_DELTA:
+            self.last_combat_key = None
+            return
+        stats = self.skill_stats.setdefault(self.last_combat_key, {"hits": 0.0, "tries": 0.0})
+        stats["hits"] += 1.0
+        stats["tries"] += 1.0
+        self.last_combat_key = None
+
+    def _record_skill_try(self, key: str, state: dict) -> None:
+        stats = self.skill_stats.setdefault(key, {"hits": 0.0, "tries": 0.0})
+        stats["tries"] += 1.0
+        self.last_combat_key = key
+        self.last_combat_ts = time.time()
+        self.last_combat_score = self._enemy_bar_score(state)
+
+    def _choose_skill_key(self) -> Optional[str]:
+        skill_set = set(POLICY_SKILL_KEYS)
+        candidates = [k for k in POLICY_SKILL_KEYS if (not self.profile_allowed_keys or k in self.profile_allowed_keys)]
+        if self.profile_allowed_key_order:
+            ordered = [k for k in self.profile_allowed_key_order if k in skill_set]
+            if ordered:
+                candidates = ordered
+        if not candidates:
+            return None
+        # epsilon-greedy based on observed hit rate
+        if self.rng.random() < max(0.0, min(1.0, POLICY_SKILL_EPS)):
+            return self.rng.choice(candidates)
+        best_key = None
+        best_score = -1.0
+        for key in candidates:
+            stats = self.skill_stats.get(key)
+            if not stats or stats.get("tries", 0.0) <= 0:
+                score = 0.0
+            else:
+                score = stats.get("hits", 0.0) / max(1.0, stats.get("tries", 1.0))
+            if score > best_score:
+                best_score = score
+                best_key = key
+        return best_key or candidates[0]
 
     def _pick_text_target(self, targets: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
         best_center = None
@@ -2043,6 +2129,7 @@ class PolicyAgent:
                 skill_key = self._choose_skill_key()
                 if skill_key:
                     self.last_enemy_skill_ts = time.time()
+                    self._record_skill_try(skill_key, self.latest_state or {})
                     logger.info("Enemy present -> substituting %s with key_press %s", label, skill_key)
                     return {"label": "key_press", "key": skill_key, "source": "enemy_skill_substitute"}
 
@@ -2212,17 +2299,6 @@ class PolicyAgent:
             return float(stats.get("enemy_count", 0) or 0) > 0
         except (TypeError, ValueError):
             return False
-
-    def _choose_skill_key(self) -> Optional[str]:
-        skill_set = set(POLICY_SKILL_KEYS)
-        if self.profile_allowed_key_order:
-            for key in self.profile_allowed_key_order:
-                if key in skill_set:
-                    return key
-        for key in POLICY_SKILL_KEYS:
-            if key in self.profile_allowed_keys:
-                return key
-        return None
 
     def _enemy_skill_ready(self) -> bool:
         if POLICY_ENEMY_SKILL_MIN_INTERVAL <= 0:
