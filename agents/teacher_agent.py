@@ -625,6 +625,9 @@ class TeacherAgent:
         enemies = scene.get("enemies") or []
         if isinstance(enemies, list) and enemies:
             parts.append(f"Enemies detected: {len(enemies)}")
+        targets_summary = self._format_targets_summary(scene)
+        if targets_summary:
+            parts.append(f"Targets: {targets_summary}")
         if rules:
             rules_text = "\n".join(f"- {rule.get('text')}" for rule in rules)
             parts.append(f"Rules:\n{rules_text}")
@@ -660,6 +663,29 @@ class TeacherAgent:
         if mouse_mode:
             controls.append(f"mouse_mode={mouse_mode}")
         return "; ".join(controls)
+
+    def _format_targets_summary(self, scene: dict) -> str:
+        targets = scene.get("targets") or []
+        if not isinstance(targets, list) or not targets:
+            return ""
+
+        def bucket(center):
+            try:
+                x, y = float(center[0]), float(center[1])
+            except (TypeError, ValueError, IndexError):
+                return "unknown"
+            horiz = "left" if x < 0.33 else "right" if x > 0.66 else "center"
+            vert = "top" if y < 0.33 else "bottom" if y > 0.66 else "middle"
+            return f"{vert}-{horiz}"
+
+        items = []
+        for t in targets[:6]:
+            label = str(t.get("label") or "").strip()
+            center = t.get("center")
+            if not label or not center:
+                continue
+            items.append(f"{label} @ {bucket(center)}")
+        return ", ".join(items)
 
     def _maybe_refresh_context(self, client, llm: BaseChatClient, scene: dict, scope: str) -> Optional[dict]:
         if not hasattr(llm, "describe_environment"):

@@ -1669,15 +1669,27 @@ class PolicyAgent:
     def _pick_text_target(self, targets: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
         best_center = None
         best_label = None
-        best_len = 0
+        best_score = -1.0
+        px, py = self.player_center if self.player_center else (0.5, 0.5)
         for target in targets:
             label = str(target.get("label") or "").strip()
             center = target.get("center") or self._center_from_bbox(target.get("bbox"))
             if not label or not center:
                 continue
-            if len(label) > best_len:
-                best_len = len(label)
-                best_center = center
+            if self._text_hits_forbidden(label):
+                continue
+            try:
+                cx, cy = float(center[0]), float(center[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            cx = max(0.0, min(1.0, cx))
+            cy = max(0.0, min(1.0, cy))
+            dist = (cx - px) ** 2 + (cy - py) ** 2
+            length_bonus = min(1.0, len(label) / 20.0) * 0.15
+            score = (1.0 - dist) + length_bonus
+            if score > best_score:
+                best_score = score
+                best_center = [cx, cy]
                 best_label = label
         if not best_center:
             return None
