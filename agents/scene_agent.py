@@ -140,6 +140,39 @@ def _normalize_target_text(text: str) -> str:
     return " ".join(normalized.split())
 
 
+def _bbox_xywh_to_xyxy(bbox: list) -> Optional[list]:
+    if not bbox or len(bbox) != 4:
+        return None
+    try:
+        x, y, w, h = (float(b) for b in bbox)
+    except (TypeError, ValueError):
+        return None
+    return [x, y, x + w, y + h]
+
+
+def _looks_like_xywh(bbox: list) -> bool:
+    if not bbox or len(bbox) != 4:
+        return False
+    try:
+        x, y, w, h = (float(b) for b in bbox)
+    except (TypeError, ValueError):
+        return False
+    if w < 0 or h < 0:
+        return False
+    if w > x and h > y:
+        return False
+    return (x + w) <= 1.05 and (y + h) <= 1.05
+
+
+def _normalize_ocr_bbox(box: list, fmt: Optional[str]) -> Optional[list]:
+    if not box or len(box) != 4:
+        return None
+    fmt = (fmt or "").lower().strip()
+    if fmt == "xywh" or (not fmt and _looks_like_xywh(box)):
+        return _bbox_xywh_to_xyxy(box)
+    return box
+
+
 def _candidate_chunks(cleaned: str) -> List[str]:
     if not cleaned:
         return []
@@ -868,9 +901,13 @@ class SceneAgent:
                     for i, res in enumerate(results):
                         # Use text_index as key or text prefix
                         key = f"ocr_{i}_{res.get('text', '')[:10]}"
+                        bbox = res.get("box")
+                        fmt = res.get("box_format") or res.get("bbox_format") or res.get("format")
+                        if bbox:
+                            bbox = _normalize_ocr_bbox(bbox, fmt)
                         new_zones[key] = {
                             "text": res.get("text"),
-                            "bbox": res.get("box"),
+                            "bbox": bbox,
                             "confidence": res.get("conf", 1.0)
                         }
                     self.state["text_zones"] = new_zones
@@ -896,6 +933,7 @@ class SceneAgent:
                     texts.append(text)
                     box = item.get("box")
                     if isinstance(box, (list, tuple)) and len(box) == 4:
+                        box = _normalize_ocr_bbox(list(box), "xywh")
                         key = f"simple_{idx}_{text[:10]}"
                         zones[key] = {"text": text, "bbox": box, "confidence": item.get("conf")}
                 if texts:

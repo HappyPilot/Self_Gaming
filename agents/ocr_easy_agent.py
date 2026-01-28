@@ -329,6 +329,7 @@ class OcrEasyAgent:
                     results.append({
                         "text": text,
                         "box": [x_min/w, y_min/h, (x_max-x_min)/w, (y_max-y_min)/h],
+                        "box_format": "xywh",
                         "conf": float(conf)
                     })
 
@@ -349,6 +350,7 @@ class OcrEasyAgent:
                 results.append({
                     "text": text,
                     "box": [x_min/w, y_min/h, (x_max-x_min)/w, (y_max-y_min)/h],
+                    "box_format": "xywh",
                     "conf": float(conf)
                 })
         return results
