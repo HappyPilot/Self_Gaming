@@ -435,6 +435,14 @@ class SceneAgent:
         frame_bytes = get_frame_bytes(payload)
         if not frame_bytes:
             return None
+        if isinstance(frame_bytes, memoryview):
+            frame_bytes = frame_bytes.tobytes()
+        elif isinstance(frame_bytes, bytearray):
+            frame_bytes = bytes(frame_bytes)
+        if not isinstance(frame_bytes, (bytes, bytearray)):
+            if ENEMY_BAR_DEBUG:
+                logger.warning("Enemy bar decode skipped: unsupported frame_bytes type=%s", type(frame_bytes))
+            return None
         try:
             import cv2
             import numpy as np
@@ -452,7 +460,12 @@ class SceneAgent:
             return frame
         except Exception as exc:
             if ENEMY_BAR_DEBUG:
-                logger.warning("Enemy bar decode failed: %s", exc)
+                logger.warning(
+                    "Enemy bar decode failed: %s (type=%s len=%s)",
+                    exc,
+                    type(frame_bytes),
+                    len(frame_bytes) if hasattr(frame_bytes, "__len__") else "na",
+                )
             return None
 
     def _detect_enemy_bars(self, frame: "np.ndarray") -> List[Dict[str, object]]:
