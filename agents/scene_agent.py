@@ -442,9 +442,18 @@ class SceneAgent:
             if ENEMY_BAR_DEBUG:
                 logger.warning("Enemy bar detection disabled: cv2/numpy unavailable (%s)", exc)
             return None
-        data = np.frombuffer(frame_bytes, dtype=np.uint8)
-        frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
-        return frame
+        try:
+            if len(frame_bytes) < 16:
+                return None
+            data = np.frombuffer(frame_bytes, dtype=np.uint8)
+            if data.size == 0:
+                return None
+            frame = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            return frame
+        except Exception as exc:
+            if ENEMY_BAR_DEBUG:
+                logger.warning("Enemy bar decode failed: %s", exc)
+            return None
 
     def _detect_enemy_bars(self, frame: "np.ndarray") -> List[Dict[str, object]]:
         try:
@@ -515,14 +524,18 @@ class SceneAgent:
         now = time.time()
         if ENEMY_BAR_INTERVAL > 0 and (now - self.state.get("enemy_bars_ts", 0.0)) < ENEMY_BAR_INTERVAL:
             return
-        frame = self._decode_frame(payload)
-        if frame is None:
-            return
-        bars = self._detect_enemy_bars(frame)
-        if ENEMY_BAR_DEBUG and bars:
-            logger.info("Enemy bars detected: %s", bars)
-        self.state["enemy_bars"] = bars
-        self.state["enemy_bars_ts"] = now
+        try:
+            frame = self._decode_frame(payload)
+            if frame is None:
+                return
+            bars = self._detect_enemy_bars(frame)
+            if ENEMY_BAR_DEBUG and bars:
+                logger.info("Enemy bars detected: %s", bars)
+            self.state["enemy_bars"] = bars
+            self.state["enemy_bars_ts"] = now
+        except Exception as exc:
+            if ENEMY_BAR_DEBUG:
+                logger.warning("Enemy bar update failed: %s", exc)
 
     def _normalize_text(self, entry: str) -> str:
         return entry if isinstance(entry, str) else entry
