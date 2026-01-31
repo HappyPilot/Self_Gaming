@@ -82,6 +82,10 @@ DEATH_SYMBOL_MEAN_THRESHOLD = float(os.getenv("SCENE_DEATH_SYMBOL_MEAN_THRESHOLD
 DEATH_OBJECT_THRESHOLD = int(os.getenv("SCENE_DEATH_OBJECT_THRESHOLD", "2"))
 PLAYER_LABELS = {label.strip().lower() for label in os.getenv("SCENE_PLAYER_LABELS", "player,person,hero,character,avenger").split(",") if label.strip()}
 ENEMY_KEYWORDS = {label.strip().lower() for label in os.getenv("SCENE_ENEMY_KEYWORDS", "enemy,boss,monster,bandit,warrior,archer,necromancer").split(",") if label.strip()}
+ENEMY_LABEL_LEARN_ENABLED = os.getenv("SCENE_ENEMY_LABEL_LEARN", "1") != "0"
+ENEMY_LABEL_LEARN_MIN_IOU = float(os.getenv("SCENE_ENEMY_LABEL_LEARN_MIN_IOU", "0.15"))
+ENEMY_LABEL_LEARN_MIN_HITS = int(os.getenv("SCENE_ENEMY_LABEL_LEARN_MIN_HITS", "3"))
+ENEMY_LABEL_LEARN_MAX = int(os.getenv("SCENE_ENEMY_LABEL_LEARN_MAX", "20"))
 RESOURCE_KEYWORDS = {"life": ["life", "hp", "health"], "mana": ["mana", "mp"]}
 ALLOW_GENERIC_PLAYER = os.getenv("SCENE_GENERIC_PLAYER", "1") != "0"
 ALLOW_GENERIC_ENEMIES = os.getenv("SCENE_GENERIC_ENEMIES", "1") != "0"
@@ -112,6 +116,59 @@ def _load_class_names(paths: List[str]) -> List[str]:
 
 
 CLASS_NAMES = _load_class_names([SCENE_CLASS_PATH, YOLO_CLASS_PATH])
+
+def _bbox_iou(a, b) -> float:
+    try:
+        ax1, ay1, ax2, ay2 = [float(v) for v in a]
+        bx1, by1, bx2, by2 = [float(v) for v in b]
+    except (TypeError, ValueError):
+        return 0.0
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area <= 0.0:
+        return 0.0
+    area_a = max(0.0, (ax2 - ax1)) * max(0.0, (ay2 - ay1))
+    area_b = max(0.0, (bx2 - bx1)) * max(0.0, (by2 - by1))
+    denom = area_a + area_b - inter_area
+    if denom <= 0.0:
+        return 0.0
+    return inter_area / denom
+
+
+def _update_dynamic_enemy_labels(
+    labels: set,
+    counts: Dict[str, int],
+    objects: List[dict],
+    enemy_bars: List[dict],
+    *,
+    min_iou: float = ENEMY_LABEL_LEARN_MIN_IOU,
+    min_hits: int = ENEMY_LABEL_LEARN_MIN_HITS,
+    max_labels: int = ENEMY_LABEL_LEARN_MAX,
+):
+    if not enemy_bars or not objects:
+        return labels, counts
+    for obj in objects:
+        label = str(obj.get("label") or "").lower()
+        if not label:
+            continue
+        bbox = obj.get("bbox") or obj.get("box")
+        if not bbox:
+            continue
+        for bar in enemy_bars:
+            bar_bbox = bar.get("bbox") or bar.get("box")
+            if not bar_bbox:
+                continue
+            if _bbox_iou(bbox, bar_bbox) >= min_iou:
+                counts[label] = counts.get(label, 0) + 1
+                if counts[label] >= min_hits and len(labels) < max_labels:
+                    labels.add(label)
+                break
+    return labels, counts
 
 
 def _target_text_valid(text: str, zone: dict) -> bool:
@@ -319,6 +376,8 @@ class SceneAgent:
         self._ocr_token_history = deque(maxlen=OCR_TARGET_STABLE_FRAMES)
         self._ocr_token_consecutive: Dict[str, int] = {}
         self._ocr_zone_history = deque(maxlen=OCR_AGG_WINDOW)
+        self.dynamic_enemy_labels: set = set()
+        self.dynamic_enemy_counts: Dict[str, int] = {}
 
     def _symbolic_text_only(self, entries):
         lines = 0
@@ -654,6 +713,7 @@ class SceneAgent:
 
     def _extract_enemies(self, objects, player_entry=None):
         matches = []
+        enemy_keywords = ENEMY_KEYWORDS | self.dynamic_enemy_labels
         player_center = None
         if isinstance(player_entry, dict) and player_entry.get("bbox"):
             try:
@@ -665,7 +725,7 @@ class SceneAgent:
             bbox = obj.get("bbox") or obj.get("box")
             if not bbox: continue
             label = str(obj.get("label") or "").lower()
-            if not ENEMY_KEYWORDS or any(keyword in label for keyword in ENEMY_KEYWORDS):
+            if not enemy_keywords or any(keyword in label for keyword in enemy_keywords):
                 matches.append({"label": obj.get("label"), "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)})
                 continue
             if ALLOW_GENERIC_ENEMIES and label in GENERIC_ENEMY_LABELS:
@@ -756,12 +816,19 @@ class SceneAgent:
         if not player_entry: player_entry = self._extract_player(objects)
         if not player_entry and objects: player_entry = {"label": objects[0].get("label") or "player", "confidence": objects[0].get("confidence"), "bbox": self._normalize_bbox(objects[0].get("bbox") or objects[0].get("box"))}
         if not player_entry: player_entry = self.state.get("player_candidate") or {"label": "player_estimate", "confidence": 0.05, "bbox": [0.35, 0.35, 0.65, 0.85]}
-        enemies = self._extract_enemies(objects, player_entry)
         enemy_bars = []
         if ENEMY_BAR_ENABLE:
             bars_age = now - self.state.get("enemy_bars_ts", 0.0)
             if bars_age <= ENEMY_BAR_MAX_AGE_SEC:
                 enemy_bars = list(self.state.get("enemy_bars") or [])
+        if ENEMY_LABEL_LEARN_ENABLED and enemy_bars:
+            self.dynamic_enemy_labels, self.dynamic_enemy_counts = _update_dynamic_enemy_labels(
+                self.dynamic_enemy_labels,
+                self.dynamic_enemy_counts,
+                objects,
+                enemy_bars,
+            )
+        enemies = self._extract_enemies(objects, player_entry)
         if enemy_bars:
             for bar in enemy_bars:
                 enemies.append(bar)
