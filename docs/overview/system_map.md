@@ -12,9 +12,10 @@ llama.cpp on the Mac for LLM calls.
 3. ui_region_agent -> ocr/regions (stable UI text ROIs)
 4. simple_ocr_agent -> simple_ocr/text (ROI OCR)
 5. scene_agent -> scene/state (objects + OCR + enemy bars + prompts)
-6. teacher_agent -> teacher/action (LLM guidance)
-7. policy_agent -> act/cmd (action selection)
-8. act_agent -> input bridge (mouse/keyboard)
+6. skill_profiler_agent -> skill_profiler/result (tooltip -> skill type)
+7. teacher_agent -> teacher/action (LLM guidance)
+8. policy_agent -> act/cmd (action selection)
+9. act_agent -> input bridge (mouse/keyboard)
 
 ## Key agents and roles
 - vision_agent: captures frames from V4L2 or HTTP source
@@ -23,6 +24,7 @@ llama.cpp on the Mac for LLM calls.
 - ui_region_agent: clusters OCR boxes into stable UI regions
 - simple_ocr_agent: fast OCR on stable regions
 - scene_agent: fuses objects, OCR, enemy bars, embeddings -> scene/state
+- skill_profiler_agent: classifies skill tooltips (AOE/single/mobility/defense)
 - embedding_guard: in_game detection and pause logic
 - teacher_agent: LLM guidance (game-aware suggestions)
 - policy_agent: selects actions and enforces safety rules
@@ -34,6 +36,7 @@ llama.cpp on the Mac for LLM calls.
 - vision/frame/preview, vision/frame/full, vision/mean
 - ocr_easy/text, ocr/regions, simple_ocr/text
 - scene/state, scene/flags
+- skill_profiler/cmd, skill_profiler/result
 - teacher/action, act/cmd, act/result
 - game/schema, game/identity
 - progress/status, progress/understanding
@@ -49,9 +52,10 @@ llama.cpp on the Mac for LLM calls.
 - game_onboarding_agent publishes game/schema containing:
   - ui_layout (play_area + HUD candidates)
   - controls (probed inputs)
-  - profile (per-game control profile)
+  - profile (per-game control profile with bindings + gameplay keys)
   - signals (danger/progress tokens)
 - policy_agent and act_agent use game/schema to restrict actions
+- scene_agent learns additional enemy labels via overlap with enemy bars
 
 ## LLM usage
 - llama.cpp runs on the Mac, accessed via LLM_ENDPOINT
@@ -60,7 +64,7 @@ llama.cpp on the Mac for LLM calls.
 
 ## Safety posture
 - policy_agent uses UI layout to avoid HUD clicks
-- act_agent enforces allowed_keys from the control profile
+- act_agent enforces allowed_keys (gameplay keys) from the control profile
 - forbidden text and forbidden keys suppress risky actions
 
 ## Key docs
