@@ -743,6 +743,27 @@ services:
     - mq
     - scene
     - act
+  skill_profiler:
+    container_name: skill_profiler_agent
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+    - ./agents:/app
+    env_file: *id001
+    entrypoint:
+    - python3
+    - /app/skill_profiler_agent.py
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - SKILL_PROFILE_CMD_TOPIC=skill_profiler/cmd
+    - SKILL_PROFILE_RESULT_TOPIC=skill_profiler/result
+    - MEM_STORE_TOPIC=mem/store
+    - GAME_SCHEMA_TOPIC=game/schema
+    depends_on:
+    - mq
   reward_manager:
     container_name: reward_manager
     image: local/policy-agent:latest
