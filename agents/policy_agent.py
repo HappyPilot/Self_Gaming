@@ -1344,6 +1344,8 @@ class PolicyAgent:
             mean_val = self._normalize_mean(state.get("mean", state.get("mean_brightness")))
             if mean_val is None:
                 return False, "no_game_keywords"
+            if mean_val >= POLICY_SCENE_BRIGHT_THRESHOLD:
+                return False, "bright_scene_no_keywords"
             return True, None
         if self.desktop_keywords and self._text_list_matches(texts, self.desktop_keywords):
             self.forbidden_until = now + max(DESKTOP_PAUSE_SEC, POLICY_FORBIDDEN_COOLDOWN)
@@ -2138,10 +2140,10 @@ class PolicyAgent:
             if label.startswith("click") and self._scene_is_forbidden():
                 self.forbidden_until = max(self.forbidden_until, time.time() + max(0.0, POLICY_FORBIDDEN_COOLDOWN))
                 logger.warning(
-                    "Policy suppressed %s due to forbidden UI; substituting wait",
+                    "Policy suppressed %s due to forbidden UI; substituting move",
                     label,
                 )
-                return {"label": "wait"}
+                return self._fallback_move()
 
             if POLICY_COMBAT_AIM and self._enemies_present() and not self._scene_dialog_present():
                 enemies = (self.latest_state or {}).get("enemies") or []
