@@ -2,6 +2,7 @@
 """Teacher agent that queries an LLM for high-level guidance."""
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import os
@@ -73,6 +74,9 @@ TEACHER_ACTION_JSON = os.getenv("TEACHER_ACTION_JSON", "1") != "0"
 TEACHER_DIALOG_SCORE_MIN = float(os.getenv("TEACHER_DIALOG_SCORE_MIN", "0.01"))
 TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
 TEACHER_RESPAWN_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_RESPAWN_KEYWORDS", "resurrect,resurrect at checkpoint,respawn,revive").split(",") if item.strip()}
+TEACHER_RESPAWN_FUZZY_THRESHOLD = float(os.getenv("TEACHER_RESPAWN_FUZZY_THRESHOLD", "0.65"))
+TEACHER_RESPAWN_SKELETON_THRESHOLD = float(os.getenv("TEACHER_RESPAWN_SKELETON_THRESHOLD", "0.72"))
+TEACHER_RESPAWN_SKELETON_MIN_LEN = int(os.getenv("TEACHER_RESPAWN_SKELETON_MIN_LEN", "6"))
 TEACHER_DEATH_SCOPES = {item.strip().lower() for item in os.getenv("TEACHER_DEATH_SCOPES", "death_dialog,critical_dialog:death").split(",") if item.strip()}
 TEACHER_WATCHDOG_KEY, TEACHER_WATCHDOG_COOLDOWN = os.getenv("TEACHER_WATCHDOG_KEY", "teacher_watchdog"), float(os.getenv("TEACHER_WATCHDOG_COOLDOWN_SEC", "90"))
 TEACHER_WATCH_RESPAWN_TERMS = {item.strip().lower() for item in os.getenv("TEACHER_WATCH_RESPAWN_TERMS", "resurrect at checkpoint,resurrect,respawn").split(",") if item.strip()}
@@ -117,6 +121,22 @@ def _normalize_game_id(value: str) -> str:
 def _normalize_keyword_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(text).lower()).strip()
 
+
+def _normalize_skeleton(text: str) -> str:
+    """Normalize OCR output by comparing consonant skeletons."""
+    cleaned = re.sub(r"[^a-z0-9]+", "", str(text).lower())
+    if not cleaned:
+        return ""
+    vowels = set("aeiouy")
+    skeleton = [ch for ch in cleaned if ch not in vowels]
+    if not skeleton:
+        return ""
+    deduped = [skeleton[0]]
+    for ch in skeleton[1:]:
+        if ch != deduped[-1]:
+            deduped.append(ch)
+    return "".join(deduped)
+
 def _scene_has_respawn_text(scene: dict) -> bool:
     if not scene:
         return False
@@ -144,8 +164,27 @@ def _scene_has_respawn_text(scene: dict) -> bool:
         if not cleaned:
             continue
         for keyword in TEACHER_RESPAWN_KEYWORDS:
-            if keyword and keyword in cleaned:
+            if not keyword:
+                continue
+            if keyword in cleaned:
                 return True
+            ratio = difflib.SequenceMatcher(None, keyword, cleaned).ratio()
+            if ratio >= TEACHER_RESPAWN_FUZZY_THRESHOLD:
+                return True
+            if TEACHER_RESPAWN_SKELETON_THRESHOLD > 0:
+                keyword_skeleton = _normalize_skeleton(keyword)
+                cleaned_skeleton = _normalize_skeleton(cleaned)
+                if (
+                    len(keyword_skeleton) >= TEACHER_RESPAWN_SKELETON_MIN_LEN
+                    and len(cleaned_skeleton) >= TEACHER_RESPAWN_SKELETON_MIN_LEN
+                ):
+                    skeleton_ratio = difflib.SequenceMatcher(
+                        None,
+                        keyword_skeleton,
+                        cleaned_skeleton,
+                    ).ratio()
+                    if skeleton_ratio >= TEACHER_RESPAWN_SKELETON_THRESHOLD:
+                        return True
     return False
 
 def _scene_has_dialog_hint(scene: dict) -> bool:
@@ -586,6 +625,9 @@ class TeacherAgent:
         enemies = scene.get("enemies") or []
         if isinstance(enemies, list) and enemies:
             parts.append(f"Enemies detected: {len(enemies)}")
+        targets_summary = self._format_targets_summary(scene)
+        if targets_summary:
+            parts.append(f"Targets: {targets_summary}")
         if rules:
             rules_text = "\n".join(f"- {rule.get('text')}" for rule in rules)
             parts.append(f"Rules:\n{rules_text}")
@@ -621,6 +663,29 @@ class TeacherAgent:
         if mouse_mode:
             controls.append(f"mouse_mode={mouse_mode}")
         return "; ".join(controls)
+
+    def _format_targets_summary(self, scene: dict) -> str:
+        targets = scene.get("targets") or []
+        if not isinstance(targets, list) or not targets:
+            return ""
+
+        def bucket(center):
+            try:
+                x, y = float(center[0]), float(center[1])
+            except (TypeError, ValueError, IndexError):
+                return "unknown"
+            horiz = "left" if x < 0.33 else "right" if x > 0.66 else "center"
+            vert = "top" if y < 0.33 else "bottom" if y > 0.66 else "middle"
+            return f"{vert}-{horiz}"
+
+        items = []
+        for t in targets[:6]:
+            label = str(t.get("label") or "").strip()
+            center = t.get("center")
+            if not label or not center:
+                continue
+            items.append(f"{label} @ {bucket(center)}")
+        return ", ".join(items)
 
     def _maybe_refresh_context(self, client, llm: BaseChatClient, scene: dict, scope: str) -> Optional[dict]:
         if not hasattr(llm, "describe_environment"):

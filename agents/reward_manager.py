@@ -26,6 +26,7 @@ SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 ACT_RESULT_TOPIC = os.getenv("ACT_RESULT_TOPIC", "act/result")
 REWARD_TOPIC = os.getenv("REWARD_TOPIC", "train/reward")
 PRED_ERROR_TOPIC = os.getenv("PRED_ERROR_TOPIC", "world_model/pred_error")
+PROGRESS_TOPIC = os.getenv("PROGRESS_TOPIC", "progress/status")
 LEARNING_STAGE = int(os.getenv("LEARNING_STAGE", "1"))
 DEFAULT_STAGE = os.getenv("POE_STAGE", "S1")
 POE_STAGE = "S0" if LEARNING_STAGE == 0 else DEFAULT_STAGE
@@ -34,6 +35,15 @@ DEATH_STATE_PENALTY = float(os.getenv("DEATH_STATE_PENALTY", "0.05"))
 DEATH_RECOVERY_BONUS = float(os.getenv("DEATH_RECOVERY_BONUS", "0.4"))
 DEATH_SCOPE = os.getenv("REWARD_DEATH_SCOPE", "critical_dialog:death")
 CURIOSITY_WEIGHT = float(os.getenv("CURIOSITY_WEIGHT", "0.1"))
+CURIOSITY_MODE = os.getenv("CURIOSITY_MODE", "auto").strip().lower()
+CURIOSITY_PRED_TIMEOUT = float(os.getenv("CURIOSITY_PRED_TIMEOUT_SEC", "30"))
+CURIOSITY_EMBED_WEIGHT = float(os.getenv("CURIOSITY_EMBED_WEIGHT", "0.08"))
+CURIOSITY_EMBED_SCALE = float(os.getenv("CURIOSITY_EMBED_SCALE", "1.0"))
+CURIOSITY_EMBED_MAX = float(os.getenv("CURIOSITY_EMBED_MAX", "0.15"))
+CURIOSITY_LOCATION_WEIGHT = float(os.getenv("CURIOSITY_LOCATION_WEIGHT", "0.12"))
+CURIOSITY_OBJECT_WEIGHT = float(os.getenv("CURIOSITY_OBJECT_WEIGHT", "0.08"))
+CURIOSITY_OCR_WEIGHT = float(os.getenv("CURIOSITY_OCR_WEIGHT", "0.05"))
+CURIOSITY_PROGRESS_MAX = float(os.getenv("CURIOSITY_PROGRESS_MAX", "0.2"))
 
 # ... (rest of constants and imports unchanged) ...
 
@@ -212,6 +222,12 @@ class RewardManager:
         self.calculator = RewardCalculator(stage=POE_STAGE)
         self.latest_scene: Optional[dict] = None
         self.last_pred_error = 0.0
+        self.last_pred_ts = 0.0
+        self.last_embed_delta = None
+        self.last_embed_ts = 0.0
+        self.last_location_new_rate = None
+        self.last_object_new_rate = None
+        self.last_ocr_new_rate = None
         self.death_active = False
         self.death_entered = 0.0
 
@@ -227,6 +243,8 @@ class RewardManager:
             client.subscribe([(SCENE_TOPIC, 0), (ACT_RESULT_TOPIC, 0)])
             if PRED_ERROR_TOPIC:
                 client.subscribe([(PRED_ERROR_TOPIC, 0)])
+            if PROGRESS_TOPIC:
+                client.subscribe([(PROGRESS_TOPIC, 0)])
             client.publish(REWARD_TOPIC, json.dumps({"ok": True, "event": "reward_manager_ready"}))
         else:
             logger.error("Reward manager failed to connect: rc=%s", _as_int(rc))
@@ -247,6 +265,34 @@ class RewardManager:
                 data = json.loads(msg.payload.decode("utf-8"))
                 if isinstance(data, dict) and "error" in data:
                     self.last_pred_error = float(data["error"])
+                    self.last_pred_ts = time.time()
+            except Exception:
+                pass
+        elif msg.topic == PROGRESS_TOPIC:
+            try:
+                data = json.loads(msg.payload.decode("utf-8"))
+                understanding = data.get("understanding") if isinstance(data, dict) else None
+                if isinstance(understanding, dict):
+                    embeddings = understanding.get("embeddings") or {}
+                    delta = embeddings.get("delta_last")
+                    if isinstance(delta, (int, float)):
+                        self.last_embed_delta = float(delta)
+                        self.last_embed_ts = time.time()
+                    locations = understanding.get("locations") or {}
+                    if isinstance(locations, dict):
+                        loc_new = locations.get("new_rate")
+                        if isinstance(loc_new, (int, float)):
+                            self.last_location_new_rate = float(loc_new)
+                    objects = understanding.get("objects") or {}
+                    if isinstance(objects, dict):
+                        obj_new = objects.get("new_rate")
+                        if isinstance(obj_new, (int, float)):
+                            self.last_object_new_rate = float(obj_new)
+                    ocr = understanding.get("ocr") or {}
+                    if isinstance(ocr, dict):
+                        ocr_new = ocr.get("new_rate")
+                        if isinstance(ocr_new, (int, float)):
+                            self.last_ocr_new_rate = float(ocr_new)
             except Exception:
                 pass
         self.publish_reward()
@@ -256,11 +302,35 @@ class RewardManager:
         metrics = derive_scene_metrics(self.latest_scene)
         reward, components = self.calculator.compute(events, metrics)
         
-        # Intrinsic Curiosity
-        intrinsic_reward = self.last_pred_error * CURIOSITY_WEIGHT
+        # Intrinsic Curiosity (pred_error or embedding delta fallback)
+        intrinsic_reward = 0.0
+        curiosity_source = "off"
+        now = time.time()
+        pred_fresh = self.last_pred_ts and (now - self.last_pred_ts) <= CURIOSITY_PRED_TIMEOUT
+        if CURIOSITY_MODE in {"pred_error", "auto"} and pred_fresh:
+            intrinsic_reward = self.last_pred_error * CURIOSITY_WEIGHT
+            curiosity_source = "pred_error"
+        elif CURIOSITY_MODE in {"embedding", "auto"} and self.last_embed_delta is not None:
+            scaled = self.last_embed_delta * CURIOSITY_EMBED_SCALE
+            capped = min(CURIOSITY_EMBED_MAX, max(0.0, scaled))
+            intrinsic_reward = capped * CURIOSITY_EMBED_WEIGHT
+            curiosity_source = "embedding"
+        elif CURIOSITY_MODE in {"progress", "auto"}:
+            loc = self.last_location_new_rate or 0.0
+            obj = self.last_object_new_rate or 0.0
+            ocr = self.last_ocr_new_rate or 0.0
+            novelty = (
+                loc * CURIOSITY_LOCATION_WEIGHT
+                + obj * CURIOSITY_OBJECT_WEIGHT
+                + ocr * CURIOSITY_OCR_WEIGHT
+            )
+            if novelty > 0:
+                intrinsic_reward = min(CURIOSITY_PROGRESS_MAX, novelty)
+                curiosity_source = "progress"
         reward += intrinsic_reward
         components["curiosity"] = round(intrinsic_reward, 4)
-        
+        components["curiosity_source"] = curiosity_source
+
         reward, components = self._apply_stage0_adjustments(reward, components)
         
         # Clip final total

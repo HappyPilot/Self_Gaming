@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Dict, Optional
 
+from utils.control_profile_v2 import apply_profile_v2
+
 DEFAULT_PROFILE_PATH = Path(os.getenv("CONTROL_PROFILE_PATH", "/app/data/control_profiles.json"))
 EXAMPLE_PROFILE_PATH = Path(__file__).resolve().parent / "data" / "control_profiles.example.json"
 
@@ -43,7 +45,7 @@ def _write_all_profiles(profiles: Dict[str, dict], path: Path = DEFAULT_PROFILE_
 
 def safe_profile(game_id: str = "unknown_game") -> dict:
     """Return a conservative profile that avoids risky keys."""
-    return {
+    profile = {
         "game_id": game_id,
         "source": "safe_default",
         "profile_version": 1,
@@ -58,6 +60,7 @@ def safe_profile(game_id: str = "unknown_game") -> dict:
         "window_sec": 10.0,
         "notes": ["Generated safe fallback profile"],
     }
+    return apply_profile_v2(profile)
 
 
 def load_profile(game_id: str, path: Path = DEFAULT_PROFILE_PATH) -> Optional[dict]:
@@ -68,6 +71,7 @@ def load_profile(game_id: str, path: Path = DEFAULT_PROFILE_PATH) -> Optional[di
 def upsert_profile(profile: dict, path: Path = DEFAULT_PROFILE_PATH) -> None:
     if not isinstance(profile, dict):
         return
+    profile = apply_profile_v2(profile)
     game_id = profile.get("game_id") or "unknown_game"
     profiles = _read_all_profiles(path)
     profiles[str(game_id)] = profile

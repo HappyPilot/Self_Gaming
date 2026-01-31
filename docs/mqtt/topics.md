@@ -46,6 +46,8 @@ All payloads are JSON.
 - logs/alerts: log monitor alerts
 - progress/status: progress agent summary/status
 - progress/understanding: progress agent understanding metrics (location memory + grounding)
+- skill_profiler/cmd: requests a skill classification (tooltip text)
+- skill_profiler/result: classified skill type per slot
 
 ## Payload examples
 
@@ -287,6 +289,28 @@ Location memory + grounding metrics (game-agnostic).
       "last_reason": "bbox"
     }
   }
+}
+```
+
+### skill_profiler/cmd
+Request skill classification from tooltip text.
+```json
+{
+  "slot": "q",
+  "text": "Deals damage in an area around you",
+  "game_id": "path_of_exile"
+}
+```
+
+### skill_profiler/result
+```json
+{
+  "ok": true,
+  "event": "skill_profile",
+  "game_id": "path_of_exile",
+  "slot": "q",
+  "skill_type": "aoe",
+  "timestamp": 1712345678.9
 }
 ```
 

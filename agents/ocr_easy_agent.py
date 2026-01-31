@@ -57,7 +57,8 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 OCR_CLIENT_ID = os.getenv("OCR_CLIENT_ID")
 VISION_CMD = os.getenv("VISION_CMD", "vision/cmd")
 VISION_SNAPSHOT = os.getenv("VISION_SNAPSHOT", "vision/snapshot")
-VISION_FRAME = os.getenv("VISION_FRAME", os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview"))
+OCR_FRAME_TOPIC = os.getenv("OCR_FRAME_TOPIC", "").strip()
+VISION_FRAME = os.getenv("VISION_FRAME", OCR_FRAME_TOPIC or os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview"))
 OCR_CMD = os.getenv("OCR_CMD", "ocr_easy/cmd")
 OCR_TEXT = os.getenv("OCR_TEXT", "ocr_easy/text")
 OCR_LANGS = [lang.strip() for lang in os.getenv("OCR_LANGS", "en,ru").split(",") if lang.strip()]
@@ -76,6 +77,10 @@ MIN_ALPHA_RATIO = float(os.getenv("OCR_MIN_ALPHA_RATIO", "0.35"))
 MAX_LINE_LENGTH = int(os.getenv("OCR_MAX_LINE_CHARS", "160"))
 VARIANT_THRESHOLD = os.getenv("OCR_VARIANT_THRESHOLD", "adaptive")
 MAX_RESULTS = int(os.getenv("OCR_MAX_RESULTS", "12"))
+PREFER_SNAPSHOT = os.getenv("OCR_PREFER_SNAPSHOT", "1") != "0"
+FALLBACK_ON_EMPTY = os.getenv("OCR_FALLBACK_ON_EMPTY", "0") == "1"
+FALLBACK_MIN_RESULTS = max(1, int(os.getenv("OCR_FALLBACK_MIN_RESULTS", "1")))
+FALLBACK_BACKEND = os.getenv("OCR_FALLBACK_BACKEND", "easyocr").strip().lower()
 
 # Frame hash gating (skip OCR on unchanged frames)
 HASH_ENABLE = os.getenv("OCR_HASH_ENABLE", "1") == "1"
@@ -164,6 +169,22 @@ class OcrEasyAgent:
                      (self.backend == "easyocr" and self.reader is not None)
         logger.info("OCR backend ready: %s (backend=%s, gpu=%s)", self.ready, self.backend, self.gpu)
 
+    def _ensure_easyocr(self) -> bool:
+        if self.reader is not None:
+            return True
+        if torch is not None:
+            try:
+                self.gpu = torch.cuda.is_available() and not FORCE_CPU and OCR_USE_GPU
+            except Exception:
+                self.gpu = False
+        try:
+            import easyocr
+            self.reader = easyocr.Reader(OCR_LANGS or ["en"], gpu=self.gpu)
+            return True
+        except Exception as exc:
+            logger.warning("EasyOCR fallback init failed: %s", exc)
+            return False
+
     def _ensure_backend(self):
         if self._backend_initialized:
             return
@@ -178,7 +199,12 @@ class OcrEasyAgent:
     def _on_connect(self, client, userdata, flags, rc):
         if _as_int(rc) == 0:
             client.subscribe([(VISION_SNAPSHOT, 0), (VISION_FRAME, 0), (OCR_CMD, 0)])
-            client.publish(OCR_TEXT, json.dumps({"ok": True, "event": "connected", "gpu": self.gpu, "listen": [VISION_SNAPSHOT, OCR_CMD]}))
+            client.publish(
+                OCR_TEXT,
+                json.dumps(
+                    {"ok": True, "event": "connected", "gpu": self.gpu, "listen": [VISION_SNAPSHOT, VISION_FRAME, OCR_CMD]}
+                ),
+            )
             logger.info("Connected to MQTT")
         else:
             logger.error("Connect failed rc=%s", _as_int(rc))
@@ -280,12 +306,13 @@ class OcrEasyAgent:
         if cv2 is not None: return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
         return np.dstack([arr] * 3)
 
-    def _recognize_variant(self, arr: np.ndarray) -> List[dict]:
+    def _recognize_variant(self, arr: np.ndarray, backend: Optional[str] = None) -> List[dict]:
         if not self.ready: return []
         h, w = arr.shape[:2]
         results = []
-        
-        if self.backend == "paddle":
+
+        use_backend = backend or self.backend
+        if use_backend == "paddle":
             if self.rapidocr_reader is None: return []
             with self._ocr_lock:
                 raw_res, _ = self.rapidocr_reader(self._convert_to_color(arr))
@@ -302,10 +329,11 @@ class OcrEasyAgent:
                     results.append({
                         "text": text,
                         "box": [x_min/w, y_min/h, (x_max-x_min)/w, (y_max-y_min)/h],
+                        "box_format": "xywh",
                         "conf": float(conf)
                     })
 
-        elif self.backend == "easyocr":
+        elif use_backend == "easyocr":
             if self.reader is None: return []
             # EasyOCR: [ ([[x1,y1], ...], text, conf), ... ]
             with self._ocr_lock:
@@ -322,6 +350,7 @@ class OcrEasyAgent:
                 results.append({
                     "text": text,
                     "box": [x_min/w, y_min/h, (x_max-x_min)/w, (y_max-y_min)/h],
+                    "box_format": "xywh",
                     "conf": float(conf)
                 })
         return results
@@ -339,10 +368,13 @@ class OcrEasyAgent:
             self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": self.init_error or "ocr_not_ready"}))
             return
         timeout = float(payload.get("timeout", AUTO_TIMEOUT))
-        source, jpeg = "snapshot", self._request_snapshot(timeout)
+        source, jpeg = "frame", None
+        if PREFER_SNAPSHOT:
+            source, jpeg = "snapshot", self._request_snapshot(timeout)
         if jpeg is None:
-            source, jpeg = "frame", None
-            with self.frame_lock: jpeg = self.frame_data
+            source = "frame"
+            with self.frame_lock:
+                jpeg = self.frame_data
             if jpeg is None:
                 self.client.publish(OCR_TEXT, json.dumps({"ok": False, "error": "no_frame", "timeout": timeout}))
                 return
@@ -364,7 +396,8 @@ class OcrEasyAgent:
             all_results = []
             seen_texts = set()
             
-            for variant in self._preprocess_variants(img):
+            variants = self._preprocess_variants(img)
+            for variant in variants:
                 for res in self._recognize_variant(variant):
                     cleaned = res["text"].strip()
                     if not cleaned or self._is_noise(cleaned): continue
@@ -373,6 +406,24 @@ class OcrEasyAgent:
                     if key in seen_texts: continue
                     seen_texts.add(key)
                     
+                    all_results.append(res)
+
+            if (
+                FALLBACK_ON_EMPTY
+                and self.backend != "easyocr"
+                and FALLBACK_BACKEND == "easyocr"
+                and len(all_results) < FALLBACK_MIN_RESULTS
+                and self._ensure_easyocr()
+                and variants
+            ):
+                for res in self._recognize_variant(variants[0], backend="easyocr"):
+                    cleaned = res["text"].strip()
+                    if not cleaned or self._is_noise(cleaned):
+                        continue
+                    key = f"{cleaned}_{res['box'][0]:.2f}_{res['box'][1]:.2f}"
+                    if key in seen_texts:
+                        continue
+                    seen_texts.add(key)
                     all_results.append(res)
 
             # Keep top-N by confidence to limit payload size
