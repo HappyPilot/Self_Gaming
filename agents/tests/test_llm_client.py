@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -55,6 +56,32 @@ class TestLLMClientJSONMode(unittest.TestCase):
         self.assertIsInstance(parsed, dict)
         self.assertEqual(parsed.get("game_id"), "test_game")
         self.assertTrue(parsed.get("allow_mouse_move"))
+
+    def test_extract_json_returns_dict_when_input_is_dict(self):
+        payload = {"game_id": "direct_dict", "allow_mouse_move": False}
+        parsed = llm_client._extract_json(payload)
+        self.assertIsInstance(parsed, dict)
+        self.assertEqual(parsed, payload)
+
+    def test_log_parse_failure_writes_jsonl(self):
+        import json
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(delete=False) as handle:
+            path = handle.name
+        try:
+            llm_client.LLM_PARSE_LOG = path
+            llm_client._log_parse_failure("control_profile", "{bad json")
+            with open(path, "r", encoding="utf-8") as handle:
+                line = handle.readline().strip()
+            data = json.loads(line)
+            self.assertEqual(data.get("kind"), "control_profile")
+            self.assertIn("raw", data)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

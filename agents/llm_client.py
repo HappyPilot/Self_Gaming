@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Dict, Optional, Tuple
 
 import requests
@@ -18,6 +19,7 @@ LLM_PROFILE_MAX_TOKENS = int(os.getenv("LLM_PROFILE_MAX_TOKENS", "240"))
 LLM_GAME_ID_MAX_TOKENS = int(os.getenv("LLM_GAME_ID_MAX_TOKENS", "30"))
 LLM_PROMPT_MAX_TOKENS = int(os.getenv("LLM_PROMPT_MAX_TOKENS", "180"))
 LLM_DETECT_GAME = os.getenv("LLM_DETECT_GAME", "1") != "0"
+LLM_PARSE_LOG = os.getenv("LLM_PARSE_LOG", "/tmp/llm_parse_failed.jsonl")
 _RESOLVED_MODEL: Optional[str] = None
 
 
@@ -57,8 +59,12 @@ def _resolve_model() -> str:
 
 def _extract_json(text: str) -> Optional[dict]:
     """Try to extract JSON object from free-form text (possibly inside ``` blocks)."""
+    if isinstance(text, dict):
+        return text
     if not text:
         return None
+    if not isinstance(text, str):
+        text = str(text)
     # Grab content inside code fences if present.
     fence_match = re.search(r"```(?:json)?(.*?)```", text, re.DOTALL | re.IGNORECASE)
     candidate = fence_match.group(1) if fence_match else text
@@ -83,6 +89,26 @@ def _extract_json(text: str) -> Optional[dict]:
     except Exception:
         return None
     return None
+
+
+def _log_parse_failure(kind: str, raw: str) -> None:
+    path = (LLM_PARSE_LOG or "").strip()
+    if not path:
+        return
+    try:
+        preview = raw if isinstance(raw, str) else str(raw)
+        if len(preview) > 4000:
+            preview = preview[:4000]
+        payload = {
+            "ts": time.time(),
+            "kind": kind,
+            "raw_len": len(str(raw)) if raw is not None else 0,
+            "raw": preview,
+        }
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        return
 
 
 def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple[Optional[dict], str]:
@@ -137,6 +163,7 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
         content = data["choices"][0]["message"]["content"]
         parsed = _extract_json(content)
         if not isinstance(parsed, dict):
+            _log_parse_failure("control_profile", content)
             return None, "llm_parse_failed"
         return parsed, "llm_ok"
     except Exception as exc:
@@ -234,6 +261,7 @@ def fetch_visual_prompts(game_hint: str, texts: Optional[list] = None) -> Tuple[
         content = data["choices"][0]["message"]["content"]
         parsed = _extract_json(content)
         if not isinstance(parsed, dict):
+            _log_parse_failure("visual_prompts", content)
             return None, "llm_parse_failed"
         return parsed, "llm_ok"
     except Exception as exc:
