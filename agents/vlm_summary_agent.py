@@ -27,6 +27,7 @@ logger = logging.getLogger("vlm_summary_agent")
 MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 FRAME_TOPIC = os.getenv("VISION_FRAME_TOPIC", "vision/frame/preview")
+SCENE_TOPIC = os.getenv("SCENE_TOPIC", "scene/state")
 SCENE_SUMMARY_TOPIC = os.getenv("SCENE_SUMMARY_TOPIC", "scene/summary")
 MEM_STORE_TOPIC = os.getenv("MEM_STORE_TOPIC", "mem/store")
 
@@ -35,6 +36,7 @@ VLM_MODEL = os.getenv("VLM_MODEL") or os.getenv("LLM_MODEL") or "llama"
 VLM_API_KEY = os.getenv("VLM_API_KEY", os.getenv("LLM_API_KEY", ""))
 VLM_TIMEOUT = float(os.getenv("VLM_TIMEOUT", "20"))
 VLM_MAX_TOKENS = int(os.getenv("VLM_MAX_TOKENS", "256"))
+VLM_DISABLE_IMAGE = os.getenv("VLM_DISABLE_IMAGE", "0") != "0"
 
 SUMMARY_INTERVAL_SEC = float(os.getenv("VLM_SUMMARY_INTERVAL_SEC", "2.5"))
 STALE_PUBLISH_SEC = float(os.getenv("VLM_SUMMARY_STALE_PUBLISH_SEC", "10"))
@@ -79,26 +81,32 @@ def _hash_summary(summary: Dict[str, object]) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:10]
 
 
-def _build_messages(image_b64: str) -> list:
+def build_messages(image_b64: Optional[str], scene_text: str, object_summary: str) -> list:
+    context_bits = []
+    if scene_text:
+        context_bits.append(f"Scene text:\\n{scene_text}")
+    if object_summary:
+        context_bits.append(f"Objects:\\n{object_summary}")
+    context = "\\n\\n".join(context_bits)
+    system_msg = (
+        "You are a vision analyst for video games. "
+        "Return ONLY valid JSON with keys: game, summary, player_state, enemies, objectives, ui, risk, recommended_intent. "
+        "risk must be one of: low, medium, high. Keep summary concise."
+    )
+    if image_b64:
+        return [
+            {"role": "system", "content": system_msg},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"Analyze the scene and return JSON only.\\n\\n{context}"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                ],
+            },
+        ]
     return [
-        {
-            "role": "system",
-            "content": (
-                "You are a vision analyst for video games. "
-                "Return ONLY valid JSON with keys: game, summary, player_state, enemies, objectives, ui, risk, recommended_intent. "
-                "risk must be one of: low, medium, high. Keep summary concise."
-            ),
-        },
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Analyze the scene and return JSON only."},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                },
-            ],
-        },
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": f"Analyze the scene using the text context below and return JSON only.\\n\\n{context}"},
     ]
 
 
@@ -110,6 +118,8 @@ class VlmSummaryAgent:
         self._lock = threading.Lock()
         self._latest_frame: Optional[dict] = None
         self._latest_frame_ts: float = 0.0
+        self._latest_scene_text: str = ""
+        self._latest_object_summary: str = ""
         self._last_request: float = 0.0
         self._last_publish: float = 0.0
         self._last_summary: Optional[Dict[str, object]] = None
@@ -117,25 +127,42 @@ class VlmSummaryAgent:
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if rc == 0:
-            client.subscribe([(FRAME_TOPIC, 0)])
-            logger.info("VLM summary agent connected: %s", FRAME_TOPIC)
+            client.subscribe([(FRAME_TOPIC, 0), (SCENE_TOPIC, 0)])
+            logger.info("VLM summary agent connected: %s, %s", FRAME_TOPIC, SCENE_TOPIC)
         else:
             logger.error("VLM summary agent failed to connect rc=%s", rc)
 
     def _on_message(self, _client, _userdata, msg):
-        if msg.topic != FRAME_TOPIC:
-            return
         try:
             payload = json.loads(msg.payload.decode("utf-8", "ignore"))
         except Exception:
             return
         if not isinstance(payload, dict):
             return
-        with self._lock:
-            self._latest_frame = payload
-            self._latest_frame_ts = time.time()
+        if msg.topic == FRAME_TOPIC:
+            with self._lock:
+                self._latest_frame = payload
+                self._latest_frame_ts = time.time()
+            return
+        if msg.topic == SCENE_TOPIC:
+            text_entries = payload.get("text") or []
+            if isinstance(text_entries, list):
+                scene_text = " ".join(str(item) for item in text_entries)
+            else:
+                scene_text = str(text_entries)
+            objects = payload.get("objects") or payload.get("enemies") or []
+            object_labels = []
+            if isinstance(objects, list):
+                for obj in objects[:12]:
+                    if isinstance(obj, dict):
+                        label = obj.get("label") or obj.get("class") or obj.get("name")
+                        if label:
+                            object_labels.append(str(label))
+            with self._lock:
+                self._latest_scene_text = scene_text.strip()
+                self._latest_object_summary = ", ".join(object_labels)
 
-    def _log_event(self, status: str, latency_ms: Optional[float], summary: Optional[Dict[str, object]] = None, error: Optional[str] = None):
+    def _log_event(self, status: str, latency_ms: Optional[float], summary: Optional[Dict[str, object]] = None, error: Optional[str] = None, source: Optional[str] = None):
         record = {
             "ts": time.time(),
             "status": status,
@@ -144,6 +171,8 @@ class VlmSummaryAgent:
         if summary:
             record["game"] = summary.get("game")
             record["summary_hash"] = _hash_summary(summary)
+        if source:
+            record["source"] = source
         if error:
             record["error"] = error
         try:
@@ -152,7 +181,7 @@ class VlmSummaryAgent:
         except Exception:
             pass
 
-    def _publish_summary(self, summary: Dict[str, object], status: str, latency_ms: Optional[float] = None, error: Optional[str] = None):
+    def _publish_summary(self, summary: Dict[str, object], status: str, latency_ms: Optional[float] = None, error: Optional[str] = None, source: Optional[str] = None):
         now = time.time()
         payload = {
             "ok": status == "ok",
@@ -162,6 +191,8 @@ class VlmSummaryAgent:
         }
         if latency_ms is not None:
             payload["latency_ms"] = latency_ms
+        if source:
+            payload["source"] = source
         if error:
             payload["error"] = error
         self.client.publish(SCENE_SUMMARY_TOPIC, json.dumps(payload))
@@ -176,7 +207,7 @@ class VlmSummaryAgent:
             }
             self.client.publish(MEM_STORE_TOPIC, json.dumps(store_payload))
 
-    def _request_summary(self, image_b64: str) -> Dict[str, object]:
+    def _request_summary(self, messages: list) -> Dict[str, object]:
         if requests is None:
             raise RuntimeError("requests package is unavailable")
         headers = {"Content-Type": "application/json"}
@@ -184,7 +215,7 @@ class VlmSummaryAgent:
             headers["Authorization"] = f"Bearer {VLM_API_KEY}"
         payload = {
             "model": VLM_MODEL,
-            "messages": _build_messages(image_b64),
+            "messages": messages,
             "temperature": 0.2,
             "max_tokens": max(64, VLM_MAX_TOKENS),
             "stream": False,
@@ -210,26 +241,46 @@ class VlmSummaryAgent:
                 continue
             with self._lock:
                 frame_payload = self._latest_frame
+                scene_text = self._latest_scene_text
+                object_summary = self._latest_object_summary
             if not frame_payload:
                 stop_event.wait(0.1)
                 continue
-            image_b64 = get_frame_b64(frame_payload)
-            if not image_b64:
+            image_b64 = None if VLM_DISABLE_IMAGE else get_frame_b64(frame_payload)
+            if not image_b64 and not scene_text:
                 stop_event.wait(0.1)
                 continue
             self._last_request = now
             try:
                 start = time.time()
-                raw_summary = self._request_summary(image_b64)
+                messages = build_messages(image_b64, scene_text, object_summary)
+                source = "vlm" if image_b64 else "text"
+                raw_summary = self._request_summary(messages)
                 latency_ms = (time.time() - start) * 1000.0
                 summary = normalize_summary(raw_summary)
                 self._last_summary = summary
                 self._last_summary_ts = time.time()
-                self._publish_summary(summary, status="ok", latency_ms=latency_ms)
-                self._log_event("ok", latency_ms, summary=summary)
+                self._publish_summary(summary, status="ok", latency_ms=latency_ms, source=source)
+                self._log_event("ok", latency_ms, summary=summary, source=source)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("VLM summary failed: %s", exc)
-                self._log_event("error", None, summary=self._last_summary, error=str(exc))
+                if image_b64 and scene_text:
+                    try:
+                        start = time.time()
+                        messages = build_messages(None, scene_text, object_summary)
+                        raw_summary = self._request_summary(messages)
+                        latency_ms = (time.time() - start) * 1000.0
+                        summary = normalize_summary(raw_summary)
+                        self._last_summary = summary
+                        self._last_summary_ts = time.time()
+                        self._publish_summary(summary, status="ok", latency_ms=latency_ms, source="text")
+                        self._log_event("ok", latency_ms, summary=summary, source="text")
+                        continue
+                    except Exception as fallback_exc:  # noqa: BLE001
+                        logger.warning("VLM summary failed: %s", fallback_exc)
+                        self._log_event("error", None, summary=self._last_summary, error=str(fallback_exc))
+                else:
+                    logger.warning("VLM summary failed: %s", exc)
+                    self._log_event("error", None, summary=self._last_summary, error=str(exc))
                 if self._last_summary and now - self._last_publish >= STALE_PUBLISH_SEC:
                     stale_summary = dict(self._last_summary)
                     stale_summary["stale_age_sec"] = max(0.0, now - self._last_summary_ts)
