@@ -689,7 +689,7 @@ class TeacherAgent:
         if self.vlm_summary_received_at:
             stale_age = max(0.0, time.time() - self.vlm_summary_received_at)
             stale_note = f" (stale {stale_age:.1f}s)"
-        return f\"VLM context (hint; prefer OCR/targets on conflict){stale_note}: \" + \"; \".join(bits)
+        return f"VLM context (hint; prefer OCR/targets on conflict){stale_note}: " + "; ".join(bits)
 
     def _format_control_summary(self, scene: dict) -> str:
         game_id = scene.get("game_id") or self.game_id or CONTROL_PROFILE_GAME_ID
