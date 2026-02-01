@@ -251,9 +251,10 @@ services:
     - mq
     - vision
     - scene
-    - ocr_easy
   ocr:
     container_name: ocr_agent
+    profiles:
+    - heavy
     build:
       context: .
       dockerfile: docker/ocr/Dockerfile
@@ -288,6 +289,8 @@ services:
       start_period: 30s
   ocr_easy:
     container_name: ocr_easy_agent
+    profiles:
+    - heavy
     build:
       context: .
       dockerfile: docker/ocr_easy/Dockerfile
@@ -335,6 +338,8 @@ services:
       start_period: 30s
   ui_region:
     container_name: ui_region_agent
+    profiles:
+    - heavy
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
@@ -361,6 +366,8 @@ services:
     - mq
   simple_ocr:
     container_name: simple_ocr_agent
+    profiles:
+    - heavy
     build:
       context: .
       dockerfile: docker/simple_ocr/Dockerfile
@@ -402,6 +409,7 @@ services:
     restart: unless-stopped
     profiles:
     - experimental
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -455,9 +463,8 @@ services:
     depends_on:
     - mq
     - vision
-    - ocr
-    - ocr_easy
-    - simple_ocr
+    - vl_jepa
+    - siglip_prompt
   embedding_guard:
     container_name: embedding_guard
     image: local/policy-agent:latest
@@ -966,6 +973,8 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -1217,6 +1226,8 @@ services:
     runtime: nvidia
     network_mode: host
     privileged: true
+    profiles:
+    - heavy
     devices:
     - ${DS_V4L2_DEVICE:-/dev/video0}:${DS_V4L2_DEVICE:-/dev/video0}
     - /dev/v4l:/dev/v4l
