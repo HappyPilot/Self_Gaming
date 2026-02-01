@@ -42,6 +42,7 @@ LOCATION_EMA_ALPHA = float(os.getenv("UNDERSTANDING_LOCATION_EMA", "0.1"))
 LOCATION_MAX = int(os.getenv("UNDERSTANDING_LOCATION_MAX", "200"))
 LOCATION_WINDOW = int(os.getenv("UNDERSTANDING_LOCATION_WINDOW", "120"))
 LOCATION_VOCAB_MAX = int(os.getenv("UNDERSTANDING_LOCATION_VOCAB_MAX", "500"))
+OCR_VOCAB_MAX = int(os.getenv("UNDERSTANDING_OCR_VOCAB_MAX", "800"))
 MIN_EMBED_DIM = int(os.getenv("UNDERSTANDING_MIN_EMBED_DIM", "64"))
 GROUNDING_RADIUS = float(os.getenv("UNDERSTANDING_GROUNDING_RADIUS", "0.08"))
 CURSOR_STALE_SEC = float(os.getenv("UNDERSTANDING_CURSOR_STALE_SEC", "1.0"))
@@ -354,6 +355,8 @@ def _update_location_vocab(location: dict, labels: list[str], tokens: list[str])
         new_global = []
         for token in tokens:
             if token not in ocr_vocab_global:
+                if len(ocr_vocab_global) >= OCR_VOCAB_MAX:
+                    break
                 ocr_vocab_global.add(token)
                 new_global.append(token)
         ocr_new_rate_avg = _ema(ocr_new_rate_avg, len(new_global) / max(1, len(tokens)), 0.2)
@@ -440,6 +443,14 @@ def on_message(client, userdata, msg):
                 last_scene_targets = targets if isinstance(targets, list) else []
                 last_scene_ts = now
                 last_scene_emb_ts = payload.get("embeddings_ts", 0.0) or payload.get("embedding_ts", 0.0) or 0.0
+                labels = _extract_labels(objects)
+                with lock:
+                    state["objects"] = {
+                        "count": len(objects),
+                        "labels": labels[:8],
+                        "ts": payload.get("timestamp", now),
+                        "source": "scene",
+                    }
             if isinstance(embedding, list):
                 global last_embed_processed
                 if (now - last_embed_processed) >= UNDERSTANDING_EMBED_SAMPLE_SEC:

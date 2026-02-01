@@ -9,6 +9,7 @@ RUN set -eux; \
 
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir --ignore-installed \
+      "numpy<2.0" \
       paho-mqtt requests flask \
       transformers==4.38.2 timm==0.9.16 opencv-python-headless==4.9.0.80 huggingface-hub==0.24.6 && \
     if [ "$WITH_TITANS" = "1" ]; then \
