@@ -227,8 +227,13 @@ class VlmSummaryAgent:
             if "choices" in data and data["choices"]:
                 content = data["choices"][0]["message"]["content"]
                 if isinstance(content, str):
+                    cleaned = content.strip()
+                    if cleaned.startswith("```"):
+                        cleaned = "\n".join(
+                            line for line in cleaned.splitlines() if not line.strip().startswith("```")
+                        ).strip()
                     try:
-                        return json.loads(content)
+                        return json.loads(cleaned)
                     except Exception:
                         return {"summary": content}
                 return content
