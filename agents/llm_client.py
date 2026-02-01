@@ -73,6 +73,14 @@ def _extract_json(text: str) -> Optional[dict]:
         if start >= 0 and end > start:
             return json.loads(candidate[start : end + 1])
     except Exception:
+        pass
+    try:
+        import ast
+
+        parsed = ast.literal_eval(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
         return None
     return None
 

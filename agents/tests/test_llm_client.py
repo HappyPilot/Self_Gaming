@@ -50,6 +50,12 @@ class TestLLMClientJSONMode(unittest.TestCase):
             body = kwargs.get("json", {})
             self.assertEqual(body.get("response_format"), {"type": "json_object"})
 
+    def test_extract_json_handles_python_style_dict(self):
+        parsed = llm_client._extract_json("{'game_id': 'test_game', 'allow_mouse_move': True}")
+        self.assertIsInstance(parsed, dict)
+        self.assertEqual(parsed.get("game_id"), "test_game")
+        self.assertTrue(parsed.get("allow_mouse_move"))
+
 
 if __name__ == "__main__":
     unittest.main()
