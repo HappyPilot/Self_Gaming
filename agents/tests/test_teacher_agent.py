@@ -54,6 +54,15 @@ class TeacherAgentTest(unittest.TestCase):
         self.assertEqual(payload["action"]["label"], "click_primary")
         self.assertIn("reasoning", payload)
 
+
+    def test_teacher_includes_vlm_summary_in_scene(self):
+        agent = TeacherAgent(mqtt_client=DummyMQTT(), llm_client=DummyLLM(), mem_client=DummyMem({}))
+        agent.vlm_summary = {"summary": "enemy boss", "risk": "high"}
+        agent.vlm_summary_received_at = 1000.0
+        scene = {"ok": True, "text": ["dummy"], "enemies": []}
+        summary = agent._build_scene_summary(scene, [], [])
+        self.assertIn("VLM", summary)
+        self.assertIn("enemy boss", summary)
     def test_rules_and_recent_critical_in_prompt(self):
         mem = DummyMem(
             {
