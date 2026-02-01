@@ -23,3 +23,8 @@ def test_build_messages_without_image_uses_text_context():
     messages = vsa.build_messages(None, "ui text", "enemy")
     assert isinstance(messages[1]["content"], str)
     assert "Scene text" in messages[1]["content"]
+
+
+def test_normalize_summary_handles_text():
+    parsed = vsa.normalize_summary("hello")
+    assert parsed["summary"] == "hello"

@@ -226,7 +226,12 @@ class VlmSummaryAgent:
         if isinstance(data, dict):
             if "choices" in data and data["choices"]:
                 content = data["choices"][0]["message"]["content"]
-                return json.loads(content) if isinstance(content, str) else content
+                if isinstance(content, str):
+                    try:
+                        return json.loads(content)
+                    except Exception:
+                        return {"summary": content}
+                return content
             if "message" in data:
                 return data["message"]
         raise ValueError(f"Unexpected response payload: {data}")
