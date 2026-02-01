@@ -36,6 +36,8 @@ class TestLLMClientJSONMode(unittest.TestCase):
             _, kwargs = mock_post.call_args
             body = kwargs.get("json", {})
             self.assertEqual(body.get("response_format"), {"type": "json_object"})
+            prompt = body.get("messages", [{}])[-1].get("content", "")
+            self.assertIn("Do not include any other keys", prompt)
 
     def test_fetch_visual_prompts_uses_json_response_format(self):
         with patch("llm_client.acquire_gate", return_value=True), patch("llm_client.release_gate"), patch(

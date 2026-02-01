@@ -137,6 +137,7 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
         "Rules: be conservative; avoid system keys; keep allowed_keys_safe short and game-safe.\n"
         "Only include WASD if the game is known to use WASD by default. For click-to-move ARPGs, prefer QWERT + 1-5.\n"
         "Put inventory/map/menu keys in allowed_keys_extended (not in safe).\n"
+        "Do not include any other keys or extra fields (e.g., bindings).\n"
         f"Game hint: {game_hint or 'unknown'}.\n"
         f"On-screen texts: {texts[:12]}.\n"
         "JSON only, no prose."
