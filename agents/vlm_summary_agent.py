@@ -2,7 +2,9 @@
 """VLM summary agent: turns frames into structured scene summaries."""
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
 import json
 import logging
 import os
@@ -17,9 +19,14 @@ try:
 except ImportError:
     requests = None
 
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
 import paho.mqtt.client as mqtt
 
-from utils.frame_transport import get_frame_b64
+from utils.frame_transport import get_frame_b64, get_frame_bytes
 
 logging.basicConfig(level=os.getenv("VLM_SUMMARY_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("vlm_summary_agent")
@@ -37,6 +44,9 @@ VLM_API_KEY = os.getenv("VLM_API_KEY", os.getenv("LLM_API_KEY", ""))
 VLM_TIMEOUT = float(os.getenv("VLM_TIMEOUT", "20"))
 VLM_MAX_TOKENS = int(os.getenv("VLM_MAX_TOKENS", "256"))
 VLM_DISABLE_IMAGE = os.getenv("VLM_DISABLE_IMAGE", "0") != "0"
+VLM_IMAGE_MAX_DIM = int(os.getenv("VLM_IMAGE_MAX_DIM", "320"))
+VLM_IMAGE_FORMAT = os.getenv("VLM_IMAGE_FORMAT", "PNG")
+VLM_IMAGE_JPEG_QUALITY = int(os.getenv("VLM_IMAGE_JPEG_QUALITY", "85"))
 
 SUMMARY_INTERVAL_SEC = float(os.getenv("VLM_SUMMARY_INTERVAL_SEC", "2.5"))
 STALE_PUBLISH_SEC = float(os.getenv("VLM_SUMMARY_STALE_PUBLISH_SEC", "10"))
@@ -81,7 +91,36 @@ def _hash_summary(summary: Dict[str, object]) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:10]
 
 
-def build_messages(image_b64: Optional[str], scene_text: str, object_summary: str) -> list:
+def prepare_image_b64(payload: dict) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(payload, dict):
+        return None, None
+    data = get_frame_bytes(payload)
+    if not data:
+        raw = get_frame_b64(payload)
+        return (raw, "image/jpeg") if raw else (None, None)
+    if Image is None:
+        return base64.b64encode(data).decode("ascii"), "image/jpeg"
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        max_dim = VLM_IMAGE_MAX_DIM
+        if max_dim and max_dim > 0:
+            img.thumbnail((max_dim, max_dim))
+        fmt = str(VLM_IMAGE_FORMAT or "PNG").upper()
+        buf = io.BytesIO()
+        if fmt == "JPEG":
+            img.save(buf, format="JPEG", quality=VLM_IMAGE_JPEG_QUALITY)
+            mime = "image/jpeg"
+        else:
+            img.save(buf, format="PNG")
+            mime = "image/png"
+        return base64.b64encode(buf.getvalue()).decode("ascii"), mime
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to preprocess image: %s", exc)
+        raw = get_frame_b64(payload)
+        return (raw, "image/jpeg") if raw else (None, None)
+
+
+def build_messages(image_b64: Optional[str], image_mime: Optional[str], scene_text: str, object_summary: str) -> list:
     context_bits = []
     if scene_text:
         context_bits.append(f"Scene text:\\n{scene_text}")
@@ -94,13 +133,14 @@ def build_messages(image_b64: Optional[str], scene_text: str, object_summary: st
         "risk must be one of: low, medium, high. Keep summary concise."
     )
     if image_b64:
+        mime = image_mime or "image/jpeg"
         return [
             {"role": "system", "content": system_msg},
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": f"Analyze the scene and return JSON only.\\n\\n{context}"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
                 ],
             },
         ]
@@ -256,14 +296,17 @@ class VlmSummaryAgent:
             if not frame_payload:
                 stop_event.wait(0.1)
                 continue
-            image_b64 = None if VLM_DISABLE_IMAGE else get_frame_b64(frame_payload)
+            image_b64 = None
+            image_mime = None
+            if not VLM_DISABLE_IMAGE:
+                image_b64, image_mime = prepare_image_b64(frame_payload)
             if not image_b64 and not scene_text:
                 stop_event.wait(0.1)
                 continue
             self._last_request = now
             try:
                 start = time.time()
-                messages = build_messages(image_b64, scene_text, object_summary)
+                messages = build_messages(image_b64, image_mime, scene_text, object_summary)
                 source = "vlm" if image_b64 else "text"
                 raw_summary = self._request_summary(messages)
                 latency_ms = (time.time() - start) * 1000.0
@@ -276,7 +319,7 @@ class VlmSummaryAgent:
                 if image_b64 and scene_text:
                     try:
                         start = time.time()
-                        messages = build_messages(None, scene_text, object_summary)
+                        messages = build_messages(None, None, scene_text, object_summary)
                         raw_summary = self._request_summary(messages)
                         latency_ms = (time.time() - start) * 1000.0
                         summary = normalize_summary(raw_summary)
