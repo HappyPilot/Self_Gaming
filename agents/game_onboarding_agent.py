@@ -440,7 +440,7 @@ class GameOnboardingAgent:
 
     def _publish_schema(self, schema: Dict[str, object]):
         payload = {"ok": True, "schema": schema, "timestamp": time.time()}
-        self.client.publish(SCHEMA_TOPIC, json.dumps(payload))
+        self.client.publish(SCHEMA_TOPIC, json.dumps(payload), retain=True)
         if MEM_STORE_TOPIC:
             store_message = {
                 "op": "set",
