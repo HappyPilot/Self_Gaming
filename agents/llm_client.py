@@ -117,6 +117,7 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
             {"role": "system", "content": "You are a concise assistant that outputs only JSON."},
             {"role": "user", "content": prompt},
         ],
+        "response_format": {"type": "json_object"},
         "temperature": 0.2,
         "max_tokens": max(64, LLM_PROFILE_MAX_TOKENS),
     }
@@ -213,6 +214,7 @@ def fetch_visual_prompts(game_hint: str, texts: Optional[list] = None) -> Tuple[
             {"role": "system", "content": "You output only JSON."},
             {"role": "user", "content": prompt},
         ],
+        "response_format": {"type": "json_object"},
         "temperature": 0.2,
         "max_tokens": max(64, LLM_PROMPT_MAX_TOKENS),
     }
