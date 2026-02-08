@@ -272,7 +272,7 @@ def on_message(client, userdata, msg):
         logger.error(f"Error processing message: {e}")
 
 def mqtt_loop():
-    client = mqtt.Client(client_id="debug_stream", protocol=mqtt.MQTTv311)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="debug_stream")
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(MQTT_HOST, MQTT_PORT, 60)
@@ -305,7 +305,7 @@ def publish_loop():
     if not DEBUG_PUBLISH_ENABLED:
         logger.info("Debug publish disabled")
         return
-    client = mqtt.Client(client_id="debug_stream_pub", protocol=mqtt.MQTTv311)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="debug_stream_pub")
     client.connect(MQTT_HOST, MQTT_PORT, 60)
     client.loop_start()
     last_pub = 0.0

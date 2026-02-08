@@ -160,7 +160,7 @@ def decode_frame(payload: dict) -> Optional[np.ndarray]:
 class GameOnboardingAgent:
     def __init__(self):
         self.lock = threading.Lock()
-        self.client = mqtt.Client(client_id="game_onboarding", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="game_onboarding")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.frames: Deque[FrameRecord] = deque(maxlen=300)

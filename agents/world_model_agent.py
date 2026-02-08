@@ -88,7 +88,7 @@ class RecurrentWorldModel(nn.Module):
 
 class WorldModelAgent:
     def __init__(self):
-        self.client = mqtt.Client(client_id="world_model", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="world_model")
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect

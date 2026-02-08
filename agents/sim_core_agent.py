@@ -54,7 +54,7 @@ class Entity:
 
 class SimCoreAgent:
     def __init__(self) -> None:
-        self.client = mqtt.Client(client_id="sim_core", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="sim_core")
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.lock = threading.Lock()

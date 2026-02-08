@@ -151,7 +151,7 @@ def _on_message(client, _userdata, msg):
 
 
 def main() -> None:
-    client = mqtt.Client(client_id="skill_profiler", protocol=mqtt.MQTTv311)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="skill_profiler")
     client.on_connect = _on_connect
     client.on_message = _on_message
     client.connect(MQTT_HOST, MQTT_PORT, 30)

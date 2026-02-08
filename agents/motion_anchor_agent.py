@@ -81,7 +81,7 @@ def _resize_gray(frame: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
 
 class MotionAnchorAgent:
     def __init__(self) -> None:
-        self.client = mqtt.Client(client_id="motion_anchor", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="motion_anchor")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect

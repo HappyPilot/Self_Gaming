@@ -66,7 +66,7 @@ def _as_int(code) -> int:
 
 class ResearchAgent:
     def __init__(self) -> None:
-        self.client = mqtt.Client(client_id="research_agent", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="research_agent")
         self.client.on_connect = self.on_connect
         self.docs: List[str] = []
         self._load_docs()

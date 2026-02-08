@@ -113,7 +113,7 @@ class JepaPredictorAgent:
             logger.info("Startup jitter: sleeping %.2fs", delay)
             time.sleep(delay)
 
-        self.client = mqtt.Client(client_id="jepa_predictor", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="jepa_predictor")
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         

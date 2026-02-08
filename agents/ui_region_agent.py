@@ -69,7 +69,7 @@ def center_dist(a: List[float], b: List[float]) -> float:
 
 class UiRegionAgent:
     def __init__(self):
-        self.client = mqtt.Client(client_id="ui_region", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="ui_region")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.window: Deque[List[Tuple[List[float], float]]] = deque(maxlen=REGION_WINDOW)

@@ -118,7 +118,7 @@ def _on_message(client, _userdata, msg):
 
 
 def main() -> None:
-    client = mqtt.Client(client_id="game_identity_agent", protocol=mqtt.MQTTv311)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="game_identity_agent")
     client.on_connect = _on_connect
     client.on_message = _on_message
     if PUBLISH_FLAGS and BIND_MODE == "strict" and not BIND_GAME_ID:

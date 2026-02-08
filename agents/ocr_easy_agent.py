@@ -114,7 +114,7 @@ def _frame_hash(img: Image.Image) -> str:
 class OcrEasyAgent:
     def __init__(self):
         client_id = OCR_CLIENT_ID or f"ocr_easy_{socket.gethostname()}_{os.getpid()}"
-        self.client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id=client_id)
         self.client.on_connect = self._on_connect
         self.client.message_callback_add(VISION_SNAPSHOT, self._on_snapshot)
         self.client.message_callback_add(VISION_FRAME, self._on_frame)

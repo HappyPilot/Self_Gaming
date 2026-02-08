@@ -456,7 +456,7 @@ def build_pipeline():
 
 
 def main():
-    mqtt_client = mqtt.Client(client_id="deepstream_mqtt", protocol=mqtt.MQTTv311)
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="deepstream_mqtt")
     mqtt_client.connect(MQTT_HOST, MQTT_PORT, 30)
     mqtt_client.loop_start()
 

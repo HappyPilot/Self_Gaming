@@ -180,7 +180,7 @@ def _target_from_entry(entry):
 
 class PolicyBrainAgent:
     def __init__(self):
-        self.client = mqtt.Client(client_id="policy_brain", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="policy_brain")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
 

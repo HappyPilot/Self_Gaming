@@ -570,7 +570,7 @@ class PolicyAgent:
 
     def __init__(self):
         self.state_lock = threading.Lock()
-        self.client = mqtt.Client(client_id="policy", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="policy")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect

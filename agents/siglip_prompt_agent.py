@@ -225,7 +225,7 @@ def run() -> None:
     device = _resolve_device()
     scorer = SiglipPromptScorer(MODEL_ID, PROMPTS, device, FP16)
     current_prompts = list(PROMPTS)
-    client = mqtt.Client(client_id="siglip_prompt", protocol=mqtt.MQTTv311)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="siglip_prompt")
     client.on_connect = _on_connect
     client.on_message = _on_message
     client.connect(MQTT_HOST, MQTT_PORT, 60)

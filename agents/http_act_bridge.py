@@ -40,7 +40,7 @@ def _as_int(code) -> int:
 
 class HttpActBridge:
     def __init__(self):
-        self.client = mqtt.Client(client_id="http_act_bridge", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="http_act_bridge")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect

@@ -116,7 +116,7 @@ def _format_object(label: str, score: float, box: list, size: tuple):
 
 
 def run():
-    client = mqtt.Client(client_id="zeroshot_detector", protocol=mqtt.MQTTv311)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="zeroshot_detector")
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(MQTT_HOST, MQTT_PORT, 60)

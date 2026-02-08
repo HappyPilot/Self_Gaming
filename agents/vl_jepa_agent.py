@@ -300,7 +300,7 @@ def _frame_hash(data: bytes) -> Optional[int]:
 
 class VlJepaAgent:
     def __init__(self):
-        self.client = mqtt.Client(client_id="vl_jepa_agent", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="vl_jepa_agent")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect

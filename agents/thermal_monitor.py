@@ -23,7 +23,7 @@ ACTIVE_LIMIT = 3600.0
 
 class ThermalMonitor:
     def __init__(self) -> None:
-        self.client = mqtt.Client(client_id="thermal_monitor", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="thermal_monitor")
         self.active_time = 0.0
         self.cooldown_until = 0.0
 

@@ -229,7 +229,7 @@ def build_messages(image_b64: Optional[str], image_mime: Optional[str], scene_te
 
 class VlmSummaryAgent:
     def __init__(self) -> None:
-        self.client = mqtt.Client(client_id="vlm_summary", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="vlm_summary")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self._lock = threading.Lock()

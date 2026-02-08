@@ -179,7 +179,7 @@ class RollingJsonlWriter:
 
 class ExperienceLogger:
     def __init__(self) -> None:
-        self.client = mqtt.Client(client_id="experience_logger", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="experience_logger")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect

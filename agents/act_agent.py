@@ -51,7 +51,7 @@ def _as_int(code) -> int:
 
 class ActAgent:
     def __init__(self):
-        self.client = mqtt.Client(client_id="act_agent", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="act_agent")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.action_queue = queue.Queue(maxsize=ACTION_QUEUE_MAX)

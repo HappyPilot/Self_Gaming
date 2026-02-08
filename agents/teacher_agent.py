@@ -430,7 +430,7 @@ class LocalHTTPChatClient(BaseChatClient):
 
 class TeacherAgent:
     def __init__(self, mqtt_client: Optional[mqtt.Client] = None, llm_client: Optional[BaseChatClient] = None, mem_client: Optional[MemRPC] = None):
-        self.client = mqtt_client or mqtt.Client(client_id="teacher_agent", protocol=mqtt.MQTTv311)
+        self.client = mqtt_client or mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="teacher_agent")
         self.client.on_connect, self.client.on_message, self.client.on_disconnect = self._on_connect, self._on_message, self._on_disconnect
         self.llm = llm_client
         self.scene: Optional[Dict] = None

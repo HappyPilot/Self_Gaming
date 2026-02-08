@@ -65,7 +65,7 @@ def clamp01(v: float) -> float:
 
 class SimpleOcrAgent:
     def __init__(self):
-        self.client = mqtt.Client(client_id="simple_ocr", protocol=mqtt.MQTTv311)
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id="simple_ocr")
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.last_frame = None
