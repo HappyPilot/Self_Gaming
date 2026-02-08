@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Dict, Optional, Tuple
 
 import requests
@@ -18,6 +19,7 @@ LLM_PROFILE_MAX_TOKENS = int(os.getenv("LLM_PROFILE_MAX_TOKENS", "240"))
 LLM_GAME_ID_MAX_TOKENS = int(os.getenv("LLM_GAME_ID_MAX_TOKENS", "30"))
 LLM_PROMPT_MAX_TOKENS = int(os.getenv("LLM_PROMPT_MAX_TOKENS", "180"))
 LLM_DETECT_GAME = os.getenv("LLM_DETECT_GAME", "1") != "0"
+LLM_PARSE_LOG = os.getenv("LLM_PARSE_LOG", "/tmp/llm_parse_failed.jsonl")
 _RESOLVED_MODEL: Optional[str] = None
 
 
@@ -57,8 +59,12 @@ def _resolve_model() -> str:
 
 def _extract_json(text: str) -> Optional[dict]:
     """Try to extract JSON object from free-form text (possibly inside ``` blocks)."""
+    if isinstance(text, dict):
+        return text
     if not text:
         return None
+    if not isinstance(text, str):
+        text = str(text)
     # Grab content inside code fences if present.
     fence_match = re.search(r"```(?:json)?(.*?)```", text, re.DOTALL | re.IGNORECASE)
     candidate = fence_match.group(1) if fence_match else text
@@ -73,8 +79,36 @@ def _extract_json(text: str) -> Optional[dict]:
         if start >= 0 and end > start:
             return json.loads(candidate[start : end + 1])
     except Exception:
+        pass
+    try:
+        import ast
+
+        parsed = ast.literal_eval(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
         return None
     return None
+
+
+def _log_parse_failure(kind: str, raw: str) -> None:
+    path = (LLM_PARSE_LOG or "").strip()
+    if not path:
+        return
+    try:
+        preview = raw if isinstance(raw, str) else str(raw)
+        if len(preview) > 4000:
+            preview = preview[:4000]
+        payload = {
+            "ts": time.time(),
+            "kind": kind,
+            "raw_len": len(str(raw)) if raw is not None else 0,
+            "raw": preview,
+        }
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        return
 
 
 def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple[Optional[dict], str]:
@@ -103,6 +137,7 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
         "Rules: be conservative; avoid system keys; keep allowed_keys_safe short and game-safe.\n"
         "Only include WASD if the game is known to use WASD by default. For click-to-move ARPGs, prefer QWERT + 1-5.\n"
         "Put inventory/map/menu keys in allowed_keys_extended (not in safe).\n"
+        "Do not include any other keys or extra fields (e.g., bindings).\n"
         f"Game hint: {game_hint or 'unknown'}.\n"
         f"On-screen texts: {texts[:12]}.\n"
         "JSON only, no prose."
@@ -117,6 +152,7 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
             {"role": "system", "content": "You are a concise assistant that outputs only JSON."},
             {"role": "user", "content": prompt},
         ],
+        "response_format": {"type": "json_object"},
         "temperature": 0.2,
         "max_tokens": max(64, LLM_PROFILE_MAX_TOKENS),
     }
@@ -128,6 +164,7 @@ def fetch_control_profile(game_hint: str, texts: Optional[list] = None) -> Tuple
         content = data["choices"][0]["message"]["content"]
         parsed = _extract_json(content)
         if not isinstance(parsed, dict):
+            _log_parse_failure("control_profile", content)
             return None, "llm_parse_failed"
         return parsed, "llm_ok"
     except Exception as exc:
@@ -213,6 +250,7 @@ def fetch_visual_prompts(game_hint: str, texts: Optional[list] = None) -> Tuple[
             {"role": "system", "content": "You output only JSON."},
             {"role": "user", "content": prompt},
         ],
+        "response_format": {"type": "json_object"},
         "temperature": 0.2,
         "max_tokens": max(64, LLM_PROMPT_MAX_TOKENS),
     }
@@ -224,6 +262,7 @@ def fetch_visual_prompts(game_hint: str, texts: Optional[list] = None) -> Tuple[
         content = data["choices"][0]["message"]["content"]
         parsed = _extract_json(content)
         if not isinstance(parsed, dict):
+            _log_parse_failure("visual_prompts", content)
             return None, "llm_parse_failed"
         return parsed, "llm_ok"
     except Exception as exc:

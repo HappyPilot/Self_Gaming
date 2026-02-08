@@ -87,6 +87,58 @@ ONBOARD_REQUEST_LLM_PROMPTS=1
 `OCR_LANGS` defaults to `en` to reduce OCR latency and false positives.
 Enable more languages by overriding `OCR_LANGS` in your local env file.
 
+## OCR quality tuning (full frames + snapshot bypass)
+For higher-fidelity OCR on small UI text, switch OCR to full-resolution frames and skip snapshots:
+```bash
+OCR_FRAME_TOPIC=vision/frame/full
+OCR_PREFER_SNAPSHOT=0
+OCR_MAX_BASE_WIDTH=1280
+```
+`OCR_MAX_BASE_WIDTH=0` disables downscaling entirely (use with care on Jetson CPU).
+
+## OCR fuzzy matching for death/respawn dialogs
+If OCR is noisy, enable skeleton matching so "resurrect at checkpoint" still matches:
+```bash
+RESPAWN_SKELETON_THRESHOLD=0.72
+RESPAWN_SKELETON_MIN_LEN=6
+TEACHER_RESPAWN_SKELETON_THRESHOLD=0.72
+SCENE_DEATH_SKELETON_THRESHOLD=0.72
+```
+
+## OCR temporal aggregation (majority vote)
+To stabilize noisy text, aggregate OCR over a short window (3–5 frames):
+```bash
+OCR_AGG_WINDOW=3
+OCR_AGG_MIN_VOTES=2
+OCR_AGG_GRID=12
+```
+This bins OCR text by screen position and keeps tokens that repeat across frames.
+
+## OCR fallback (easyocr on empty results)
+If paddle OCR returns no text, enable a lightweight fallback pass:
+```bash
+OCR_FALLBACK_ON_EMPTY=1
+OCR_FALLBACK_MIN_RESULTS=1
+OCR_FALLBACK_BACKEND=easyocr
+```
+
+## Curiosity reward (world-model or embedding fallback)
+If the world-model pred error is unavailable, reward can use embedding drift from progress:
+```bash
+CURIOSITY_MODE=auto
+CURIOSITY_PRED_TIMEOUT_SEC=30
+CURIOSITY_EMBED_WEIGHT=0.08
+CURIOSITY_EMBED_SCALE=1.0
+CURIOSITY_EMBED_MAX=0.15
+```
+
+## OCR quality report tool
+Use the probe script to sample OCR output and save frames for review:
+```bash
+python3 agents/tools/ocr_quality_report.py --samples 30 --interval 2 --request --save-frames
+```
+It writes JSONL to `logs/ocr_report/ocr_report.jsonl` and saves frames alongside.
+
 ## Policy targeting overrides
 Use these when the policy gets stuck on generic mouse_move actions:
 ```bash

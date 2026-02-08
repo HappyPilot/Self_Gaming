@@ -251,9 +251,10 @@ services:
     - mq
     - vision
     - scene
-    - ocr_easy
   ocr:
     container_name: ocr_agent
+    profiles:
+    - heavy
     build:
       context: .
       dockerfile: docker/ocr/Dockerfile
@@ -288,6 +289,8 @@ services:
       start_period: 30s
   ocr_easy:
     container_name: ocr_easy_agent
+    profiles:
+    - heavy
     build:
       context: .
       dockerfile: docker/ocr_easy/Dockerfile
@@ -308,15 +311,15 @@ services:
     - OCR_LANGS=en
     - OCR_DEBUG_SAVE=0
     - OCR_DEBUG_DIR=/tmp/ocr_debug
-    - OCR_SCALE_FACTOR=1.0
-    - OCR_MAX_BASE_WIDTH=640
-    - OCR_GAMMA=1.0
-    - OCR_MIN_ALPHA_RATIO=0.1
-    - OCR_MAX_LINE_CHARS=400
-    - OCR_MAX_RESULTS=6
-    - OCR_VARIANT_THRESHOLD=off
-    - OCR_AUTO_INTERVAL=6.0
-    - OCR_AUTO_TIMEOUT=5.0
+    - OCR_SCALE_FACTOR=${OCR_SCALE_FACTOR:-1.0}
+    - OCR_MAX_BASE_WIDTH=${OCR_MAX_BASE_WIDTH:-640}
+    - OCR_GAMMA=${OCR_GAMMA:-1.0}
+    - OCR_MIN_ALPHA_RATIO=${OCR_MIN_ALPHA_RATIO:-0.1}
+    - OCR_MAX_LINE_CHARS=${OCR_MAX_LINE_CHARS:-400}
+    - OCR_MAX_RESULTS=${OCR_MAX_RESULTS:-6}
+    - OCR_VARIANT_THRESHOLD=${OCR_VARIANT_THRESHOLD:-off}
+    - OCR_AUTO_INTERVAL=${OCR_AUTO_INTERVAL:-6.0}
+    - OCR_AUTO_TIMEOUT=${OCR_AUTO_TIMEOUT:-5.0}
     - OMP_NUM_THREADS=1
     - OPENBLAS_NUM_THREADS=1
     - MKL_NUM_THREADS=1
@@ -335,6 +338,8 @@ services:
       start_period: 30s
   ui_region:
     container_name: ui_region_agent
+    profiles:
+    - heavy
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
@@ -361,6 +366,8 @@ services:
     - mq
   simple_ocr:
     container_name: simple_ocr_agent
+    profiles:
+    - heavy
     build:
       context: .
       dockerfile: docker/simple_ocr/Dockerfile
@@ -377,19 +384,19 @@ services:
     environment:
     - MQTT_HOST=127.0.0.1
     - MQTT_PORT=1883
-    - SIMPLE_OCR_INTERVAL=2.5
-    - FRAME_TOPIC=vision/frame/preview
-    - OCR_REGIONS_TOPIC=ocr/regions
-    - OCR_UNIFIED_TOPIC=ocr/unified
-    - REGION_TTL_SEC=5.0
-    - PUBLISH_EMPTY=1
-    - MAX_REGIONS=3
-    - SIMPLE_OCR_UPSCALE=1.3
-    - SIMPLE_OCR_CONTRAST=2.0
-    - SIMPLE_OCR_SHARPEN=2.3
-    - SIMPLE_OCR_TESS_CONFIG=-l eng --psm 6 --oem 1
-    - SIMPLE_OCR_DEBUG=0
-    - ROI_DEBUG_DIR=/tmp/ocr_roi_debug
+    - SIMPLE_OCR_INTERVAL=${SIMPLE_OCR_INTERVAL:-2.5}
+    - FRAME_TOPIC=${SIMPLE_OCR_FRAME_TOPIC:-vision/frame/preview}
+    - OCR_REGIONS_TOPIC=${OCR_REGIONS_TOPIC:-ocr/regions}
+    - OCR_UNIFIED_TOPIC=${OCR_UNIFIED_TOPIC:-ocr/unified}
+    - REGION_TTL_SEC=${REGION_TTL_SEC:-5.0}
+    - PUBLISH_EMPTY=${PUBLISH_EMPTY:-1}
+    - MAX_REGIONS=${MAX_REGIONS:-3}
+    - SIMPLE_OCR_UPSCALE=${SIMPLE_OCR_UPSCALE:-1.3}
+    - SIMPLE_OCR_CONTRAST=${SIMPLE_OCR_CONTRAST:-2.0}
+    - SIMPLE_OCR_SHARPEN=${SIMPLE_OCR_SHARPEN:-2.3}
+    - SIMPLE_OCR_TESS_CONFIG=${SIMPLE_OCR_TESS_CONFIG:--l eng --psm 6 --oem 1}
+    - SIMPLE_OCR_DEBUG=${SIMPLE_OCR_DEBUG:-0}
+    - ROI_DEBUG_DIR=${ROI_DEBUG_DIR:-/tmp/ocr_roi_debug}
     depends_on:
     - mq
     - vision
@@ -402,6 +409,7 @@ services:
     restart: unless-stopped
     profiles:
     - experimental
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -455,9 +463,8 @@ services:
     depends_on:
     - mq
     - vision
-    - ocr
-    - ocr_easy
-    - simple_ocr
+    - vl_jepa
+    - siglip_prompt
   embedding_guard:
     container_name: embedding_guard
     image: local/policy-agent:latest
@@ -814,7 +821,6 @@ services:
     - LOG_MONITOR_INTERVAL=5
     depends_on:
     - mq
-    - object_detection
   game_identity:
     container_name: game_identity_agent
     image: local/policy-agent:latest
@@ -886,6 +892,8 @@ services:
     runtime: nvidia
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - legacy
     working_dir: /app
     volumes:
     - /mnt/ssd/models:/mnt/ssd/models
@@ -966,7 +974,7 @@ services:
     network_mode: host
     restart: unless-stopped
     profiles:
-    - experimental
+    - heavy
     working_dir: /app
     entrypoint:
     - python3
@@ -984,7 +992,7 @@ services:
     - PERCEPTION_TOPIC=vision/observation
     - YOLO11_WEIGHTS=/mnt/ssd/models/yolo/yolov8s-worldv2.pt
     - YOLO11_DEVICE=cpu
-    - YOLO11_CONF=0.01
+    - YOLO11_CONF=0.05
     - YOLO11_IMGSZ=320
     - YOLO_MAX_SIZE=320
     - YOLO_CLASS_PATH=/mnt/ssd/models/yolo/coco.names
@@ -1218,6 +1226,8 @@ services:
     runtime: nvidia
     network_mode: host
     privileged: true
+    profiles:
+    - heavy
     devices:
     - ${DS_V4L2_DEVICE:-/dev/video0}:${DS_V4L2_DEVICE:-/dev/video0}
     - /dev/v4l:/dev/v4l
@@ -1255,6 +1265,8 @@ services:
     image: local/policy-agent:latest
     network_mode: host
     restart: unless-stopped
+    profiles:
+    - legacy
     working_dir: /app
     entrypoint:
     - python3
@@ -1271,6 +1283,30 @@ services:
     depends_on:
     - mq
     - object_detection
+  observation_logger:
+    container_name: observation_logger
+    image: local/policy-agent:latest
+    network_mode: host
+    restart: unless-stopped
+    profiles:
+    - logging
+    working_dir: /app
+    entrypoint:
+    - python3
+    - /repo/tools/snapshot_logger.py
+    volumes:
+    - ./agents:/app
+    - ./:/repo
+    - /mnt/ssd/logs:/mnt/ssd/logs
+    env_file: *id001
+    environment:
+    - MQTT_HOST=127.0.0.1
+    - MQTT_PORT=1883
+    - YOLO_LOG_TOPIC=vision/observation
+    - YOLO_LOG_DIR=/mnt/ssd/logs/yolo
+    - YOLO_LOG_FILE=vision_observation.log
+    depends_on:
+    - mq
   system_health:
     container_name: system_health_agent
     image: local/policy-agent:latest
