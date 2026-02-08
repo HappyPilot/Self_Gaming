@@ -93,6 +93,7 @@ SIM_TOPIC = os.getenv("SIM_TOPIC", "sim_core/state")
 GOAP_TOPIC = os.getenv("GOAP_TASK_TOPIC", "goap/tasks")
 CONTROL_TOPIC = os.getenv("ACT_TOPIC", "control/keys")
 ACT_CMD_TOPIC = os.getenv("ACT_CMD_TOPIC", "act/cmd")
+ACT_RESULT_TOPIC = os.getenv("ACT_RESULT_TOPIC", "act/result")
 TEACHER_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action")
 CHECKPOINT_TOPIC = os.getenv("CHECKPOINT_TOPIC", "train/checkpoints")
 PROGRESS_TOPIC = os.getenv("PROGRESS_TOPIC", "progress/status")
@@ -113,6 +114,7 @@ TEACHER_TARGET_PRIORITY = os.getenv("TEACHER_TARGET_PRIORITY", "1") != "0"
 TEACHER_TARGET_AUTOCLICK = os.getenv("TEACHER_TARGET_AUTOCLICK", "0") != "0"
 TEACHER_TARGET_AUTOCLICK_COOLDOWN = float(os.getenv("TEACHER_TARGET_AUTOCLICK_COOLDOWN", "2.0"))
 TEACHER_TARGET_AUTOCLICK_SAME_TOL = float(os.getenv("TEACHER_TARGET_AUTOCLICK_SAME_TOL", "0.04"))
+TEACHER_GENERIC_OVERRIDE_PROB = float(os.getenv("TEACHER_GENERIC_OVERRIDE_PROB", "0.2"))
 MOUSE_RANGE = int(os.getenv("POLICY_MOUSE_RANGE", "60"))
 MIN_MOUSE_DELTA = int(os.getenv("POLICY_MIN_MOUSE_DELTA", "8"))
 CLICK_COOLDOWN = float(os.getenv("POLICY_CLICK_COOLDOWN", "0.75"))
@@ -148,8 +150,20 @@ SCREEN_HEIGHT = int(os.getenv("POLICY_SCREEN_HEIGHT", "1080"))
 CURSOR_OFFSET_X = int(os.getenv("POLICY_OFFSET_X", "0"))
 CURSOR_OFFSET_Y = int(os.getenv("POLICY_OFFSET_Y", "0"))
 CURSOR_TOPIC = os.getenv("CURSOR_TOPIC", "cursor/state")
+POLICY_USE_CURSOR = os.getenv("POLICY_USE_CURSOR", "1") != "0"
 CURSOR_TIMEOUT_SEC = float(os.getenv("CURSOR_TIMEOUT_SEC", "1.2"))
 CURSOR_TOLERANCE = float(os.getenv("CURSOR_TOLERANCE", "0.02"))
+MOTION_ANCHOR_TOPIC = os.getenv("MOTION_ANCHOR_TOPIC", "vision/anchors")
+MOTION_ANCHOR_TTL = float(os.getenv("MOTION_ANCHOR_TTL", "2.0"))
+POLICY_OPTION_LAYER_ENABLED = os.getenv("POLICY_OPTION_LAYER_ENABLED", "1") != "0"
+POLICY_OPTION_MEMORY_ENABLED = os.getenv("POLICY_OPTION_MEMORY_ENABLED", "1") != "0"
+POLICY_OPTION_MEMORY_MAX_STATES = max(16, int(os.getenv("POLICY_OPTION_MEMORY_MAX_STATES", "512")))
+POLICY_OPTION_MEMORY_MIN_TRIES = max(1, int(os.getenv("POLICY_OPTION_MEMORY_MIN_TRIES", "1")))
+POLICY_OPTION_MEMORY_MIN_HIT_RATE = float(os.getenv("POLICY_OPTION_MEMORY_MIN_HIT_RATE", "0.6"))
+POLICY_OPTION_MEMORY_MAX_AGE_SEC = float(os.getenv("POLICY_OPTION_MEMORY_MAX_AGE_SEC", "1800.0"))
+POLICY_OPTION_MEMORY_MAX_REPEAT = max(1, int(os.getenv("POLICY_OPTION_MEMORY_MAX_REPEAT", "4")))
+POLICY_OPTION_MEMORY_REPEAT_COOLDOWN_SEC = float(os.getenv("POLICY_OPTION_MEMORY_REPEAT_COOLDOWN_SEC", "2.0"))
+POLICY_OPTION_EXPLORE_RADIUS = float(os.getenv("POLICY_OPTION_EXPLORE_RADIUS", "0.08"))
 HOVER_VERIFY_ENABLED = os.getenv("POLICY_HOVER_VERIFY", "1") != "0"
 HOVER_FUZZY_THRESHOLD = float(os.getenv("POLICY_HOVER_FUZZY_THRESHOLD", "0.65"))
 HOVER_FAIL_LIMIT = int(os.getenv("POLICY_HOVER_FAIL_LIMIT", "5"))
@@ -163,7 +177,7 @@ SHOP_SUPPRESS = os.getenv("SHOP_SUPPRESS", "0") != "0"
 SHOP_SUPPRESS_DEATH_ONLY = os.getenv("SHOP_SUPPRESS_DEATH_ONLY", "1") != "0"
 FEEDBACK_SETTLE_SEC = float(os.getenv("POLICY_FEEDBACK_SETTLE_SEC", "1.0"))
 POLICY_GAME_KEYWORDS = _parse_env_list(
-    os.getenv("POLICY_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map")
+    os.getenv("POLICY_GAME_KEYWORDS", "health,hp,mana,xp,score,level,ammo,inventory,quest,map,target,enemy,boss,start,menu")
 )
 POLICY_REQUIRE_IN_GAME = os.getenv("POLICY_REQUIRE_IN_GAME", "0") != "0"
 POLICY_REQUIRE_IN_GAME_STRICT = os.getenv("POLICY_REQUIRE_IN_GAME_STRICT", "0") != "0"
@@ -172,14 +186,21 @@ POLICY_EMBED_MAX_AGE_SEC = float(os.getenv("POLICY_EMBED_MAX_AGE_SEC", "5.0"))
 POLICY_MEANINGFUL_FALLBACK = os.getenv("POLICY_MEANINGFUL_FALLBACK", "0") != "0"
 POLICY_PREFER_TARGETS = os.getenv("POLICY_PREFER_TARGETS", "1") != "0"
 POLICY_RANDOM_FALLBACK = os.getenv("POLICY_RANDOM_FALLBACK", "1") != "0"
+PROACTIVE_IDLE_CHANCE = float(os.getenv("PROACTIVE_IDLE_CHANCE", "0.4"))
+PROACTIVE_IDLE_RADIUS = float(os.getenv("PROACTIVE_IDLE_RADIUS", "0.08"))
+PROACTIVE_IDLE_MOVE_PROB = float(os.getenv("PROACTIVE_IDLE_MOVE_PROB", "0.7"))
+POLICY_WAIT_STREAK_BREAK_ENABLED = os.getenv("POLICY_WAIT_STREAK_BREAK_ENABLED", "1") != "0"
+POLICY_WAIT_STREAK_BREAK_THRESHOLD = max(1, int(os.getenv("POLICY_WAIT_STREAK_BREAK_THRESHOLD", "8")))
 POLICY_USE_OCR_TARGETS = os.getenv("POLICY_USE_OCR_TARGETS", "1") != "0"
 POLICY_ENEMY_SKILL_SUBSTITUTE = os.getenv("POLICY_ENEMY_SKILL_SUBSTITUTE", "1") != "0"
 POLICY_ENEMY_SKILL_MIN_INTERVAL = float(os.getenv("POLICY_ENEMY_SKILL_MIN_INTERVAL", "0.4"))
+POLICY_ENEMY_MIN_CONF = float(os.getenv("POLICY_ENEMY_MIN_CONF", "0.12"))
 POLICY_COMBAT_AIM = os.getenv("POLICY_COMBAT_AIM", "1") != "0"
 POLICY_SKILL_EPS = float(os.getenv("POLICY_SKILL_EPS", "0.15"))
 POLICY_SKILL_FEEDBACK_SEC = float(os.getenv("POLICY_SKILL_FEEDBACK_SEC", "0.7"))
 POLICY_ENEMY_CLUSTER_MIN = int(os.getenv("POLICY_ENEMY_CLUSTER_MIN", "3"))
 POLICY_ENEMY_BAR_MIN_DELTA = float(os.getenv("POLICY_ENEMY_BAR_MIN_DELTA", "0.002"))
+TEACHER_KEY_CONFIRM_HITS = int(os.getenv("TEACHER_KEY_CONFIRM_HITS", "1"))
 POLICY_INCLUDE_EXTENDED_KEYS = os.getenv("POLICY_INCLUDE_EXTENDED_KEYS", "1") != "0"
 POLICY_EXTENDED_KEYS_ALLOW = {
     item.strip().lower()
@@ -194,6 +215,19 @@ POLICY_FALLBACK_SKILL_KEYS = [
 POLICY_USE_UI_LAYOUT = os.getenv("POLICY_USE_UI_LAYOUT", "1") != "0"
 POLICY_SKILL_KEYS = [item.strip().lower() for item in os.getenv("POLICY_SKILL_KEYS", "q,w,e,r,1,2,3,4,5").split(",") if item.strip()]
 POLICY_DIALOG_SCORE_MIN = float(os.getenv("POLICY_DIALOG_SCORE_MIN", "0.01"))
+POLICY_INTENT_ENABLED = os.getenv("POLICY_INTENT_ENABLED", "1") != "0"
+POLICY_INTENT_MIN_SEC = float(os.getenv("POLICY_INTENT_MIN_SEC", "1.0"))
+POLICY_INTENT_DIALOG_SCORE = float(os.getenv("POLICY_INTENT_DIALOG_SCORE", "0.01"))
+POLICY_INTENT_ENEMY_SCORE = float(os.getenv("POLICY_INTENT_ENEMY_SCORE", "0.01"))
+POLICY_INTENT_INTERACT_SCORE = float(os.getenv("POLICY_INTENT_INTERACT_SCORE", "0.01"))
+POLICY_INTENT_NAV_SCORE = float(os.getenv("POLICY_INTENT_NAV_SCORE", "0.01"))
+POLICY_INTENT_COMBAT_LABELS = _parse_env_list(os.getenv("POLICY_INTENT_COMBAT_LABELS", "enemy,boss,monster,hostile"))
+POLICY_INTENT_INTERACT_LABELS = _parse_env_list(
+    os.getenv("POLICY_INTENT_INTERACT_LABELS", "loot,chest,npc,vendor,shop,door,gate,exit,dialog_button,ui_button,item,pickup,corpse")
+)
+POLICY_INTENT_NAV_LABELS = _parse_env_list(
+    os.getenv("POLICY_INTENT_NAV_LABELS", "waypoint,portal,quest,quest_marker,objective,objective_marker,door,gate,exit")
+)
 RESPAWN_TEXTS = _parse_env_list(
     os.getenv("RESPAWN_TRIGGER_TEXTS", "resurrect at checkpoint,resurrect in town,resurrect")
 )
@@ -208,6 +242,7 @@ RESPAWN_MACRO_MOVE_STEPS = int(os.getenv("RESPAWN_MACRO_MOVE_STEPS", "2"))
 RESPAWN_MACRO_MOVE_DELAY = float(os.getenv("RESPAWN_MACRO_MOVE_DELAY", "0.1"))
 RESPAWN_MACRO_CLICK_COUNT = int(os.getenv("RESPAWN_MACRO_CLICK_COUNT", "3"))
 RESPAWN_MACRO_CLICK_DELAY = float(os.getenv("RESPAWN_MACRO_CLICK_DELAY", "0.15"))
+RESPAWN_MACRO_PRE_CLICK_DELAY = float(os.getenv("RESPAWN_MACRO_PRE_CLICK_DELAY", "1.5"))
 RESPAWN_MACRO_SETTLE_SEC = float(os.getenv("RESPAWN_MACRO_SETTLE_SEC", "1.5"))
 POLICY_SCENE_MAX_AGE = float(os.getenv("POLICY_SCENE_MAX_AGE", "3.0"))
 ACTIVE_TARGET_TTL = float(os.getenv("POLICY_TARGET_TTL", "1.5"))
@@ -239,6 +274,7 @@ POLICY_EXPLORATION_MOUSE_RANGE = int(os.getenv("POLICY_EXPLORATION_MOUSE_RANGE",
 POLICY_EXPLORATION_KEY_BURST = os.getenv("POLICY_EXPLORATION_KEY_BURST", "0") != "0"
 POLICY_EXPLORATION_KEY_BURST_COUNT = int(os.getenv("POLICY_EXPLORATION_KEY_BURST_COUNT", "2"))
 POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC = float(os.getenv("POLICY_EXPLORATION_KEY_BURST_COOLDOWN_SEC", "600"))
+POLICY_CLICK_TO_MOVE = os.getenv("POLICY_CLICK_TO_MOVE", "0") != "0"
 
 DEFAULT_ACTIONS = [
     "wait",
@@ -402,13 +438,71 @@ def encode_non_visual(state: Dict) -> torch.Tensor:
     numeric = torch.zeros(NUMERIC_DIM, dtype=torch.float32)
     objects = state.get("objects") or []
     text_entries = _gather_scene_texts(state)
+    roles = state.get("roles") if isinstance(state, dict) else {}
+    role_stats = roles.get("stats") if isinstance(roles, dict) else {}
+    
+    # 0: Mean brightness
     numeric[0] = float(state.get("mean", state.get("mean_brightness", 0.0)))
+    # 1: Total object count
     numeric[1] = float(len(objects))
-    numeric[2] = float(len(text_entries))
+    # 2: Enemy count (from stats or manual count)
     stats = state.get("stats") or {}
-    numeric[3] = float(stats.get("hp_pct", 0.0))
-    numeric[4] = float(stats.get("enemy_count", 0.0))
-    numeric[5] = float(stats.get("loot_count", 0.0))
+    enemy_count = stats.get("enemy_count")
+    if enemy_count is None:
+        enemy_count = role_stats.get("hostile_count") if isinstance(role_stats, dict) else None
+    if enemy_count is None:
+        enemies = state.get("enemies") or []
+        enemy_count = len(enemies) if isinstance(enemies, list) else None
+    if enemy_count is None:
+        enemy_count = sum(
+            1
+            for obj in objects
+            if any(kw in str(obj.get(field, "")).lower() for field in ("class", "label") for kw in ("enemy", "monster", "boss", "hostile"))
+        )
+    numeric[2] = float(enemy_count)
+    # 3: Loot count (from stats or manual count)
+    loot_count = stats.get("loot_count")
+    if loot_count is None:
+        loot_count = role_stats.get("interactable_count") if isinstance(role_stats, dict) else None
+    if loot_count is None:
+        loot_count = sum(
+            1
+            for obj in objects
+            if any(kw in str(obj.get(field, "")).lower() for field in ("class", "label") for kw in ("loot", "item", "chest", "pickup"))
+        )
+    numeric[3] = float(loot_count)
+    # 4: Text entries count
+    numeric[4] = float(len(text_entries))
+    
+    def normalize_stat(info):
+        if not isinstance(info, dict):
+            return 0.0
+        cur = float(info.get("current", 0))
+        # If it's a ratio (X/Y or X%), use simple division
+        if not info.get("is_plain_value") and info.get("max", 0) > 0:
+            return cur / float(info["max"])
+        # Option 1: Percent+Log for plain values
+        if cur <= 100:
+            return cur / 100.0
+        else:
+            return min(1.0, math.log1p(cur) / math.log1p(1000))
+
+    # 5, 6, 7: Generic Stats from resources
+    resources = state.get("resources") or {}
+    stat_values = []
+    # Prioritize known important stats
+    for key in ["life", "hp", "mana", "xp"]:
+        if key in resources:
+            stat_values.append(normalize_stat(resources[key]))
+    
+    # Fill remaining slots
+    for key, info in resources.items():
+        if key not in ["life", "hp", "mana", "xp"] and len(stat_values) < 3:
+            stat_values.append(normalize_stat(info))
+    
+    for i, val in enumerate(stat_values[:3]):
+        numeric[5 + i] = val
+    
     vector[:NUMERIC_DIM] = numeric
 
     hist = torch.zeros(OBJECT_HIST_DIM, dtype=torch.float32)
@@ -456,6 +550,18 @@ def _gather_scene_texts(state: Dict) -> List[str]:
                 continue
             entries.append(f"{name}:{cur}/{maxv}")
     return entries
+
+
+def _state_role_hostiles(state: Optional[dict]) -> List[dict]:
+    if not isinstance(state, dict):
+        return []
+    roles = state.get("roles")
+    if not isinstance(roles, dict):
+        return []
+    hostiles = roles.get("hostiles")
+    if isinstance(hostiles, list):
+        return [entry for entry in hostiles if isinstance(entry, dict)]
+    return []
 
 
 class PolicyAgent:
@@ -525,6 +631,18 @@ class PolicyAgent:
         self.desktop_keywords = set(DESKTOP_KEYWORDS)
         self.last_scene_block_reason: Optional[str] = None
         self.forbidden_until = 0.0
+        self.intent_enabled = POLICY_INTENT_ENABLED
+        self.intent_min_sec = max(0.0, POLICY_INTENT_MIN_SEC)
+        self.intent_dialog_score = POLICY_INTENT_DIALOG_SCORE
+        self.intent_enemy_score = POLICY_INTENT_ENEMY_SCORE
+        self.intent_interact_score = POLICY_INTENT_INTERACT_SCORE
+        self.intent_nav_score = POLICY_INTENT_NAV_SCORE
+        self.intent_combat_labels = {_normalize_phrase(label) for label in POLICY_INTENT_COMBAT_LABELS if label}
+        self.intent_interact_labels = {_normalize_phrase(label) for label in POLICY_INTENT_INTERACT_LABELS if label}
+        self.intent_nav_labels = {_normalize_phrase(label) for label in POLICY_INTENT_NAV_LABELS if label}
+        self.current_intent: Optional[str] = None
+        self.intent_reason: Optional[str] = None
+        self.intent_last_change_ts = 0.0
         self.respawn_keywords = {_normalize_phrase(text) for text in RESPAWN_TEXTS if text}
         self.respawn_pending = False
         self.last_respawn_ts = 0.0
@@ -533,6 +651,7 @@ class PolicyAgent:
         self.respawn_macro_queue: Deque[Tuple[float, Dict[str, object]]] = deque()
         self.respawn_macro_active = False
         self.respawn_macro_block_until = 0.0
+        self.respawn_target_norm = [RESPAWN_TARGET_X, RESPAWN_TARGET_Y]
         self.latest_cursor = {}
         self.control_ready_window: Deque[int] = deque(maxlen=CONTROL_READY_WINDOW)
         self.control_tick_count = 0
@@ -546,6 +665,15 @@ class PolicyAgent:
         self.exploration_key_cooldown_until = 0.0
         self.recent_action_labels: Deque[str] = deque(maxlen=POLICY_EXPLORATION_REPEAT_WINDOW)
         self.last_autoclick = None
+        self.consecutive_moves = 0
+        self.consecutive_waits = 0
+        self.motion_anchor: Optional[dict] = None
+        self.option_memory: Dict[str, Dict[str, object]] = {}
+        self.option_memory_repeat_sig: Optional[str] = None
+        self.option_memory_repeat_count = 0
+        self.option_memory_repeat_block_until = 0.0
+        self.last_published_state_key: Optional[str] = None
+        self.last_published_action: Optional[Dict[str, object]] = None
         if self.hot_reload_enabled and not self.lazy_load_enabled:
             self._initial_model_load()
             self.model_load_attempted = True
@@ -743,6 +871,10 @@ class PolicyAgent:
             subscriptions.append((GAME_SCHEMA_TOPIC, 0))
         if CURSOR_TOPIC:
             subscriptions.append((CURSOR_TOPIC, 0))
+        if MOTION_ANCHOR_TOPIC:
+            subscriptions.append((MOTION_ANCHOR_TOPIC, 0))
+        if ACT_RESULT_TOPIC:
+            subscriptions.append((ACT_RESULT_TOPIC, 0))
         if rc == 0:
             client.subscribe(subscriptions)
             logger.info(
@@ -770,6 +902,15 @@ class PolicyAgent:
 
             if msg.topic == TEACHER_TOPIC:
                 if isinstance(data, dict):
+                    # Update game_id from teacher if not already set or changed
+                    teacher_game_id = data.get("game_id") or data.get("context_game")
+                    if teacher_game_id and teacher_game_id != self.game_id:
+                        normalized = _normalize_game_id(str(teacher_game_id))
+                        if normalized and normalized != "unknown_game":
+                            self.game_id = normalized
+                            logger.info("Policy game_id updated from teacher: %s", self.game_id)
+                            self._maybe_refresh_profile_keys(self.game_id, "teacher_update")
+
                     raw_action = data.get("action") or data.get("text")
                     action_obj = raw_action if isinstance(raw_action, dict) else None
                     action_text = raw_action if isinstance(raw_action, str) else None
@@ -874,6 +1015,7 @@ class PolicyAgent:
                     allowed = profile.get("allowed_keys") if isinstance(profile, dict) else None
                     if isinstance(allowed, list):
                         ordered = [str(k).lower() for k in allowed if k]
+                        ordered = [k for k in ordered if self._skill_key_confirmed(k)]
                         keys = {k for k in ordered if k}
                         if keys:
                             merged = self.profile_allowed_keys | keys
@@ -885,6 +1027,12 @@ class PolicyAgent:
             elif CURSOR_TOPIC and msg.topic == CURSOR_TOPIC:
                 if isinstance(data, dict):
                     self._handle_cursor_message(data)
+            elif MOTION_ANCHOR_TOPIC and msg.topic == MOTION_ANCHOR_TOPIC:
+                if isinstance(data, dict):
+                    self.motion_anchor = data
+            elif ACT_RESULT_TOPIC and msg.topic == ACT_RESULT_TOPIC:
+                if isinstance(data, dict):
+                    self._handle_act_result(data)
 
     def _update_game_id_from_scene(self, state: dict) -> None:
         if not isinstance(state, dict):
@@ -984,11 +1132,18 @@ class PolicyAgent:
         elif existing_target_label is None and 'target_label' in payload:
             payload.pop('target_label', None)
         target_label = payload.get('target_label')
+        if target_label and self._is_non_actionable_target_label(str(target_label)):
+            payload.pop('target_label', None)
+            payload.pop('target_norm', None)
+            target_label = None
         if target_label:
             resolved = self._resolve_scene_target_from_label(target_label)
             if resolved:
                 payload['target_norm'] = resolved
         target_norm = payload.get('target_norm')
+        if target_norm and self._target_center_non_actionable(target_norm, str(target_label or "")):
+            payload.pop('target_norm', None)
+            target_norm = None
         if target_norm:
             self._set_active_target(target_norm, target_label)
 
@@ -1100,10 +1255,14 @@ class PolicyAgent:
                 bbox = entry.get('bbox') or entry.get('box')
                 if not label or not center or len(center) != 2:
                     continue
+                if self._is_non_actionable_target_label(label):
+                    continue
                 try:
                     x_norm = max(0.0, min(1.0, float(center[0])))
                     y_norm = max(0.0, min(1.0, float(center[1])))
                 except (TypeError, ValueError):
+                    continue
+                if self._target_center_non_actionable((x_norm, y_norm), label):
                     continue
                 targets.append(
                     {
@@ -1119,10 +1278,14 @@ class PolicyAgent:
                 bbox = zone.get('bbox') or zone.get('box')
                 if not label or not bbox or len(bbox) != 4:
                     continue
+                if self._is_non_actionable_target_label(label):
+                    continue
                 try:
                     cx = max(0.0, min(1.0, float((bbox[0] + bbox[2]) / 2.0)))
                     cy = max(0.0, min(1.0, float((bbox[1] + bbox[3]) / 2.0)))
                 except (TypeError, ValueError):
+                    continue
+                if self._target_center_non_actionable((cx, cy), label):
                     continue
                 targets.append(
                     {
@@ -1156,9 +1319,13 @@ class PolicyAgent:
         normalized = _normalize_phrase(label)
         if not normalized:
             return None
+        if self._is_non_actionable_target_label(label):
+            return None
         for entry in self.scene_targets:
             norm_label = entry.get('norm_label') or ''
             if not norm_label:
+                continue
+            if self._is_non_actionable_target_label(str(entry.get('label') or norm_label)):
                 continue
             if normalized in norm_label or norm_label in normalized:
                 return entry.get('center')
@@ -1188,12 +1355,19 @@ class PolicyAgent:
                         )
                         self.lazy_last_retry_log_ts = now
         self._update_scene_targets(state)
+        if self.intent_enabled:
+            self._update_intent(state)
         if self.active_target and time.time() > self.active_target_expires:
             self.active_target = None
+        flags = state.get("flags") or {}
+        if flags.get("death") and not self.respawn_macro_active:
+            target_norm = self._resolve_respawn_target_norm(state)
+            logger.info("Death flag detected; starting respawn macro immediately")
+            self._start_respawn_macro(target_norm)
         if self.respawn_macro_active:
             action = self._next_respawn_macro_action()
             if action is None:
-                return None
+                return {"label": "wait", "macro": "respawn"}
             return action
         if self.stage0_enabled:
             signature = self._state_signature(state)
@@ -1232,6 +1406,13 @@ class PolicyAgent:
         if self.last_scene_block_reason:
             logger.info("Policy resuming actions after scene block (%s)", self.last_scene_block_reason)
             self.last_scene_block_reason = None
+        self._maybe_inject_respawn(state)
+        if self.intent_enabled and self.current_intent in {"idle", "recover"}:
+            if not (self.respawn_pending or self.respawn_macro_active):
+                proactive = self._maybe_proactive_idle_action(state)
+                if proactive:
+                    return proactive
+                return {"label": "wait", "reason": f"intent_{self.current_intent}"}
         try:
             mean_val = float(state.get("mean_brightness", state.get("mean", 0.0)))
         except (TypeError, ValueError):
@@ -1254,15 +1435,26 @@ class PolicyAgent:
             )
             return None
 
-        if self._maybe_inject_respawn(state):
-            pass
-        exploration_action = self._maybe_exploration_action(state)
-        if exploration_action is not None:
-            return exploration_action
-        if self.current_task:
-            action = self._action_from_task(state)
-        else:
-            action = self._action_from_model(state)
+        action = None
+        if self.consecutive_moves > 30:
+            logger.warning("Movement loop detected (%d moves); forcing target reset", self.consecutive_moves)
+            self.active_target = None
+            self.consecutive_moves = 0
+            action = {"label": "wait", "reason": "movement_loop_break"}
+        
+        if not action:
+            exploration_action = self._maybe_exploration_action(state)
+            if exploration_action is not None:
+                action = exploration_action
+        
+        if not action:
+            if self.current_task:
+                action = self._action_from_task(state)
+            else:
+                action = self._action_from_model(state)
+                if str((action or {}).get("label") or "").lower() == "wait":
+                    action = None
+                # ... (rest of model action selection)
             if (
                 action
                 and POLICY_PREFER_TARGETS
@@ -1271,35 +1463,55 @@ class PolicyAgent:
                 target_action = self._meaningful_fallback_action(state)
                 if target_action and (target_action.get("target_norm") or target_action.get("target_label")):
                     action = target_action
+            if self.intent_enabled and self.current_intent == "interact":
+                interact_action = self._meaningful_fallback_action(state)
+                if interact_action and (action is None or action.get("label") in {"mouse_move", "wait"}):
+                    action = interact_action
             if action is None:
                 if self.stage0_enabled:
                     return None
-                meaningful = self._meaningful_fallback_action(state)
-                if meaningful:
-                    action = meaningful
-                elif POLICY_RANDOM_FALLBACK:
-                    if self.last_label == "mouse_move":
-                        # Random exploration: sometimes click, sometimes hold to run
+                
+                # Secondary priority: Follow motion anchors
+                action = self._motion_anchor_action(state)
+                if action:
+                    action["reason"] = "motion_anchor"
+
+                if action is None:
+                    action = self._option_layer_action(state)
+
+                if action is None:
+                    action = self._meaningful_fallback_action(state)
+                    if action:
+                        action["reason"] = "meaningful_fallback"
+                
+                if action is None and POLICY_RANDOM_FALLBACK:
+                    # Generic proactive fallback: if in combat intent or nothing else found, 
+                    # do small moves/clicks around the center to stir things up
+                    if self.rng.random() < 0.4:
+                        # Click or move near center to stir things up
+                        cx, cy = self.player_center if self.player_center else (0.5, 0.5)
+                        rx = cx + self.rng.uniform(-0.15, 0.15)
+                        ry = cy + self.rng.uniform(-0.15, 0.15)
+                        label = "click_primary" if self.rng.random() < 0.5 else "mouse_move"
+                        action = {"label": label, "target_norm": [rx, ry], "source": "proactive_idle", "reason": "proactive_idle"}
+                    elif self.last_label == "mouse_move":
                         if self.rng.random() < 0.3:
-                            # Run!
                             dx = self._random_delta()
                             dy = self._random_delta()
-                            action = {"label": "mouse_hold", "button": "left", "dx": dx, "dy": dy, "confidence": 1.0}
-                            # We need to release later, but for now let's just hold.
-                            # The next action will likely be a move or click which overrides hold state logic in host_master
-                            # (or we should send release). For simple exploration, hold+move is good.
+                            action = {"label": "mouse_hold", "button": "left", "dx": dx, "dy": dy, "confidence": 1.0, "reason": "random_hold"}
                         else:
-                            action = {"label": "click_primary", "confidence": min(1.0, mean_val / THRESH)}
+                            action = {"label": "click_primary", "confidence": min(1.0, mean_val / THRESH), "reason": "random_click"}
                     else:
-                        # If we just clicked or held, move or release
                         if self.last_label == "mouse_hold":
-                            action = {"label": "mouse_release", "button": "left", "confidence": 1.0}
+                            action = {"label": "mouse_release", "button": "left", "confidence": 1.0, "reason": "random_release"}
                         else:
                             dx = self._random_delta()
                             dy = self._random_delta()
-                            action = {"label": "mouse_move", "dx": dx, "dy": dy, "confidence": min(1.0, mean_val / THRESH)}
-                else:
-                    action = {"label": "wait"}
+                            action = {"label": "mouse_move", "dx": dx, "dy": dy, "confidence": min(1.0, mean_val / THRESH), "reason": "random_move"}
+                
+                if action is None:
+                    action = {"label": "wait", "reason": "final_fallback"}
+        action = self._maybe_break_wait_stall(action, state)
         self.last_action_ts = now
         return action
 
@@ -1320,12 +1532,9 @@ class PolicyAgent:
         if now < self.forbidden_until:
             return False, "forbidden_cooldown"
         flags = state.get("flags") or {}
+        in_game = self._effective_in_game(state)
         if POLICY_REQUIRE_IN_GAME:
-            in_game = flags.get("in_game")
-            if POLICY_REQUIRE_IN_GAME_STRICT:
-                if in_game is not True:
-                    return False, "not_in_game"
-            elif in_game is False:
+            if not in_game:
                 return False, "not_in_game"
         if POLICY_REQUIRE_EMBEDDINGS and not self._embeddings_fresh(state):
             return False, "no_embeddings"
@@ -1333,34 +1542,54 @@ class PolicyAgent:
             return True, None
         texts = self._collect_scene_texts(state)
         objects = state.get("objects") or []
+        if in_game and self.desktop_keywords:
+            texts = [entry for entry in texts if not self._text_list_matches([entry], self.desktop_keywords)]
         if self._scene_has_forbidden_ui(texts, objects):
             self.forbidden_until = now + max(0.0, POLICY_FORBIDDEN_COOLDOWN)
             return False, "forbidden_ui"
         if self.game_keywords:
+            if in_game:
+                return True, None
             has_keyword = self._scene_has_game_keyword(texts, objects)
             if has_keyword:
                 return True, None
             mean_val = self._normalize_mean(state.get("mean", state.get("mean_brightness")))
             if mean_val is None:
                 return False, "no_game_keywords"
+            if mean_val >= POLICY_SCENE_BRIGHT_THRESHOLD:
+                return False, "bright_scene_no_keywords"
             return True, None
-        if self.desktop_keywords and self._text_list_matches(texts, self.desktop_keywords):
+        if not in_game and self.desktop_keywords and self._text_list_matches(texts, self.desktop_keywords):
             self.forbidden_until = now + max(DESKTOP_PAUSE_SEC, POLICY_FORBIDDEN_COOLDOWN)
             return False, "desktop_detected"
         return True, None
 
     def _maybe_inject_respawn(self, state: dict) -> bool:
-        if not self.respawn_keywords or self.respawn_pending:
+        if self.respawn_pending:
             return False
-        texts = self._collect_scene_texts(state)
-        if not texts or not self._scene_has_respawn_text(texts):
-            return False
+        
+        flags = state.get("flags") or {}
         now = time.time()
+        
+        # Priority 1: Direct death flag from scene agent
+        is_dead = flags.get("death")
+        
+        # Priority 2: OCR text match
+        if not is_dead:
+            texts = self._collect_scene_texts(state)
+            if texts and self._scene_has_respawn_text(texts):
+                is_dead = True
+        
+        if not is_dead:
+            return False
+            
         if (now - self.last_respawn_ts) < RESPAWN_COOLDOWN:
             return False
-        self._queue_respawn_tasks()
+            
+        target_norm = self._resolve_respawn_target_norm(state)
+        self._queue_respawn_tasks(target_norm)
         self.last_respawn_ts = now
-        logger.info("Auto-respawn triggered by text match -> queueing MOVE+CLICK")
+        logger.info("Auto-respawn triggered (flag=%s) -> queueing WAIT+MOVE+CLICK", flags.get("death"))
         return True
 
     def _scene_has_respawn_text(self, texts) -> bool:
@@ -1369,9 +1598,23 @@ class PolicyAgent:
             if not raw:
                 continue
             cleaned = _normalize_phrase(raw)
+            if self._looks_like_resource_stat_text(raw, cleaned):
+                continue
             if self._matches_respawn_keyword(cleaned):
                 logger.info("Detected respawn keyword in text='%s' cleaned='%s'", raw[:80], cleaned)
                 return True
+        return False
+
+    @staticmethod
+    def _looks_like_resource_stat_text(raw: str, cleaned: str) -> bool:
+        lowered = str(raw or "").lower()
+        compact = "".join(ch for ch in lowered if not ch.isspace())
+        if re.search(r"\bstat[_\s-]*\d+\b", lowered):
+            return True
+        if re.fullmatch(r"[a-z_]*\d+:\d+/\d+", compact):
+            return True
+        if re.search(r"\b(life|mana|shield|energy|hp|mp|xp|stat)\b", cleaned) and re.search(r"\d", cleaned):
+            return True
         return False
 
     def _collect_scene_texts(self, state: Optional[dict]) -> List[str]:
@@ -1419,36 +1662,101 @@ class PolicyAgent:
                             return True
         return False
 
-    def _queue_respawn_tasks(self):
+    def _queue_respawn_tasks(self, target_norm: Optional[List[float]] = None):
+        resolved_target = self._coerce_target_norm(target_norm) or [RESPAWN_TARGET_X, RESPAWN_TARGET_Y]
         goal_id = f"respawn_{int(time.time())}"
         target = {
-            "x_norm": RESPAWN_TARGET_X,
-            "y_norm": RESPAWN_TARGET_Y,
-            "x": RESPAWN_TARGET_X,
-            "y": RESPAWN_TARGET_Y,
+            "x_norm": resolved_target[0],
+            "y_norm": resolved_target[1],
+            "x": resolved_target[0],
+            "y": resolved_target[1],
             "button": "primary",
             "area": "critical_dialog",
             "scope": "critical_dialog:death",
             "target_source": "auto_respawn",
         }
+        wait_task = {
+            "goal_id": goal_id,
+            "task_id": f"respawn_wait_{int(time.time() * 1000)}",
+            "action_type": "WAIT",
+            "duration": 1.5,
+            "status": "pending",
+        }
         move_task = {
             "goal_id": goal_id,
             "task_id": f"respawn_move_{int(time.time() * 1000)}",
             "action_type": "MOVE_TO",
-            "target": dict(target, target_norm=[RESPAWN_TARGET_X, RESPAWN_TARGET_Y]),
+            "target": dict(target, target_norm=list(resolved_target)),
             "status": "pending",
         }
         click_task = {
             "goal_id": goal_id,
             "task_id": f"respawn_click_{int(time.time() * 1000)}",
             "action_type": "CLICK_BUTTON",
-            "target": dict(target, target_norm=[RESPAWN_TARGET_X, RESPAWN_TARGET_Y]),
+            "target": dict(target, target_norm=list(resolved_target)),
             "status": "pending",
         }
         self.task_queue.clear()
-        self.task_queue.extend([move_task, click_task])
+        self.task_queue.extend([wait_task, move_task, click_task])
         self.current_task = self.task_queue[0]
         self.respawn_pending = True
+
+    @staticmethod
+    def _coerce_target_norm(target_norm: Optional[List[float]]) -> Optional[List[float]]:
+        if not isinstance(target_norm, (list, tuple)) or len(target_norm) < 2:
+            return None
+        try:
+            x_norm = max(0.0, min(1.0, float(target_norm[0])))
+            y_norm = max(0.0, min(1.0, float(target_norm[1])))
+        except (TypeError, ValueError):
+            return None
+        return [x_norm, y_norm]
+
+    def _resolve_respawn_target_norm(self, state: Optional[dict]) -> Optional[List[float]]:
+        candidates: List[Tuple[List[float], str]] = []
+        center_fallback: List[Tuple[List[float], str]] = []
+        if isinstance(state, dict):
+            raw_targets = state.get("targets")
+            if isinstance(raw_targets, list):
+                for entry in raw_targets:
+                    if not isinstance(entry, dict):
+                        continue
+                    label = _normalize_phrase(str(entry.get("label") or ""))
+                    center = self._coerce_target_norm(entry.get("center"))
+                    if not center or not label:
+                        continue
+                    if 0.25 <= center[0] <= 0.75 and 0.08 <= center[1] <= 0.75:
+                        center_fallback.append((center, label))
+                    if self._matches_respawn_keyword(label):
+                        candidates.append((center, label))
+        if not candidates:
+            for entry in self.scene_targets:
+                if not isinstance(entry, dict):
+                    continue
+                label = _normalize_phrase(str(entry.get("label") or ""))
+                center = self._coerce_target_norm(entry.get("center"))
+                if not center or not label:
+                    continue
+                if 0.25 <= center[0] <= 0.75 and 0.08 <= center[1] <= 0.75:
+                    center_fallback.append((center, label))
+                if self._matches_respawn_keyword(label):
+                    candidates.append((center, label))
+        if candidates:
+            candidates.sort(key=lambda item: abs(item[0][0] - 0.5) + abs(item[0][1] - 0.35))
+            target_norm, matched_label = candidates[0]
+            logger.info("Respawn target resolved from scene label='%s' center=(%.3f, %.3f)", matched_label, target_norm[0], target_norm[1])
+            return target_norm
+        if center_fallback:
+            center_fallback.sort(key=lambda item: abs(item[0][0] - 0.5) + abs(item[0][1] - 0.35))
+            target_norm, matched_label = center_fallback[0]
+            logger.info(
+                "Respawn target fallback from center label='%s' center=(%.3f, %.3f)",
+                matched_label,
+                target_norm[0],
+                target_norm[1],
+            )
+            return target_norm
+        return None
 
     def _text_has_game_keyword(self, text: str) -> bool:
         if not text or not self.game_keywords:
@@ -1483,6 +1791,69 @@ class PolicyAgent:
             for keyword in keywords:
                 if keyword and keyword in cleaned:
                     return True
+        return False
+
+    @staticmethod
+    def _resource_entries(state: Optional[dict]) -> List[dict]:
+        if not isinstance(state, dict):
+            return []
+        resources = state.get("resources")
+        if not isinstance(resources, dict):
+            return []
+        entries: List[dict] = []
+        for value in resources.values():
+            if isinstance(value, dict):
+                entries.append(value)
+        return entries
+
+    def _state_has_resource_signal(self, state: Optional[dict], texts: Optional[List[str]] = None) -> bool:
+        for entry in self._resource_entries(state):
+            for key in ("current", "max", "value", "percent"):
+                raw = entry.get(key)
+                if raw is None:
+                    continue
+                try:
+                    float(raw)
+                    return True
+                except (TypeError, ValueError):
+                    continue
+        for text in texts or []:
+            cleaned = _normalize_phrase(str(text or ""))
+            if not cleaned:
+                continue
+            if re.search(r"\b(life|mana|shield|energy|health|hp|mp)\b", cleaned) and re.search(r"\d", cleaned):
+                return True
+        return False
+
+    def _has_gameplay_evidence(self, state: Optional[dict]) -> bool:
+        if not isinstance(state, dict):
+            return False
+        flags = state.get("flags") or {}
+        if flags.get("death"):
+            return True
+        texts = self._collect_scene_texts(state)
+        objects = state.get("objects") or []
+        if texts and self._scene_has_respawn_text(texts):
+            return True
+        if self._state_has_resource_signal(state, texts):
+            return True
+        if self._enemies_present_in_state(state):
+            return True
+        if self._scene_has_game_keyword(texts, objects):
+            return True
+        return False
+
+    def _effective_in_game(self, state: Optional[dict]) -> bool:
+        if not isinstance(state, dict):
+            return False
+        flags = state.get("flags") or {}
+        raw = flags.get("in_game")
+        if raw is True:
+            return True
+        if self._has_gameplay_evidence(state):
+            return True
+        if raw is False:
+            return False
         return False
 
     def _handle_cursor_message(self, payload: Dict[str, object]):
@@ -1528,12 +1899,227 @@ class PolicyAgent:
         if abs(reward_val) >= POLICY_EXPLORATION_MIN_REWARD:
             self.last_reward_ts = time.time()
 
+    def _handle_act_result(self, payload: Dict[str, object]) -> None:
+        ok = bool(payload.get("ok"))
+        action = payload.get("applied")
+        if not isinstance(action, dict):
+            raw_action = payload.get("action")
+            if isinstance(raw_action, dict):
+                action = raw_action
+            elif isinstance(raw_action, str) and raw_action:
+                action = {"label": raw_action}
+        if not isinstance(action, dict):
+            action = self.last_published_action
+        if not isinstance(action, dict):
+            return
+        state_key = self.last_published_state_key or self._option_memory_key(self.latest_state or {})
+        if not state_key:
+            return
+        self._update_option_memory(state_key, action, ok=ok)
+
+    def _option_memory_key(self, state: dict) -> str:
+        flags = state.get("flags") if isinstance(state, dict) else {}
+        if not isinstance(flags, dict):
+            flags = {}
+        in_game = 1 if flags.get("in_game") is True else 0
+        death = 1 if bool(flags.get("death")) else 0
+        mean = self._normalize_mean((state or {}).get("mean", (state or {}).get("mean_brightness"))) if isinstance(state, dict) else 0.0
+        if mean is None:
+            mean = 0.0
+        mean_bucket = max(0, min(9, int(mean * 10.0)))
+        objects = state.get("objects") if isinstance(state, dict) else []
+        enemies = state.get("enemies") if isinstance(state, dict) else []
+        obj_count = len(objects) if isinstance(objects, list) else 0
+        enemy_count = len(enemies) if isinstance(enemies, list) else 0
+        text_count = len(self._collect_scene_texts(state)) if isinstance(state, dict) else 0
+        px, py = self.player_center if self.player_center else (0.5, 0.5)
+        px_bucket = max(0, min(9, int(px * 10.0)))
+        py_bucket = max(0, min(9, int(py * 10.0)))
+        intent = str(self.current_intent or "none")
+        return (
+            f"ig:{in_game}|d:{death}|i:{intent}|m:{mean_bucket}|"
+            f"o:{min(9, obj_count)}|e:{min(9, enemy_count)}|t:{min(9, text_count)}|"
+            f"p:{px_bucket}:{py_bucket}"
+        )
+
+    def _memory_action_template(self, action: Dict[str, object]) -> Optional[Dict[str, object]]:
+        if not isinstance(action, dict):
+            return None
+        label = str(action.get("label") or action.get("action") or "").strip().lower()
+        if not label or label == "wait":
+            return None
+        if label not in {"click_primary", "click_secondary", "click_middle", "key_press", "mouse_move"}:
+            return None
+        template: Dict[str, object] = {"label": label}
+        target_norm = self._coerce_target_norm(action.get("target_norm"))
+        if target_norm:
+            template["target_norm"] = target_norm
+        if label == "mouse_move" and not target_norm:
+            return None
+        if label == "key_press":
+            key = action.get("key")
+            if not isinstance(key, str) or not key:
+                return None
+            template["key"] = key.lower()
+        if label in {"click_secondary", "click_middle"}:
+            button = action.get("button")
+            if isinstance(button, str) and button:
+                template["button"] = button.lower()
+        return template
+
+    def _update_option_memory(self, state_key: str, action: Dict[str, object], ok: bool) -> None:
+        if not POLICY_OPTION_MEMORY_ENABLED:
+            return
+        if not state_key:
+            return
+        template = self._memory_action_template(action)
+        if template is None:
+            return
+        now = time.time()
+        entry = self.option_memory.get(state_key)
+        if not isinstance(entry, dict):
+            entry = {"tries": 0, "hits": 0, "action": template, "updated_at": now}
+            self.option_memory[state_key] = entry
+        entry["tries"] = int(entry.get("tries", 0)) + 1
+        if ok:
+            entry["hits"] = int(entry.get("hits", 0)) + 1
+            entry["action"] = template
+        entry["updated_at"] = now
+        if len(self.option_memory) > POLICY_OPTION_MEMORY_MAX_STATES:
+            oldest_key = min(
+                self.option_memory.keys(),
+                key=lambda key: float(self.option_memory.get(key, {}).get("updated_at", now)),
+            )
+            self.option_memory.pop(oldest_key, None)
+
+    def _memory_option_action(self, state: dict) -> Optional[Dict[str, object]]:
+        if not POLICY_OPTION_MEMORY_ENABLED:
+            return None
+        state_key = self._option_memory_key(state)
+        entry = self.option_memory.get(state_key)
+        if not isinstance(entry, dict):
+            return None
+        updated_at = float(entry.get("updated_at", 0.0) or 0.0)
+        if POLICY_OPTION_MEMORY_MAX_AGE_SEC > 0 and updated_at > 0:
+            if (time.time() - updated_at) > POLICY_OPTION_MEMORY_MAX_AGE_SEC:
+                self.option_memory.pop(state_key, None)
+                return None
+        tries = int(entry.get("tries", 0))
+        hits = int(entry.get("hits", 0))
+        if tries < POLICY_OPTION_MEMORY_MIN_TRIES or hits <= 0:
+            return None
+        hit_rate = hits / max(1, tries)
+        if hit_rate < POLICY_OPTION_MEMORY_MIN_HIT_RATE:
+            return None
+        template = entry.get("action")
+        if not isinstance(template, dict):
+            return None
+        replay = dict(template)
+        target_norm = self._coerce_target_norm(replay.get("target_norm"))
+        if target_norm:
+            tx, ty = target_norm
+            if self._target_center_non_actionable(target_norm):
+                return None
+            # Memory is conservative around HUD-like bottom corners.
+            if ty >= 0.72 and (tx <= 0.22 or tx >= 0.78):
+                return None
+            replay["target_norm"] = target_norm
+        label = str(replay.get("label") or "").lower()
+        if label == "mouse_move":
+            if target_norm:
+                dx = int((target_norm[0] - self.cursor_x_norm) * SCREEN_WIDTH)
+                dy = int((target_norm[1] - self.cursor_y_norm) * SCREEN_HEIGHT)
+                if dx == 0 and dy == 0:
+                    return None
+                replay["target_norm"] = target_norm
+                replay["dx"] = dx
+                replay["dy"] = dy
+            else:
+                try:
+                    dx = int(replay.get("dx", 0) or 0)
+                    dy = int(replay.get("dy", 0) or 0)
+                except (TypeError, ValueError):
+                    return None
+                if dx == 0 and dy == 0:
+                    return None
+                replay["dx"] = dx
+                replay["dy"] = dy
+        replay_sig = self._memory_replay_signature(state_key, replay)
+        now = time.time()
+        if replay_sig == self.option_memory_repeat_sig:
+            if now < self.option_memory_repeat_block_until:
+                return None
+            self.option_memory_repeat_count += 1
+        else:
+            self.option_memory_repeat_sig = replay_sig
+            self.option_memory_repeat_count = 1
+            self.option_memory_repeat_block_until = 0.0
+        if self.option_memory_repeat_count > POLICY_OPTION_MEMORY_MAX_REPEAT:
+            self.option_memory_repeat_block_until = now + max(0.0, POLICY_OPTION_MEMORY_REPEAT_COOLDOWN_SEC)
+            return None
+        replay["source"] = "episodic_memory"
+        replay["reason"] = "episodic_memory"
+        return replay
+
+    @staticmethod
+    def _memory_replay_signature(state_key: str, replay: Dict[str, object]) -> str:
+        label = str(replay.get("label") or "").lower()
+        parts = [state_key, label]
+        target_norm = replay.get("target_norm")
+        if isinstance(target_norm, (list, tuple)) and len(target_norm) >= 2:
+            try:
+                parts.append(f"{float(target_norm[0]):.3f}")
+                parts.append(f"{float(target_norm[1]):.3f}")
+            except (TypeError, ValueError):
+                pass
+        key = replay.get("key")
+        if isinstance(key, str) and key:
+            parts.append(key.lower())
+        return "|".join(parts)
+
+    def _option_layer_action(self, state: dict) -> Optional[Dict[str, object]]:
+        if not POLICY_OPTION_LAYER_ENABLED:
+            return None
+        memory_action = self._memory_option_action(state)
+        if memory_action:
+            return memory_action
+        if not self._effective_in_game(state):
+            return None
+        cx, cy = self.player_center if self.player_center else (0.5, 0.5)
+        radius = max(0.01, min(0.25, POLICY_OPTION_EXPLORE_RADIUS))
+        tx = max(0.0, min(1.0, cx + self.rng.uniform(-radius, radius)))
+        ty = max(0.0, min(1.0, cy + self.rng.uniform(-radius, radius)))
+        if self.rng.random() < max(0.0, min(1.0, PROACTIVE_IDLE_MOVE_PROB)):
+            dx = int((tx - self.cursor_x_norm) * SCREEN_WIDTH)
+            dy = int((ty - self.cursor_y_norm) * SCREEN_HEIGHT)
+            if dx == 0 and dy == 0:
+                dx = self._random_delta()
+                dy = self._random_delta()
+            return {
+                "label": "mouse_move",
+                "dx": dx,
+                "dy": dy,
+                "target_norm": [tx, ty],
+                "source": "option_layer",
+                "reason": "option_explore",
+            }
+        return {
+            "label": "click_primary",
+            "target_norm": [tx, ty],
+            "source": "option_layer",
+            "reason": "option_explore",
+        }
+
     def _cursor_is_fresh(self) -> bool:
+        if not POLICY_USE_CURSOR:
+            return False
         return self.cursor_detected_ts > 0 and (time.time() - self.cursor_detected_ts) <= CURSOR_TIMEOUT_SEC
 
     def _cursor_near_target(self, x_norm: float, y_norm: float) -> bool:
         if not self._cursor_is_fresh():
-            return False
+            # If cursor is lost, we assume it's roughly at the last target 
+            # to allow blind clicks and prevent getting stuck in move loops
+            return True
         return (
             abs(self.cursor_x_norm - x_norm) <= CURSOR_TOLERANCE
             and abs(self.cursor_y_norm - y_norm) <= CURSOR_TOLERANCE
@@ -1615,12 +2201,17 @@ class PolicyAgent:
         targets = self._exploration_targets()
         self.rng.shuffle(targets)
         actions: List[Dict[str, object]] = []
+        last_target = None
         for target in targets:
             if len(actions) >= max(1, POLICY_EXPLORATION_BURST_ACTIONS):
                 break
             actions.append(self._exploration_move_action(target[0], target[1]))
+            last_target = target
         if POLICY_EXPLORATION_ALLOW_CLICK and actions:
-            actions.append({"label": "click_primary", "source": "exploration"})
+            click_action = {"label": "click_primary", "source": "exploration"}
+            if last_target is not None:
+                click_action["target_norm"] = [last_target[0], last_target[1]]
+            actions.append(click_action)
         explore_keys = POLICY_EXPLORATION_KEYS
         if not explore_keys and POLICY_EXPLORATION_KEYS_FROM_PROFILE:
             explore_keys = self.profile_allowed_keys
@@ -1651,6 +2242,8 @@ class PolicyAgent:
             return self.exploration_queue.popleft()
         if not POLICY_EXPLORATION_ENABLED:
             return None
+        if self.intent_enabled and self.current_intent in {"combat", "recover"}:
+            return None
         if self.current_task or self.respawn_macro_active or self.respawn_pending:
             return None
         if self._scene_is_forbidden():
@@ -1670,6 +2263,67 @@ class PolicyAgent:
         if self.exploration_queue:
             return self.exploration_queue.popleft()
         return None
+
+    def _maybe_proactive_idle_action(self, state: dict) -> Optional[Dict[str, object]]:
+        if PROACTIVE_IDLE_CHANCE <= 0:
+            return None
+        if not self._effective_in_game(state):
+            return None
+        if self.rng.random() > PROACTIVE_IDLE_CHANCE:
+            return None
+        cx, cy = self.player_center if self.player_center else (0.5, 0.5)
+        rx = max(0.0, min(1.0, cx + self.rng.uniform(-PROACTIVE_IDLE_RADIUS, PROACTIVE_IDLE_RADIUS)))
+        ry = max(0.0, min(1.0, cy + self.rng.uniform(-PROACTIVE_IDLE_RADIUS, PROACTIVE_IDLE_RADIUS)))
+        move_prob = max(0.0, min(1.0, PROACTIVE_IDLE_MOVE_PROB))
+        if self.rng.random() >= move_prob:
+            return {"label": "click_primary", "target_norm": [rx, ry], "source": "proactive_idle"}
+        dx = int((rx - self.cursor_x_norm) * SCREEN_WIDTH)
+        dy = int((ry - self.cursor_y_norm) * SCREEN_HEIGHT)
+        if dx == 0 and dy == 0:
+            dx = self._random_delta()
+            dy = self._random_delta()
+        return {"label": "mouse_move", "dx": dx, "dy": dy, "target_norm": [rx, ry], "source": "proactive_idle"}
+
+    def _maybe_break_wait_stall(self, action: Optional[Dict[str, object]], state: dict) -> Optional[Dict[str, object]]:
+        if not POLICY_WAIT_STREAK_BREAK_ENABLED or not action:
+            return action
+        if str(action.get("label") or "").lower() != "wait":
+            return action
+        if self.current_task or self.respawn_macro_active or self.respawn_pending:
+            return action
+        if not self._effective_in_game(state):
+            return action
+        if self.consecutive_waits < POLICY_WAIT_STREAK_BREAK_THRESHOLD:
+            return action
+
+        fallback = self._meaningful_fallback_action(state)
+        if fallback and str(fallback.get("label") or "").lower() != "wait":
+            fallback.setdefault("reason", "wait_stall_break")
+            return fallback
+
+        cx, cy = self.player_center if self.player_center else (0.5, 0.5)
+        rx = max(0.0, min(1.0, cx + self.rng.uniform(-PROACTIVE_IDLE_RADIUS, PROACTIVE_IDLE_RADIUS)))
+        ry = max(0.0, min(1.0, cy + self.rng.uniform(-PROACTIVE_IDLE_RADIUS, PROACTIVE_IDLE_RADIUS)))
+        if self.rng.random() < max(0.0, min(1.0, PROACTIVE_IDLE_MOVE_PROB)):
+            dx = int((rx - self.cursor_x_norm) * SCREEN_WIDTH)
+            dy = int((ry - self.cursor_y_norm) * SCREEN_HEIGHT)
+            if dx == 0 and dy == 0:
+                dx = self._random_delta()
+                dy = self._random_delta()
+            return {
+                "label": "mouse_move",
+                "dx": dx,
+                "dy": dy,
+                "target_norm": [rx, ry],
+                "source": "wait_stall_break",
+                "reason": "wait_stall_break",
+            }
+        return {
+            "label": "click_primary",
+            "target_norm": [rx, ry],
+            "source": "wait_stall_break",
+            "reason": "wait_stall_break",
+        }
 
     @staticmethod
     def _center_from_bbox(bbox: Optional[List[float]]) -> Optional[List[float]]:
@@ -1772,7 +2426,7 @@ class PolicyAgent:
                 except (TypeError, ValueError):
                     continue
             return score
-        enemies = state.get("enemies")
+        enemies = state.get("enemies") or _state_role_hostiles(state)
         if isinstance(enemies, list) and enemies:
             return float(len(enemies))
         return None
@@ -1809,15 +2463,29 @@ class PolicyAgent:
             ordered = [k for k in self.profile_allowed_key_order if k in skill_set]
             if ordered:
                 candidates = ordered
+        
+        # If no candidates from profile, use fallbacks from env
         if not candidates and POLICY_FALLBACK_SKILL_KEYS:
             candidates = list(POLICY_FALLBACK_SKILL_KEYS)
+        
+        # Final fallback to common gaming keys if everything else fails but enemies are present
+        if not candidates and self._enemies_present():
+            # Universal set: Numbers, common action keys
+            candidates = ["1", "2", "3", "4", "5", "q", "e", "r", "f", "space"]
+
         if not candidates:
             return None
+
+        candidates = [k for k in candidates if self._skill_key_confirmed(k)]
+        if not candidates:
+            return None
+        
         # epsilon-greedy based on observed hit rate
         if self.rng.random() < max(0.0, min(1.0, POLICY_SKILL_EPS)):
             return self.rng.choice(candidates)
         best_key = None
         best_score = -1.0
+        best_keys = []
         for key in candidates:
             stats = self.skill_stats.get(key)
             if not stats or stats.get("tries", 0.0) <= 0:
@@ -1826,7 +2494,12 @@ class PolicyAgent:
                 score = stats.get("hits", 0.0) / max(1.0, stats.get("tries", 1.0))
             if score > best_score:
                 best_score = score
+                best_keys = [key]
                 best_key = key
+            elif score == best_score:
+                best_keys.append(key)
+        if best_keys:
+            return self.rng.choice(best_keys)
         return best_key or candidates[0]
 
     def _pick_text_target(self, targets: List[dict]) -> Optional[Tuple[List[float], Optional[str]]]:
@@ -1834,8 +2507,11 @@ class PolicyAgent:
         best_label = None
         best_score = -1.0
         px, py = self.player_center if self.player_center else (0.5, 0.5)
+
         for target in targets:
             label = str(target.get("label") or "").strip()
+            if self._is_non_actionable_target_label(label):
+                continue
             center = target.get("center") or self._center_from_bbox(target.get("bbox"))
             if not label or not center:
                 continue
@@ -1847,6 +2523,8 @@ class PolicyAgent:
                 continue
             cx = max(0.0, min(1.0, cx))
             cy = max(0.0, min(1.0, cy))
+            if self._target_center_non_actionable((cx, cy), label):
+                continue
             if POLICY_USE_UI_LAYOUT and self._center_in_hud((cx, cy)):
                 continue
             if POLICY_USE_UI_LAYOUT and self.play_area and not self._center_in_box((cx, cy), self.play_area):
@@ -1862,6 +2540,58 @@ class PolicyAgent:
             return None
         return best_center, best_label
 
+    def _is_non_actionable_target_label(self, label: str) -> bool:
+        normalized = _normalize_phrase(str(label or ""))
+        if not normalized:
+            return True
+        compact = "".join(ch for ch in normalized if ch.isalnum())
+        ui_terms = (
+            "enemy at the gate",
+            "enemyatthegate",
+            "quest",
+            "objective",
+            "mission",
+            "journal",
+            "menu",
+            "waypoint",
+            "checkpoint",
+        )
+        if any(term in normalized or term in compact for term in ui_terms):
+            return True
+        if re.search(r"\b(life|mana|shield|energy|xp|level)\b", normalized) and re.search(r"\d", normalized):
+            return True
+        raw = str(label or "").strip()
+        if len(raw) > 25:
+            return True
+        if raw.isupper() and (len(raw) > 4 or len(normalized.split()) > 2):
+            return True
+        if len(compact) > 18 and raw.upper() == raw:
+            return True
+        return False
+
+    def _target_center_non_actionable(self, center: object, label: str = "") -> bool:
+        try:
+            x = float(center[0])
+            y = float(center[1])
+        except Exception:
+            return False
+        x = max(0.0, min(1.0, x))
+        y = max(0.0, min(1.0, y))
+        if POLICY_USE_UI_LAYOUT:
+            if self._center_in_hud((x, y)):
+                return True
+            if self.play_area and not self._center_in_box((x, y), self.play_area):
+                return True
+        # Fallback if UI layout is missing: avoid obvious top-right UI panel anchors.
+        if x >= 0.72 and y <= 0.42:
+            return True
+        if label and self._is_non_actionable_target_label(label):
+            if x <= 0.30 and y >= 0.62:
+                return True
+            if x >= 0.70 and y >= 0.62:
+                return True
+        return False
+
     def _move_or_click_target(self, center: List[float], label: Optional[str]) -> Dict[str, object]:
         try:
             x_norm = float(center[0])
@@ -1870,17 +2600,54 @@ class PolicyAgent:
             return {"label": "wait"}
         x_norm = max(0.0, min(1.0, x_norm))
         y_norm = max(0.0, min(1.0, y_norm))
+        
         if self._cursor_near_target(x_norm, y_norm):
+            # If we are already there, we MUST try to interact, otherwise we just sit there
             if self._click_ready():
                 payload = {"label": "click_primary", "target_norm": [x_norm, y_norm]}
                 if label:
                     payload["target_label"] = label
                 return payload
-            return {"label": "wait"}
+            else:
+                # If click is on cooldown but we are at target, don't just wait, 
+                # maybe use a skill or do something else to avoid being a sitting duck
+                if self._enemies_present() and self._enemy_skill_ready():
+                    skill_key = self._choose_skill_key()
+                    if skill_key:
+                        return {"label": "key_press", "key": skill_key, "source": "combat_at_target"}
+                return {"label": "wait"}
+        
         move = self._teacher_target_move([x_norm, y_norm])
         if move:
+            # If the move is very small, treat it as 'arrived' to trigger a click next tick
+            dx = move.get("dx", 0)
+            dy = move.get("dy", 0)
+            if abs(dx) < 5 and abs(dy) < 5 and self.rng.random() < 0.5:
+                 if self._click_ready():
+                    return {"label": "click_primary", "target_norm": [x_norm, y_norm]}
             return move
         return {"label": "wait"}
+
+    def _motion_anchor_action(self, state: Optional[dict] = None) -> Optional[Dict[str, object]]:
+        if not self.motion_anchor:
+            return None
+        ts = self.motion_anchor.get("ts") or self.motion_anchor.get("timestamp")
+        try:
+            if not ts or (time.time() - float(ts)) > MOTION_ANCHOR_TTL:
+                return None
+        except (TypeError, ValueError):
+            return None
+
+        point = self.motion_anchor.get("point") or self.motion_anchor.get("center")
+        if not point or len(point) != 2:
+            return None
+
+        # Return a move toward the salient motion point
+        move = self._teacher_target_move(point)
+        if move:
+            move["label"] = "mouse_move"
+            move["source"] = "motion_anchor"
+        return move
 
     def _meaningful_fallback_action(self, state: dict) -> Optional[Dict[str, object]]:
         if not POLICY_MEANINGFUL_FALLBACK:
@@ -1893,18 +2660,49 @@ class PolicyAgent:
             if center:
                 return self._move_or_click_target(center, self.active_target.get("label"))
 
-        enemies = state.get("enemies") or []
+        roles = state.get("roles") if isinstance(state, dict) else {}
+        role_stats = roles.get("stats") if isinstance(roles, dict) else {}
+        role_interactables = roles.get("interactables") if isinstance(roles, dict) else []
+        role_world_objects = roles.get("world_objects") if isinstance(roles, dict) else []
+        if not isinstance(role_interactables, list):
+            role_interactables = []
+        if not isinstance(role_world_objects, list):
+            role_world_objects = []
+
+        enemies = state.get("enemies") or _state_role_hostiles(state)
         target = self._pick_object_target(enemies)
         if target:
             center, label = target
             return self._move_or_click_target(center, label)
 
-        if POLICY_USE_OCR_TARGETS:
+        target = self._pick_object_target(role_interactables)
+        if target:
+            center, label = target
+            return self._move_or_click_target(center, label)
+
+        target = self._pick_object_target(role_world_objects)
+        if target:
+            center, label = target
+            return self._move_or_click_target(center, label)
+
+        # Reduce OCR target frequency - don't chase text 100% of the time
+        if POLICY_USE_OCR_TARGETS and self.rng.random() < 0.3:
             targets = state.get("targets") or []
             target = self._pick_text_target(targets)
             if target:
                 center, label = target
                 return self._move_or_click_target(center, label)
+
+        ui_dominant = False
+        if isinstance(role_stats, dict):
+            ui_count = int(role_stats.get("ui_count", 0) or 0)
+            world_count = int(role_stats.get("world_count", 0) or 0)
+            hostile_count = int(role_stats.get("hostile_count", 0) or 0)
+            interact_count = int(role_stats.get("interactable_count", 0) or 0)
+            ui_dominant = ui_count > 0 and world_count == 0 and hostile_count == 0 and interact_count == 0
+
+        if ui_dominant:
+            return None
 
         objects = state.get("objects") or []
         target = self._pick_object_target(objects)
@@ -2109,19 +2907,38 @@ class PolicyAgent:
                 return True
         return False
 
+    @staticmethod
+    def _is_generic_teacher_action(action: Optional[Dict[str, object]]) -> bool:
+        if not isinstance(action, dict):
+            return False
+        label = str(action.get("label") or "").lower()
+        if label == "wait":
+            return True
+        if label in {"mouse_move", "click_primary", "click_secondary"}:
+            has_target = bool(action.get("target_norm") or action.get("target_label"))
+            return not has_target
+        return False
+
     def _blend_with_teacher(self, policy_action: Dict[str, object]) -> Optional[Dict[str, object]]:
         teacher_alpha = self._current_alpha()
         teacher_action = self._teacher_to_action()
         if self.respawn_macro_active or self.respawn_pending or self._is_respawn_task(self.current_task):
             teacher_action = None
-        if self.stage0_enabled and self.current_task:
-            if teacher_action:
-                logger.info(
-                    "Stage0 suppressing teacher action '%s' due to task %s",
-                    teacher_action.get("label"),
-                    self.current_task.get("task_id"),
-                )
+        if teacher_action and not self._teacher_action_allowed_in_context(teacher_action):
+            logger.info("Suppressing teacher action outside combat/recover context: %s", teacher_action.get("label"))
             teacher_action = None
+        generic_teacher = self._is_generic_teacher_action(teacher_action)
+        policy_label = str((policy_action or {}).get("label") or "").lower()
+        in_game = self._effective_in_game(self.latest_state or {})
+        if generic_teacher and in_game and policy_label == "wait":
+            option_action = self._option_layer_action(self.latest_state or {})
+            option_label = str((option_action or {}).get("label") or "").lower()
+            if option_action and option_label != "wait":
+                policy_action = option_action
+                policy_label = option_label
+        if generic_teacher and policy_label and policy_label != "wait":
+            teacher_action = None
+            generic_teacher = False
 
         chosen = None
         if (
@@ -2131,32 +2948,81 @@ class PolicyAgent:
             and policy_action.get("label") == "mouse_move"
             and (teacher_action.get("target_norm") or teacher_action.get("target_label"))
         ):
-            chosen = teacher_action
+            chosen = dict(teacher_action)
+            chosen.setdefault("source", "teacher")
         if self.stage0_enabled and teacher_action:
-            chosen = teacher_action
+            chosen = dict(teacher_action)
+            chosen.setdefault("source", "teacher")
         elif teacher_action and teacher_alpha > 0:
             if teacher_alpha >= 0.99:
-                chosen = teacher_action
+                chosen = dict(teacher_action)
+                chosen.setdefault("source", "teacher")
             elif policy_action is None:
-                chosen = teacher_action
+                chosen = dict(teacher_action)
+                chosen.setdefault("source", "teacher")
             else:
                 prob = max(0.0, min(1.0, teacher_alpha))
-                chosen = teacher_action if self.rng.random() < prob else policy_action
+                if generic_teacher:
+                    prob = min(prob, max(0.0, min(1.0, TEACHER_GENERIC_OVERRIDE_PROB)))
+                if self.rng.random() < prob:
+                    chosen = dict(teacher_action)
+                    chosen.setdefault("source", "teacher")
+                else:
+                    chosen = policy_action
         else:
             chosen = policy_action
 
         if chosen is None:
             # If we are heavily relying on the teacher (early training) but have no teacher action,
-            # DO NOT fall back to the untrained policy (which is random noise).
-            # Instead, WAIT for the teacher to respond.
-            if teacher_alpha > 0.8 and not teacher_action:
+            # wait, but not forever. Random fallback helps break the cycle.
+            if teacher_alpha > 0.8 and not teacher_action and self.rng.random() > 0.3:
                 logger.debug("Waiting for teacher instruction (alpha=%.2f)", teacher_alpha)
-                return {"label": "wait"}
+                return {"label": "wait", "reason": "waiting_for_teacher"}
             return None
 
         label = str(chosen.get("label") or "").lower()
         macro_flag = chosen.get("macro") == "respawn"
         if not macro_flag:
+            if (
+                label == "key_press"
+                and self.current_intent not in {"combat", "recover"}
+                and not self._enemies_present()
+            ):
+                state = self.latest_state or {}
+                fallback = self._meaningful_fallback_action(state)
+                if fallback and fallback.get("label") != "key_press":
+                    fallback.setdefault("reason", "suppress_noncombat_keypress")
+                    logger.info(
+                        "Suppressing non-combat key_press -> %s (meaningful fallback)",
+                        fallback.get("label"),
+                    )
+                    return fallback
+                cx, cy = self.player_center if self.player_center else (0.5, 0.5)
+                rx = max(0.0, min(1.0, cx + self.rng.uniform(-PROACTIVE_IDLE_RADIUS, PROACTIVE_IDLE_RADIUS)))
+                ry = max(0.0, min(1.0, cy + self.rng.uniform(-PROACTIVE_IDLE_RADIUS, PROACTIVE_IDLE_RADIUS)))
+                move_prob = max(0.0, min(1.0, PROACTIVE_IDLE_MOVE_PROB))
+                if self.rng.random() < move_prob:
+                    dx = int((rx - self.cursor_x_norm) * SCREEN_WIDTH)
+                    dy = int((ry - self.cursor_y_norm) * SCREEN_HEIGHT)
+                    if dx == 0 and dy == 0:
+                        dx = self._random_delta()
+                        dy = self._random_delta()
+                    logger.info("Suppressing non-combat key_press -> mouse_move (forced proactive fallback)")
+                    return {
+                        "label": "mouse_move",
+                        "dx": dx,
+                        "dy": dy,
+                        "target_norm": [rx, ry],
+                        "source": "proactive_idle",
+                        "reason": "suppress_noncombat_keypress",
+                    }
+                logger.info("Suppressing non-combat key_press -> click_primary (forced proactive fallback)")
+                return {
+                    "label": "click_primary",
+                    "target_norm": [rx, ry],
+                    "source": "proactive_idle",
+                    "reason": "suppress_noncombat_keypress",
+                }
             if self._should_suppress_shop():
                 logger.info("SHOP suppress active -> forcing idle move")
                 return {"label": "wait"}
@@ -2169,7 +3035,8 @@ class PolicyAgent:
                 return {"label": "wait"}
 
             if POLICY_COMBAT_AIM and self._enemies_present() and not self._scene_dialog_present():
-                enemies = (self.latest_state or {}).get("enemies") or []
+                scene_state = self.latest_state or {}
+                enemies = scene_state.get("enemies") or _state_role_hostiles(scene_state)
                 target_center = self._pick_enemy_target(enemies)
                 if target_center and not self._cursor_near_target(target_center[0], target_center[1]):
                     move = self._teacher_target_move(target_center)
@@ -2181,15 +3048,20 @@ class PolicyAgent:
                 POLICY_ENEMY_SKILL_SUBSTITUTE
                 and self._enemies_present()
                 and not self._scene_dialog_present()
-                and label in {"click_primary", "mouse_move", "wait"}
+                # Higher bias towards skills during combat
+                and (label in {"click_primary", "click_secondary", "mouse_move", "wait"} or self.rng.random() < 0.5)
                 and self._enemy_skill_ready()
             ):
                 skill_key = self._choose_skill_key()
                 if skill_key:
                     self.last_enemy_skill_ts = time.time()
                     self._record_skill_try(skill_key, self.latest_state or {})
-                    logger.info("Enemy present -> substituting %s with key_press %s", label, skill_key)
-                    return {"label": "key_press", "key": skill_key, "source": "enemy_skill_substitute"}
+                    logger.info("COMBAT: enemies present -> substituting '%s' with key_press '%s'", label, skill_key)
+                    # Include target_norm so the bridge can aim if supported
+                    payload = {"label": "key_press", "key": skill_key, "source": "enemy_skill_substitute"}
+                    if chosen.get("target_norm"):
+                        payload["target_norm"] = chosen["target_norm"]
+                    return payload
 
             if label == "click_primary" and not self._click_ready():
                 if self.active_target and self._cursor_is_fresh():
@@ -2209,6 +3081,8 @@ class PolicyAgent:
                 chosen = fallback
 
         self.steps += 1
+        if isinstance(chosen, dict):
+            chosen.setdefault("source", "policy")
         logger.debug(
             "Policy decision | teacher_alpha=%.3f | teacher=%s | policy=%s | chosen=%s",
             teacher_alpha,
@@ -2217,6 +3091,20 @@ class PolicyAgent:
             chosen.get("label") if chosen else None,
         )
         return chosen
+
+    def _teacher_action_allowed_in_context(self, action: Dict[str, object]) -> bool:
+        label = str((action or {}).get("label") or "").lower()
+        if label != "key_press":
+            return True
+        state = self.latest_state or {}
+        flags = state.get("flags") or {}
+        if flags.get("death") or self._latest_scene_has_respawn_text():
+            return True
+        if self.current_intent in {"combat", "recover"}:
+            return True
+        if self._enemies_present_in_state(state) or self._enemies_present():
+            return True
+        return False
 
     def _teacher_to_action(self) -> Optional[Dict[str, object]]:
         if self.respawn_macro_active:
@@ -2244,6 +3132,9 @@ class PolicyAgent:
 
         target_norm = self.teacher_action.get("target_norm")
         target_label = self.teacher_action.get("target_label")
+        if target_norm and self._target_center_non_actionable(target_norm, str(target_label or "")):
+            target_norm = None
+            target_label = None
         target_move = self._teacher_target_move(target_norm) if target_norm else None
 
         if any(word in text for word in ("click", "attack", "shoot", "select")):
@@ -2285,8 +3176,8 @@ class PolicyAgent:
 
         key = self._teacher_key_from_text(text)
         if key:
-            if not self._key_allowed(key):
-                logger.info("Teacher requested key '%s' not in allowed_keys; ignoring", key)
+            if not self._teacher_key_allowed(key):
+                logger.info("Teacher requested key '%s' not confirmed; ignoring", key)
                 return None
             return {"label": "key_press", "key": key}
 
@@ -2297,8 +3188,8 @@ class PolicyAgent:
 
         key = self._extract_key(text)
         if key:
-            if not self._key_allowed(key):
-                logger.info("Teacher extracted key '%s' not in allowed_keys; ignoring", key)
+            if not self._teacher_key_allowed(key):
+                logger.info("Teacher extracted key '%s' not confirmed; ignoring", key)
                 return None
             return {"label": "key_press", "key": key}
 
@@ -2347,16 +3238,94 @@ class PolicyAgent:
             return True
         return str(key).lower() in self.profile_allowed_keys
 
+    def _teacher_key_confirmed(self, key: str) -> bool:
+        if TEACHER_KEY_CONFIRM_HITS <= 0:
+            return True
+        stats = self.skill_stats.get(key)
+        if not stats:
+            return False
+        try:
+            hits = float(stats.get("hits", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            hits = 0.0
+        return hits >= TEACHER_KEY_CONFIRM_HITS
+
+    def _teacher_key_allowed(self, key: Optional[str]) -> bool:
+        if not key:
+            return False
+        key_norm = str(key).lower()
+        if key_norm in self.profile_allowed_keys:
+            return True
+        return self._teacher_key_confirmed(key_norm)
+
+    def _skill_key_confirmed(self, key: str) -> bool:
+        if not key:
+            return False
+        key_norm = str(key).lower()
+        if key_norm in self.profile_allowed_keys:
+            return True
+        if key_norm.isdigit():
+            return True
+        return self._teacher_key_confirmed(key_norm)
+
     def _enemies_present(self) -> bool:
         state = self.latest_state or {}
-        enemies = state.get("enemies") or []
+        # 1. Check explicit enemies list
+        enemies = state.get("enemies") or _state_role_hostiles(state)
         if isinstance(enemies, list) and enemies:
+            for enemy in enemies:
+                try:
+                    conf = float((enemy or {}).get("confidence", 0) or 0)
+                except (TypeError, ValueError):
+                    conf = 0.0
+                if conf >= POLICY_ENEMY_MIN_CONF:
+                    return True
+        
+        # 2. Check enemy health bars
+        bars = state.get("enemy_bars") or []
+        if isinstance(bars, list) and bars:
             return True
+
+        # 3. Check objects list for anything labeled as enemy/monster/boss
+        objects = state.get("objects") or []
+        for obj in objects:
+            label = str(obj.get("label") or obj.get("class") or "").lower()
+            if any(kw in label for kw in ("enemy", "monster", "boss", "hostile", "bandit")):
+                try:
+                    conf = float(obj.get("confidence", 0) or 0)
+                except (TypeError, ValueError):
+                    conf = 0.0
+                if conf >= POLICY_ENEMY_MIN_CONF:
+                    return True
+
+        # 4. Check global stats
         stats = state.get("stats") or {}
         try:
-            return float(stats.get("enemy_count", 0) or 0) > 0
+            if float(stats.get("enemy_count", 0) or 0) > 0:
+                return True
         except (TypeError, ValueError):
-            return False
+            pass
+
+        # 5. Check OCR text for enemy-related keywords (with quest filtering)
+        texts = self._collect_scene_texts(state)
+        quest_indicators = {"at the gate", "objective", "quest", "completed", "mission", "menu", "gate"}
+        quest_compact = {"objective", "quest", "completed", "mission", "menu", "gate"}
+        enemy_keywords = ("enemy", "monster", "boss", "hostile", "bandit")
+        for entry in texts:
+            lowered = str(entry).lower()
+            if "prompt_" in lowered:
+                continue
+            compact = "".join(ch for ch in lowered if ch.isalnum())
+            # Ignore quest/UI headers even if OCR merges spaces.
+            if any(q in lowered for q in quest_indicators) or any(q in compact for q in quest_compact):
+                continue
+            # Only short labels should trigger combat.
+            if len(compact) > 24 or len(lowered.split()) > 3:
+                continue
+            if any(kw in lowered or kw in compact for kw in enemy_keywords):
+                return True
+
+        return False
 
     def _enemy_skill_ready(self) -> bool:
         if POLICY_ENEMY_SKILL_MIN_INTERVAL <= 0:
@@ -2376,6 +3345,157 @@ class PolicyAgent:
         except (TypeError, ValueError):
             score = 0.0
         return score >= POLICY_DIALOG_SCORE_MIN
+
+    @staticmethod
+    def _intent_priority(intent: Optional[str]) -> int:
+        priorities = {
+            "idle": 0,
+            "recover": 1,
+            "combat": 2,
+            "interact": 3,
+            "navigate": 4,
+            "observe": 5,
+        }
+        return priorities.get(str(intent or "").lower(), 99)
+
+    @staticmethod
+    def _labels_present(items: Optional[list], labels: Set[str]) -> bool:
+        if not items or not labels:
+            return False
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            raw_label = (
+                item.get("label")
+                or item.get("class")
+                or item.get("name")
+                or item.get("title")
+                or ""
+            )
+            normalized = _normalize_phrase(str(raw_label))
+            if normalized and normalized in labels:
+                return True
+        return False
+
+    @staticmethod
+    def _prompt_max_score(scores: Optional[dict], labels: Set[str]) -> float:
+        if not isinstance(scores, dict) or not labels:
+            return 0.0
+        best = 0.0
+        for key, value in scores.items():
+            normalized = _normalize_phrase(str(key))
+            if normalized not in labels:
+                continue
+            try:
+                score = float(value or 0)
+            except (TypeError, ValueError):
+                continue
+            if score > best:
+                best = score
+        return best
+
+    @staticmethod
+    def _enemies_present_in_state(state: Optional[dict]) -> bool:
+        if not isinstance(state, dict):
+            return False
+        enemies = state.get("enemies") or _state_role_hostiles(state)
+        if isinstance(enemies, list) and enemies:
+            if POLICY_ENEMY_MIN_CONF <= 0:
+                return True
+            for enemy in enemies:
+                try:
+                    conf = float((enemy or {}).get("confidence", 0) or 0)
+                except (TypeError, ValueError):
+                    conf = 0.0
+                if conf >= POLICY_ENEMY_MIN_CONF:
+                    return True
+        roles = state.get("roles")
+        if isinstance(roles, dict):
+            role_stats = roles.get("stats")
+            if isinstance(role_stats, dict):
+                try:
+                    if float(role_stats.get("hostile_count", 0) or 0) > 0:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+        stats = state.get("stats") or {}
+        try:
+            return float(stats.get("enemy_count", 0) or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _infer_intent(self, state: Optional[dict]) -> Tuple[str, str]:
+        if not isinstance(state, dict):
+            return "observe", "no_state"
+        flags = state.get("flags") or {}
+        if not self._effective_in_game(state):
+            return "idle", "not_in_game"
+        if flags.get("death"):
+            return "recover", "death_flag"
+        texts = self._collect_scene_texts(state)
+        if texts and self._scene_has_respawn_text(texts):
+            return "recover", "respawn_text"
+        scores = state.get("prompt_scores") or {}
+        if self._prompt_max_score(scores, {"dialog"}) >= self.intent_dialog_score:
+            return "recover", "dialog_prompt"
+        if self._enemies_present_in_state(state):
+            return "combat", "enemy_list"
+        if (
+            self._labels_present(state.get("targets") or [], self.intent_combat_labels)
+            or self._labels_present(state.get("objects") or [], self.intent_combat_labels)
+        ):
+            return "combat", "enemy_label"
+        # Prompt-only combat is noisy in many games (quest headers, UI text).
+        # Require an additional enemy signal from scene heuristics/OCR filters.
+        if (
+            self._prompt_max_score(scores, self.intent_combat_labels) >= self.intent_enemy_score
+            and self._enemies_present()
+        ):
+            return "combat", "enemy_prompt"
+        if (
+            self._labels_present(state.get("targets") or [], self.intent_interact_labels)
+            or self._labels_present(state.get("objects") or [], self.intent_interact_labels)
+            or self._prompt_max_score(scores, self.intent_interact_labels) >= self.intent_interact_score
+        ):
+            return "interact", "interact_signal"
+        if (
+            self._labels_present(state.get("targets") or [], self.intent_nav_labels)
+            or self._labels_present(state.get("objects") or [], self.intent_nav_labels)
+            or self._prompt_max_score(scores, self.intent_nav_labels) >= self.intent_nav_score
+        ):
+            return "navigate", "navigate_signal"
+        return "observe", "default"
+
+    def _update_intent(self, state: Optional[dict]) -> str:
+        if not self.intent_enabled:
+            return self.current_intent or "observe"
+        desired, reason = self._infer_intent(state)
+        now = time.time()
+        if self.current_intent is None:
+            self.current_intent = desired
+            self.intent_reason = reason
+            self.intent_last_change_ts = now
+            return desired
+        if desired == self.current_intent:
+            self.intent_reason = reason
+            return desired
+        if self.current_intent == "idle" and desired != "idle":
+            self.current_intent = desired
+            self.intent_reason = reason
+            self.intent_last_change_ts = now
+            return desired
+        elapsed = now - self.intent_last_change_ts
+        if self.intent_min_sec <= 0 or elapsed >= self.intent_min_sec:
+            self.current_intent = desired
+            self.intent_reason = reason
+            self.intent_last_change_ts = now
+            return desired
+        if self._intent_priority(desired) < self._intent_priority(self.current_intent):
+            self.current_intent = desired
+            self.intent_reason = reason
+            self.intent_last_change_ts = now
+            return desired
+        return self.current_intent
 
     def _teacher_key_from_text(self, text: str) -> Optional[str]:
         patterns = [
@@ -2441,12 +3561,15 @@ class PolicyAgent:
         else:
             target_norm = None
         target_label = action.get("target_label")
+        if target_norm and self._target_center_non_actionable(target_norm, str(target_label or "")):
+            target_norm = None
+            target_label = None
         if label == "key_press":
             key = str(action.get("key") or "").lower().strip()
             if not key:
                 return None
-            if not self._key_allowed(key):
-                logger.info("Teacher requested key '%s' not in allowed_keys; ignoring", key)
+            if not self._teacher_key_allowed(key):
+                logger.info("Teacher requested key '%s' not confirmed; ignoring", key)
                 return None
             return {"label": "key_press", "key": key}
         if label in {"click_primary", "click_secondary"}:
@@ -2569,10 +3692,32 @@ class PolicyAgent:
                 )
             return payload
 
+        if action_type == "WAIT":
+            duration = float(task.get("duration", 0.0) or 0.0)
+            started_at = task.get("started_at")
+            now = time.time()
+            if started_at is None:
+                task["started_at"] = now
+                started_at = now
+            elapsed = now - float(started_at)
+            complete = duration <= 0.0 or elapsed >= duration
+            if complete:
+                task["completed"] = True
+            return {"label": "wait", "task_id": task.get("task_id"), "task_complete": complete}
         if action_type == "MOVE_TO":
+            if POLICY_CLICK_TO_MOVE and x_norm is not None and y_norm is not None:
+                return {
+                    "label": "click_primary",
+                    "task_id": task.get("task_id"),
+                    "confidence": 1.0,
+                    "target_norm": [x_norm, y_norm],
+                }
             return _move_payload()
         if action_type == "ATTACK_TARGET":
-            return {"label": "click_primary", "task_id": task.get("task_id"), "confidence": 1.0}
+            payload = {"label": "click_primary", "task_id": task.get("task_id"), "confidence": 1.0}
+            if x_norm is not None and y_norm is not None:
+                payload["target_norm"] = [x_norm, y_norm]
+            return payload
         if action_type == "LOOT_NEARBY":
             return {"label": "click_secondary", "task_id": task.get("task_id"), "confidence": 1.0}
         if action_type == "CLICK_BUTTON":
@@ -2624,7 +3769,10 @@ class PolicyAgent:
                     label,
                     target.get("target_norm") or [x_norm, y_norm],
                 )
-            return {"label": label, "task_id": task.get("task_id"), "confidence": 1.0}
+            payload = {"label": label, "task_id": task.get("task_id"), "confidence": 1.0}
+            if x_norm is not None and y_norm is not None:
+                payload["target_norm"] = [x_norm, y_norm]
+            return payload
         return {
             "label": "mouse_move",
             "dx": self._random_delta(),
@@ -2687,14 +3835,21 @@ class PolicyAgent:
     def _click_ready(self) -> bool:
         return (time.time() - self.last_click_ts) >= CLICK_COOLDOWN
 
-    def _start_respawn_macro(self) -> None:
+    def _start_respawn_macro(self, target_norm: Optional[List[float]] = None) -> None:
         now = time.time()
+        resolved_target = (
+            self._coerce_target_norm(target_norm)
+            or self._coerce_target_norm(self.respawn_target_norm)
+            or [RESPAWN_TARGET_X, RESPAWN_TARGET_Y]
+        )
+        self.respawn_target_norm = list(resolved_target)
         self.respawn_macro_queue.clear()
         delay = 0.0
         move_steps = max(1, RESPAWN_MACRO_MOVE_STEPS)
         for _ in range(move_steps):
             self.respawn_macro_queue.append((now + delay, {"macro_template": "move"}))
             delay += max(0.01, RESPAWN_MACRO_MOVE_DELAY)
+        delay += max(0.0, RESPAWN_MACRO_PRE_CLICK_DELAY)
         click_delay = max(0.05, RESPAWN_MACRO_CLICK_DELAY)
         for _ in range(max(1, RESPAWN_MACRO_CLICK_COUNT)):
             self.respawn_macro_queue.append(
@@ -2703,12 +3858,22 @@ class PolicyAgent:
                     {
                         "label": "click_primary",
                         "macro": "respawn",
+                        "target_norm": list(resolved_target),
                     },
                 )
             )
             delay += click_delay
         self.respawn_macro_block_until = now + delay + max(0.5, RESPAWN_MACRO_SETTLE_SEC)
         self.respawn_macro_active = True
+        logger.info(
+            "Respawn macro queued: %s move steps, %s clicks, pre_click=%.2fs settle=%.2fs target=(%.3f, %.3f)",
+            move_steps,
+            max(1, RESPAWN_MACRO_CLICK_COUNT),
+            RESPAWN_MACRO_PRE_CLICK_DELAY,
+            RESPAWN_MACRO_SETTLE_SEC,
+            resolved_target[0],
+            resolved_target[1],
+        )
         self.stage0_pending = False
         logger.info(
             "Respawn macro queued: %s move steps, %s clicks, settle %.2fs",
@@ -2740,9 +3905,10 @@ class PolicyAgent:
         return action
 
     def _respawn_move_payload(self) -> Dict[str, object]:
+        target_norm = self._coerce_target_norm(self.respawn_target_norm) or [RESPAWN_TARGET_X, RESPAWN_TARGET_Y]
         target_px, cursor_px, (delta_x, delta_y) = compute_cursor_motion(
-            RESPAWN_TARGET_X,
-            RESPAWN_TARGET_Y,
+            target_norm[0],
+            target_norm[1],
             self.cursor_x_norm,
             self.cursor_y_norm,
             SCREEN_WIDTH,
@@ -2754,7 +3920,7 @@ class PolicyAgent:
             "label": "mouse_move",
             "dx": delta_x,
             "dy": delta_y,
-            "target_norm": [RESPAWN_TARGET_X, RESPAWN_TARGET_Y],
+            "target_norm": list(target_norm),
             "target_px": target_px,
             "cursor_px": cursor_px,
             "macro": "respawn",
@@ -2779,12 +3945,26 @@ class PolicyAgent:
 
     # ----------------------------------------------------------------- Publish
     def _publish_action(self, client, chosen: Dict[str, object], policy_action: Optional[Dict[str, object]]):
-        label = chosen.get("label")
+        label = str(chosen.get("label") or "").lower()
+        if label == "mouse_move":
+            self.consecutive_moves += 1
+        elif label in {"click_primary", "click_secondary", "click_middle", "key_press"}:
+            self.consecutive_moves = 0
+        if label == "wait":
+            self.consecutive_waits += 1
+        elif label:
+            self.consecutive_waits = 0
+            
         key_payload = self._key_payload(chosen)
         act_payload = {"action": label}
         if label == "mouse_move":
             act_payload["dx"] = int(chosen.get("dx", 0))
             act_payload["dy"] = int(chosen.get("dy", 0))
+            if "target_norm" in chosen:
+                act_payload["target_norm"] = chosen.get("target_norm")
+            if "target_px" in chosen:
+                act_payload["target_px"] = chosen.get("target_px")
+        elif label in {"click_primary", "click_secondary", "click_middle"}:
             if "target_norm" in chosen:
                 act_payload["target_norm"] = chosen.get("target_norm")
             if "target_px" in chosen:
@@ -2799,8 +3979,14 @@ class PolicyAgent:
             "source": "policy_agent",
             "action": label,
             "policy_action": policy_action.get("label") if policy_action else None,
+            "policy_source": policy_action.get("source") if policy_action else None,
+            "policy_reason": policy_action.get("reason") if policy_action else None,
             "teacher_action": self.teacher_action.get("text") if self.teacher_action else None,
             "teacher_alpha": round(self._current_alpha(), 3),
+            "decision_source": chosen.get("source"),
+            "decision_reason": chosen.get("reason"),
+            "intent": self.current_intent,
+            "intent_reason": self.intent_reason,
             "timestamp": time.time(),
         }
         if self.current_task:
@@ -2823,6 +4009,13 @@ class PolicyAgent:
         if label and str(label).startswith("click"):
             self.last_click_ts = time.time()
         self.last_label = label
+        self.last_published_state_key = self._option_memory_key(self.latest_state or {})
+        self.last_published_action = {
+            "label": label,
+            "target_norm": chosen.get("target_norm"),
+            "key": chosen.get("key"),
+            "button": chosen.get("button"),
+        }
         if label:
             self.recent_action_labels.append(str(label))
         if self.stage0_enabled and label and label != "wait":
@@ -2921,8 +4114,14 @@ class PolicyAgent:
         label = (action.get("label") or "").lower()
         task_id = self.current_task.get("task_id")
         completed = False
-        if action_type == "MOVE_TO" and label == "mouse_move":
-            completed = True
+        if action_type == "MOVE_TO":
+            if label == "mouse_move":
+                completed = True
+            elif POLICY_CLICK_TO_MOVE and label.startswith("click"):
+                completed = True
+        elif action_type == "WAIT":
+            if action.get("task_complete") or self.current_task.get("completed"):
+                completed = True
         elif action_type in {"ATTACK_TARGET", "LOOT_NEARBY", "CLICK_BUTTON"} and label.startswith("click"):
             completed = True
         if completed:

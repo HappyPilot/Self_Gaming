@@ -54,15 +54,6 @@ class TeacherAgentTest(unittest.TestCase):
         self.assertEqual(payload["action"]["label"], "click_primary")
         self.assertIn("reasoning", payload)
 
-
-    def test_teacher_includes_vlm_summary_in_scene(self):
-        agent = TeacherAgent(mqtt_client=DummyMQTT(), llm_client=DummyLLM(), mem_client=DummyMem({}))
-        agent.vlm_summary = {"summary": "enemy boss", "risk": "high"}
-        agent.vlm_summary_received_at = 1000.0
-        scene = {"ok": True, "text": ["dummy"], "enemies": []}
-        summary = agent._build_scene_summary(scene, [], [])
-        self.assertIn("VLM", summary)
-        self.assertIn("enemy boss", summary)
     def test_rules_and_recent_critical_in_prompt(self):
         mem = DummyMem(
             {
@@ -99,6 +90,17 @@ class TeacherAgentTest(unittest.TestCase):
         topic, payload = agent.client.messages[0]
         self.assertEqual(payload["rules_used"], 1)
         self.assertEqual(payload["recent_critical_used"], 1)
+
+    def test_playbook_is_included_in_scene_summary(self):
+        mem = DummyMem({})
+        agent = TeacherAgent(mqtt_client=DummyMQTT(), llm_client=DummyLLM(), mem_client=mem)
+        agent.scene = {"ok": True, "text": ["Start", "Menu"]}
+        agent.snapshot = "abcdef" * 10
+
+        agent._generate_action(agent.client)
+
+        scene_summary = agent.llm.summary_args[0]
+        self.assertIn("Playbook:", scene_summary)
 
 
 if __name__ == "__main__":

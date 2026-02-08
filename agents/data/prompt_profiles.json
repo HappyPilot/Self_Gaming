@@ -1,0 +1,130 @@
+{
+  "generic": {
+    "game_id": "generic",
+    "source": "example",
+    "prompts": [
+      "enemy",
+      "boss",
+      "player",
+      "ally",
+      "npc",
+      "loot",
+      "chest",
+      "door",
+      "gate",
+      "exit",
+      "portal",
+      "waypoint",
+      "checkpoint",
+      "quest marker",
+      "objective marker",
+      "vendor",
+      "shop",
+      "shrine",
+      "puzzle",
+      "trap"
+    ],
+    "object_prompts": [
+      "enemy",
+      "boss",
+      "player",
+      "ally",
+      "npc",
+      "loot",
+      "chest",
+      "door",
+      "gate",
+      "exit",
+      "portal",
+      "waypoint",
+      "checkpoint",
+      "quest marker",
+      "objective marker",
+      "vendor",
+      "shop",
+      "shrine"
+    ],
+    "ui_prompts": [
+      "dialog",
+      "minimap",
+      "map overlay",
+      "quest log",
+      "inventory",
+      "health bar",
+      "mana bar",
+      "stamina bar",
+      "skill bar",
+      "cooldown bar",
+      "buff bar",
+      "debuff icon",
+      "death screen",
+      "loading screen",
+      "pause menu",
+      "tutorial hint"
+    ],
+    "confidence": 0.2
+  },
+  "path_of_exile": {
+    "game_id": "path_of_exile",
+    "prompts": [
+      "enemy",
+      "boss",
+      "player",
+      "npc",
+      "loot",
+      "chest",
+      "portal",
+      "waypoint"
+    ],
+    "object_prompts": [
+      "flask",
+      "scroll",
+      "gem",
+      "ring",
+      "amulet",
+      "belt",
+      "crown",
+      "sword",
+      "shield"
+    ],
+    "ui_prompts": [
+      "inventory",
+      "map",
+      "dialog",
+      "menu",
+      "loading screen"
+    ],
+    "confidence": 0.9
+  },
+  "terminal": {
+    "game_id": "terminal",
+    "prompts": [
+      "enemy",
+      "boss",
+      "player",
+      "npc",
+      "loot",
+      "chest",
+      "portal",
+      "waypoint"
+    ],
+    "object_prompts": [
+      "amulet",
+      "belt",
+      "gloves",
+      "helmet",
+      "ring",
+      "shoulders",
+      "talisman",
+      "weapon"
+    ],
+    "ui_prompts": [
+      "inventory",
+      "map",
+      "dialog",
+      "menu",
+      "loading screen"
+    ],
+    "confidence": 0.9
+  }
+}

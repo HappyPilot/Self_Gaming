@@ -40,7 +40,6 @@ stop_event = threading.Event()
 # --- Constants ---
 MQTT_HOST, MQTT_PORT = os.getenv("MQTT_HOST", "127.0.0.1"), int(os.getenv("MQTT_PORT", "1883"))
 SCENE_TOPIC, SIM_TOPIC = os.getenv("SCENE_TOPIC", "scene/state"), os.getenv("SIM_TOPIC", "sim_core/state")
-SCENE_SUMMARY_TOPIC = os.getenv("SCENE_SUMMARY_TOPIC", "scene/summary")
 SNAPSHOT_TOPIC, ACT_RESULT_TOPIC = os.getenv("SNAPSHOT_TOPIC", "vision/snapshot"), os.getenv("ACT_RESULT_TOPIC", "act/result")
 GAME_IDENTITY_TOPIC = os.getenv("GAME_IDENTITY_TOPIC", "game/identity")
 TEACHER_TOPIC, MEM_STORE_TOPIC = os.getenv("TEACHER_ACTION_TOPIC", "teacher/action"), os.getenv("MEM_STORE_TOPIC", "mem/store")
@@ -73,12 +72,20 @@ TEACHER_REQUIRE_IN_GAME_STRICT = os.getenv("TEACHER_REQUIRE_IN_GAME_STRICT", "0"
 TEACHER_ALLOW_OCR_GAME_ID = os.getenv("TEACHER_ALLOW_OCR_GAME_ID", "0") != "0"
 TEACHER_ACTION_JSON = os.getenv("TEACHER_ACTION_JSON", "1") != "0"
 TEACHER_DIALOG_SCORE_MIN = float(os.getenv("TEACHER_DIALOG_SCORE_MIN", "0.01"))
-TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
+TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "health,hp,mana,xp,score,level,ammo,inventory,quest,map,target,enemy,boss").split(",") if item.strip()}
 TEACHER_RESPAWN_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_RESPAWN_KEYWORDS", "resurrect,resurrect at checkpoint,respawn,revive").split(",") if item.strip()}
 TEACHER_RESPAWN_FUZZY_THRESHOLD = float(os.getenv("TEACHER_RESPAWN_FUZZY_THRESHOLD", "0.65"))
 TEACHER_RESPAWN_SKELETON_THRESHOLD = float(os.getenv("TEACHER_RESPAWN_SKELETON_THRESHOLD", "0.72"))
 TEACHER_RESPAWN_SKELETON_MIN_LEN = int(os.getenv("TEACHER_RESPAWN_SKELETON_MIN_LEN", "6"))
 TEACHER_DEATH_SCOPES = {item.strip().lower() for item in os.getenv("TEACHER_DEATH_SCOPES", "death_dialog,critical_dialog:death").split(",") if item.strip()}
+DEFAULT_TEACHER_PLAYBOOK = (
+    "Use only allowed controls listed under Controls; avoid forbidden keys. "
+    "Prefer small, reversible actions and wait for feedback after each action. "
+    "If unsure, move the mouse to inspect instead of clicking. "
+    "Target UI elements explicitly and avoid HUD/menus/shop or destructive dialogs. "
+    "If enemies are present and skill keys exist, use key_press rather than random clicks."
+)
+TEACHER_PLAYBOOK = os.getenv("TEACHER_PLAYBOOK", DEFAULT_TEACHER_PLAYBOOK).strip()
 TEACHER_WATCHDOG_KEY, TEACHER_WATCHDOG_COOLDOWN = os.getenv("TEACHER_WATCHDOG_KEY", "teacher_watchdog"), float(os.getenv("TEACHER_WATCHDOG_COOLDOWN_SEC", "90"))
 TEACHER_WATCH_RESPAWN_TERMS = {item.strip().lower() for item in os.getenv("TEACHER_WATCH_RESPAWN_TERMS", "resurrect at checkpoint,resurrect,respawn").split(",") if item.strip()}
 TEACHER_WATCH_FORBID_TERMS = {item.strip().lower() for item in os.getenv("TEACHER_WATCH_FORBID_TERMS", "microtransaction shop,shop button").split(",") if item.strip()}
@@ -446,9 +453,6 @@ class TeacherAgent:
         self.identity: Dict[str, object] = {}
         self._last_gate_log = 0.0
         self._gate_held = False
-        self.vlm_summary: Optional[Dict[str, object]] = None
-        self.vlm_summary_received_at: Optional[float] = None
-        self.vlm_summary_latency_ms: Optional[float] = None
 
     def _ensure_mem_rpc(self):
         if self.mem_rpc:
@@ -467,7 +471,7 @@ class TeacherAgent:
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if _as_int(rc) == 0:
-            topics = [(t, 0) for t in [SCENE_TOPIC, SIM_TOPIC, SCENE_SUMMARY_TOPIC, SNAPSHOT_TOPIC, ACT_RESULT_TOPIC, GAME_IDENTITY_TOPIC] if t]
+            topics = [(t, 0) for t in [SCENE_TOPIC, SIM_TOPIC, SNAPSHOT_TOPIC, ACT_RESULT_TOPIC, GAME_IDENTITY_TOPIC] if t]
             client.subscribe(topics)
             client.publish("teacher/status", json.dumps({"ok": True, "event": "teacher_ready"}))
             logger.info("Teacher agent connected and subscribed")
@@ -488,16 +492,6 @@ class TeacherAgent:
                 if TEACHER_REQUIRE_IN_GAME and not _scene_in_game(data):
                     return
                 self._maybe_request_action(client)
-            elif msg.topic == SCENE_SUMMARY_TOPIC and isinstance(data, dict):
-                summary_payload = data.get("summary") if "summary" in data else data
-                if isinstance(summary_payload, dict):
-                    self.vlm_summary = summary_payload
-                    self.vlm_summary_received_at = float(data.get("timestamp", time.time()))
-                    latency = data.get("latency_ms")
-                    try:
-                        self.vlm_summary_latency_ms = float(latency) if latency is not None else None
-                    except (TypeError, ValueError):
-                        self.vlm_summary_latency_ms = None
             elif msg.topic == SNAPSHOT_TOPIC and isinstance(data, dict) and data.get("ok"): self.snapshot = data.get("image_b64")
             elif msg.topic == ACT_RESULT_TOPIC and isinstance(data, dict) and data.get("applied"): self.actions.append(str(data["applied"]))
             elif msg.topic == GAME_IDENTITY_TOPIC and isinstance(data, dict):
@@ -512,11 +506,10 @@ class TeacherAgent:
         return self.llm
 
     def _handle_scene_update(self, scene: dict):
-        if not TEACHER_ALLOW_OCR_GAME_ID:
-            return
         if not self.game_id and scene.get("text"):
             text_content = " ".join(scene["text"])
             if len(text_content) > 20:
+                # Trigger identification thread if game_id is unknown
                 thread = threading.Thread(target=self._identify_game, args=(text_content,), daemon=True)
                 thread.start()
 
@@ -622,9 +615,6 @@ class TeacherAgent:
         game_id = scene.get("game_id") or self.game_id or CONTROL_PROFILE_GAME_ID
         if game_id:
             parts.append(f"Game: {game_id}")
-        vlm_context = self._format_vlm_summary()
-        if vlm_context:
-            parts.append(vlm_context)
         if isinstance(self.identity, dict) and self.identity:
             app = self.identity.get("app_name") or ""
             title = self.identity.get("window_title") or ""
@@ -658,38 +648,9 @@ class TeacherAgent:
             controls_note = self._format_control_summary(scene)
             if controls_note:
                 parts.append(f"Controls: {controls_note}")
+        if TEACHER_PLAYBOOK:
+            parts.append(f"Playbook: {TEACHER_PLAYBOOK}")
         return "\n".join(parts)
-
-    def _format_vlm_summary(self) -> str:
-        if not isinstance(self.vlm_summary, dict):
-            return ""
-        summary_text = str(self.vlm_summary.get("summary") or "").strip()
-        if not summary_text:
-            return ""
-        bits = [summary_text]
-        player_state = str(self.vlm_summary.get("player_state") or "").strip()
-        enemies = str(self.vlm_summary.get("enemies") or "").strip()
-        objectives = str(self.vlm_summary.get("objectives") or "").strip()
-        ui = str(self.vlm_summary.get("ui") or "").strip()
-        risk = str(self.vlm_summary.get("risk") or "").strip()
-        intent = str(self.vlm_summary.get("recommended_intent") or "").strip()
-        if player_state:
-            bits.append(f"Player={player_state}")
-        if enemies:
-            bits.append(f"Enemies={enemies}")
-        if objectives:
-            bits.append(f"Objective={objectives}")
-        if ui:
-            bits.append(f"UI={ui}")
-        if risk:
-            bits.append(f"Risk={risk}")
-        if intent:
-            bits.append(f"Intent={intent}")
-        stale_note = ""
-        if self.vlm_summary_received_at:
-            stale_age = max(0.0, time.time() - self.vlm_summary_received_at)
-            stale_note = f" (stale {stale_age:.1f}s)"
-        return f"VLM context (hint; prefer OCR/targets on conflict){stale_note}: " + "; ".join(bits)
 
     def _format_control_summary(self, scene: dict) -> str:
         game_id = scene.get("game_id") or self.game_id or CONTROL_PROFILE_GAME_ID

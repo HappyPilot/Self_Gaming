@@ -54,7 +54,7 @@ def safe_profile(game_id: str = "unknown_game") -> dict:
         "allowed_keys": ["w", "a", "s", "d", "q", "e", "r", "t", "1", "2", "3", "4", "5", "space"],
         "allowed_keys_extended": [],
         "forbidden_keys": [],
-        "max_actions_per_window": 6,
+        "max_actions_per_window": 20,
         "window_sec": 10.0,
         "notes": ["Generated safe fallback profile"],
     }

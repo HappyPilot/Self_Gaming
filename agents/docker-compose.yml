@@ -83,8 +83,9 @@ services:
       - ACT_TOPIC=control/keys
       - ACT_CMD_TOPIC=act/cmd
       - TEACHER_ACTION_TOPIC=teacher/action
-      - TEACHER_ALPHA_START=1.0
-      - TEACHER_ALPHA_DECAY_STEPS=500
+      - TEACHER_ALPHA_START=0.0
+      - TEACHER_ALPHA_MIN=0.0
+      - TEACHER_ALPHA_DECAY_STEPS=50000
       - THRESH=120.0
       - DEBOUNCE=0.25
     depends_on:

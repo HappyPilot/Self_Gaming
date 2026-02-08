@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections import Counter
 import hashlib
 import io
 import json
@@ -51,6 +52,10 @@ VLM_IMAGE_JPEG_QUALITY = int(os.getenv("VLM_IMAGE_JPEG_QUALITY", "85"))
 SUMMARY_INTERVAL_SEC = float(os.getenv("VLM_SUMMARY_INTERVAL_SEC", "2.5"))
 STALE_PUBLISH_SEC = float(os.getenv("VLM_SUMMARY_STALE_PUBLISH_SEC", "10"))
 
+VLM_REQUIRE_GAME = os.getenv("VLM_REQUIRE_GAME", "1") != "0"
+VLM_GAME_EXTRA_SAMPLES = int(os.getenv("VLM_GAME_EXTRA_SAMPLES", "3"))
+VLM_GAME_RETRY_INTERVAL_SEC = float(os.getenv("VLM_GAME_RETRY_INTERVAL_SEC", "45"))
+
 LOG_DIR = Path(os.getenv("VLM_SUMMARY_LOG_DIR", "/mnt/ssd/logs/vlm_summary"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_PATH = LOG_DIR / "events.jsonl"
@@ -58,10 +63,82 @@ LOG_PATH = LOG_DIR / "events.jsonl"
 stop_event = threading.Event()
 
 
+
+def _is_unknown_game(value: object) -> bool:
+    if value is None:
+        return True
+    cleaned = str(value).strip().lower()
+    return cleaned in {"", "unknown", "unknown_game", "none", "n/a", "null"}
+
+
+def _select_majority_game(votes: list[str]) -> str | None:
+    if not votes:
+        return None
+    counts = Counter(votes)
+    return counts.most_common(1)[0][0]
+
+
+class GameDetector:
+    def __init__(self, extra_samples: int = 3) -> None:
+        self.extra_samples = max(0, int(extra_samples))
+        self.attempts = 0
+        self.target_attempts = 1
+        self.votes: list[str] = []
+        self.detected_game: str | None = None
+
+    def observe(self, game_guess: object) -> str | None:
+        self.attempts += 1
+        if not _is_unknown_game(game_guess):
+            self.votes.append(str(game_guess).strip())
+        if self.attempts == 1:
+            if self.votes:
+                self.detected_game = self.votes[0]
+                return self.detected_game
+            self.target_attempts = 1 + self.extra_samples
+        if self.attempts >= self.target_attempts:
+            self.detected_game = _select_majority_game(self.votes) or "unknown_game"
+            return self.detected_game
+        return None
+
+
+
+
+def _strip_code_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        parts = stripped.split("```")
+        if len(parts) >= 3:
+            return parts[1].strip()
+        return stripped.strip("`")
+    return stripped
+
+
+def _extract_json_block(text: str) -> str:
+    if not text:
+        return ""
+    stripped = _strip_code_fences(text)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start:end + 1]
+    return stripped
+
+
+def _parse_json_payload(raw: str):
+    if not raw:
+        return None
+    block = _extract_json_block(raw)
+    try:
+        parsed = json.loads(block)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
 def normalize_summary(payload: object, now: Optional[float] = None) -> Dict[str, object]:
     now = now or time.time()
     if not isinstance(payload, dict):
-        payload = {"summary": str(payload)}
+        parsed = _parse_json_payload(str(payload))
+        payload = parsed if isinstance(parsed, dict) else {"summary": str(payload)}
     game = payload.get("game") or payload.get("game_id") or "unknown_game"
     risk = str(payload.get("risk") or "unknown").strip().lower() or "unknown"
     if risk not in {"low", "medium", "high", "unknown"}:
@@ -128,7 +205,7 @@ def build_messages(image_b64: Optional[str], image_mime: Optional[str], scene_te
         context_bits.append(f"Objects:\\n{object_summary}")
     context = "\\n\\n".join(context_bits)
     system_msg = (
-        "You are a vision analyst for video games. "
+        "You are a vision analyst for video games. First, identify the game in the image. If you are not confident, set game to unknown_game and do not guess. "
         "Return ONLY valid JSON with keys: game, summary, player_state, enemies, objectives, ui, risk, recommended_intent. "
         "risk must be one of: low, medium, high. Keep summary concise."
     )
@@ -164,6 +241,8 @@ class VlmSummaryAgent:
         self._last_publish: float = 0.0
         self._last_summary: Optional[Dict[str, object]] = None
         self._last_summary_ts: float = 0.0
+        self._game_detector = GameDetector(extra_samples=VLM_GAME_EXTRA_SAMPLES)
+        self._next_game_detect_ts: float = 0.0
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if rc == 0:
@@ -303,6 +382,9 @@ class VlmSummaryAgent:
             if not image_b64 and not scene_text:
                 stop_event.wait(0.1)
                 continue
+            if VLM_REQUIRE_GAME and self._game_detector.detected_game is None and now < self._next_game_detect_ts:
+                stop_event.wait(0.1)
+                continue
             self._last_request = now
             try:
                 start = time.time()
@@ -313,6 +395,16 @@ class VlmSummaryAgent:
                 summary = normalize_summary(raw_summary)
                 self._last_summary = summary
                 self._last_summary_ts = time.time()
+                if VLM_REQUIRE_GAME and self._game_detector.detected_game is None:
+                    detected_game = self._game_detector.observe(summary.get("game"))
+                    if detected_game is None:
+                        self._next_game_detect_ts = now + VLM_GAME_RETRY_INTERVAL_SEC
+                        self._log_event("pending_game", latency_ms, summary=summary, source=source)
+                        stop_event.wait(0.05)
+                        continue
+                    logger.info("VLM game detected: %s (attempts=%s)", detected_game, self._game_detector.attempts)
+                    if _is_unknown_game(summary.get("game")):
+                        summary["game"] = detected_game
                 self._publish_summary(summary, status="ok", latency_ms=latency_ms, source=source)
                 self._log_event("ok", latency_ms, summary=summary, source=source)
             except Exception as exc:  # noqa: BLE001

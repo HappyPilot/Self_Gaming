@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/l4t-ml:r36.2.0-py3
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
@@ -6,22 +6,29 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cusparselt/li
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=/usr/local/cuda/bin:${PATH}
 
-ARG TORCH_WHEEL_URL="https://developer.download.nvidia.com/compute/redist/jp/v60/pytorch/torch-2.4.0a0+3bcc3cddb5.nv24.07.16234504-cp310-cp310-linux_aarch64.whl"
+ARG TORCH_WHL_URL="https://pypi.jetson-ai-lab.io/jp6/cu126/+f/62a/1beee9f2f1470/torch-2.8.0-cp310-cp310-linux_aarch64.whl"
+ARG TORCHVISION_WHL_URL="https://pypi.jetson-ai-lab.io/jp6/cu126/+f/907/c4c1933789645/torchvision-0.23.0-cp310-cp310-linux_aarch64.whl"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
+    python3-pip \
+    libopenblas0 \
     libglib2.0-0 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --no-cache-dir -U pip && \
-    python3 -m pip install --no-cache-dir "${TORCH_WHEEL_URL}" && \
+RUN python3 -m pip install --no-cache-dir -U pip setuptools wheel && \
+    python3 -m pip install --no-cache-dir \
+        "${TORCH_WHL_URL}" \
+        "${TORCHVISION_WHL_URL}" && \
     python3 -m pip install --no-cache-dir \
         "numpy<2" \
         nvidia-cusparselt-cu12 \
         paho-mqtt \
         pillow \
         pycuda \
-        transformers
+        sentencepiece \
+        protobuf \
+        "transformers==4.48.3"
 
 WORKDIR /app
 

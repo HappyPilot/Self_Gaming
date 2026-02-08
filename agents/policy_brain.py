@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import signal
 import time
 from collections import deque
@@ -37,6 +38,8 @@ VECTOR_SIZE = int(os.getenv("POLICY_BRAIN_VECTOR_SIZE", "512"))
 SCHEMA_VERSION = int(os.getenv("POLICY_BRAIN_SCHEMA_VERSION", "1"))
 DEVICE = os.getenv("POLICY_BRAIN_DEVICE", "cpu")
 CMD_WINDOW_SEC = float(os.getenv("POLICY_BRAIN_CMD_WINDOW_SEC", "1.0"))
+TEXT_TARGET_PROB = float(os.getenv("POLICY_BRAIN_TEXT_TARGET_PROB", "0.5"))
+TEXT_TARGET_RNG = random.Random()
 
 MIN_OBJECT_CONF = float(os.getenv("POLICY_BRAIN_MIN_OBJECT_CONF", "0.2"))
 IDLE_ACTION = os.getenv("POLICY_BRAIN_IDLE_ACTION", "wait")
@@ -50,6 +53,14 @@ INTERACT_LABELS = {
     for item in os.getenv("POLICY_BRAIN_INTERACT_LABELS", "portal,waypoint,loot,npc,dialog_button").split(",")
     if item.strip()
 }
+IGNORE_TEXT_TOKENS = {
+    item.strip().lower()
+    for item in os.getenv(
+        "POLICY_BRAIN_IGNORE_TEXT",
+        "quest,objective,mission,completed,menu,gate,mana,life,xp,level,score",
+    ).split(",")
+    if item.strip()
+}
 
 stop_event = False
 
@@ -57,13 +68,22 @@ stop_event = False
 class HeuristicPolicyModel:
     """Rule-based policy brain to avoid noop-only outputs."""
 
+    def __init__(self):
+        self.last_death_click = 0.0
+
     def __call__(self, scene: Dict, vec: Optional[np.ndarray] = None) -> Dict:
         del vec  # Reserved for future learned models.
         flags = scene.get("flags") or {}
         if flags.get("in_game") is False:
             return _action("wait", 0.1, "not_in_game")
         if flags.get("death"):
-            return _action("click_primary", 0.7, "death_flag")
+            now = time.time()
+            if now - self.last_death_click < 2.0:
+                return _action("wait", 0.1, "death_cooldown")
+            self.last_death_click = now
+            # Target common respawn button area (lower middle)
+            target = {"label": "respawn_button", "x": 0.5, "y": 0.82}
+            return _action("click_primary", 0.6, "death_flag", target)
 
         enemies = _filter_objects(scene.get("enemies") or [], ENEMY_LABELS)
         if enemies:
@@ -71,9 +91,11 @@ class HeuristicPolicyModel:
             return _action("click_primary", 0.7, "enemy_present", target)
 
         targets = scene.get("targets") or []
-        target = _select_target(targets)
-        if target:
-            return _action("mouse_move", 0.5, "text_target", target)
+        # Only consider text targets probabilistically to allow for exploration.
+        if targets and TEXT_TARGET_PROB > 0 and TEXT_TARGET_RNG.random() <= TEXT_TARGET_PROB:
+            target = _select_target(targets)
+            if target:
+                return _action("mouse_move", 0.5, "text_target", target)
 
         objects = _filter_objects(scene.get("objects") or [], INTERACT_LABELS)
         if objects:
@@ -110,13 +132,35 @@ def _filter_objects(entries, labels):
 
 
 def _select_target(targets):
+    # UI ignore patterns for targeting
+    ui_ignore = {"quest", "objective", "mana", "life", "level", "xp", "energy", "gate", "job", "egg"}
+    
     for target in targets:
         if not isinstance(target, dict):
             continue
+        label_raw = str(target.get("label") or "").strip()
+        if not label_raw or len(label_raw) < 2:
+            continue
+            
+        # Filter 1: Too long text is usually a description, not a button
+        if len(label_raw) > 25:
+            continue
+            
+        # Filter 2: ALL CAPS text is often a header in games like PoE
+        if label_raw.isupper() and len(label_raw) > 4:
+            continue
+            
+        lowered = label_raw.lower()
+        compact = "".join(ch for ch in lowered if ch.isalnum())
+        
+        # Filter 3: Keywords
+        if any(token in lowered or token in compact for token in ui_ignore):
+            continue
+            
         center = target.get("center")
         if isinstance(center, (list, tuple)) and len(center) == 2:
             return {
-                "label": target.get("label"),
+                "label": label_raw,
                 "x": float(center[0]),
                 "y": float(center[1]),
             }

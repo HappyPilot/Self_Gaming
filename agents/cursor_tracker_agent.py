@@ -37,6 +37,8 @@ MORPH_KERNEL = int(os.getenv("CURSOR_MORPH_KERNEL", "3"))
 DIST_WEIGHT = float(os.getenv("CURSOR_DISTANCE_WEIGHT", "0.002"))
 HSV_S_MAX = int(os.getenv("CURSOR_HSV_S_MAX", "70"))
 HSV_V_MIN = int(os.getenv("CURSOR_HSV_V_MIN", "200"))
+CURSOR_MASK_TOP = float(os.getenv("CURSOR_MASK_TOP", "0.0"))
+CURSOR_MASK_RIGHT = float(os.getenv("CURSOR_MASK_RIGHT", "0.0"))
 MOTION_WEIGHT = float(os.getenv("CURSOR_MOTION_WEIGHT", "2.0"))
 MOTION_MIN = float(os.getenv("CURSOR_MOTION_MIN", "4.0"))
 MAX_JUMP_NORM = float(os.getenv("CURSOR_MAX_JUMP", "0.2"))
@@ -59,6 +61,19 @@ def _as_int(code) -> int:
         return int(code)
     except (TypeError, ValueError):
         return 0
+
+
+def _is_masked_region(cx: float, cy: float, width: int, height: int) -> bool:
+    if width <= 0 or height <= 0:
+        return False
+    if CURSOR_MASK_TOP <= 0 and CURSOR_MASK_RIGHT <= 0:
+        return False
+    x_norm = cx / float(width)
+    y_norm = cy / float(height)
+    if CURSOR_MASK_TOP > 0 and y_norm < CURSOR_MASK_TOP:
+        if CURSOR_MASK_RIGHT > 0 and x_norm > (1.0 - CURSOR_MASK_RIGHT):
+            return True
+    return False
 
 
 def _prepare_kernel(size: int) -> Tuple[int, int]:
@@ -134,6 +149,8 @@ def detect_cursor(
             continue
         cx = float(m["m10"] / m["m00"])
         cy = float(m["m01"] / m["m00"])
+        if _is_masked_region(cx, cy, width, height):
+            continue
         if last_norm is not None and MAX_JUMP_NORM > 0:
             dx_norm = abs(cx / width - last_norm[0])
             dy_norm = abs(cy / height - last_norm[1])

@@ -11,6 +11,8 @@ import threading
 import time
 import urllib.parse
 import pyautogui
+
+import input_helpers
 import paho.mqtt.client as mqtt
 
 # --- clipboard support ---
@@ -520,19 +522,34 @@ def on_message(client, userdata, msg):
 
         if action in {"click_primary", "click_secondary", "click_middle"}:
             button = "left" if action == "click_primary" else "right" if action == "click_secondary" else "middle"
-            _ensure_cursor_in_bounds()
+            target_point = input_helpers.resolve_target_point(data, INPUT_BOUNDS, pyautogui.size())
+            if target_point:
+                _move_to_clamped(*target_point)
+            else:
+                _ensure_cursor_in_bounds()
             pyautogui.click(button=button); logger.info("mouse click: %s", button); return
         if action in {"mouse_click", "mouse_down", "mouse_up"}:
             button = data.get("button", "left")
             if action == "mouse_click":
-                _ensure_cursor_in_bounds()
+                target_point = input_helpers.resolve_target_point(data, INPUT_BOUNDS, pyautogui.size())
+                if target_point:
+                    _move_to_clamped(*target_point)
+                else:
+                    _ensure_cursor_in_bounds()
                 pyautogui.click(button=button); logger.info("mouse click: %s", button); return
             if action == "mouse_down":
-                _ensure_cursor_in_bounds()
+                target_point = input_helpers.resolve_target_point(data, INPUT_BOUNDS, pyautogui.size())
+                if target_point:
+                    _move_to_clamped(*target_point)
+                else:
+                    _ensure_cursor_in_bounds()
                 pyautogui.mouseDown(button=button); held_mouse.add(button); logger.info("mouse down: %s", button); return
             pyautogui.mouseUp(button=button); held_mouse.discard(button); logger.info("mouse up: %s", button); return
         if action == "mouse_move":
-            if "dx" in data and "dy" in data:
+            target_point = input_helpers.resolve_target_point(data, INPUT_BOUNDS, pyautogui.size())
+            if target_point:
+                _move_to_clamped(*target_point)
+            elif "dx" in data and "dy" in data:
                 _move_rel_clamped(int(data["dx"]), int(data["dy"]))
             elif "x" in data and "y" in data:
                 _move_to_clamped(int(data["x"]), int(data["y"]))
