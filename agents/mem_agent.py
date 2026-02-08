@@ -36,11 +36,149 @@ RULE_DECAY_SEC = float(os.getenv("MEM_RULE_DECAY_SEC", "7200"))
 RULE_DECAY_PENALTY = float(os.getenv("MEM_RULE_DECAY_PENALTY", "0.05"))
 RULE_RETIRE_THRESHOLD = float(os.getenv("MEM_RULE_RETIRE_THRESHOLD", "0.1"))
 
+rules_path = RULES_PATH
+calibration_path = CALIBRATION_PATH
+rules = []
+recent_critical = deque(maxlen=RECENT_CRITICAL_MAX)
+calibration_events = deque(maxlen=CALIBRATION_MAX)
+
 def _as_int(code) -> int:
     try:
         if hasattr(code, "value"): return int(code.value)
         return int(code)
     except (TypeError, ValueError): return 0
+
+def _save_json(path: Path, data: list) -> None:
+    try:
+        path = Path(path)
+        if not path.parent.exists():
+            return
+        path.write_text(json.dumps(data), encoding="utf-8")
+    except Exception as e:
+        logger.error("Failed to save %s: %s", path, e)
+
+def _normalize_rule_entry(entry: dict) -> dict:
+    entry = dict(entry)
+    entry.setdefault("usage_count", 0)
+    entry.setdefault("last_used_at", entry.get("created_at", time.time()))
+    entry.setdefault("last_decay", entry.get("created_at", time.time()))
+    entry.setdefault("retired", False)
+    return entry
+
+def apply_rule_decay(now: Optional[float] = None) -> None:
+    if RULE_DECAY_SEC <= 0:
+        return
+    now = now or time.time()
+    changed = False
+    for entry in rules:
+        last_decay = entry.get("last_decay") or entry.get("created_at", now)
+        last_used = entry.get("last_used_at") or entry.get("created_at", now)
+        if min(now - last_decay, now - last_used) >= RULE_DECAY_SEC and not entry.get("retired"):
+            entry["confidence"] = max(0.0, float(entry.get("confidence", 0.0)) - RULE_DECAY_PENALTY)
+            entry["last_decay"] = now
+            if entry["confidence"] <= RULE_RETIRE_THRESHOLD:
+                entry["retired"] = True
+            changed = True
+    if changed:
+        _save_json(rules_path, rules)
+
+def insert_rule(rule: dict) -> None:
+    text = (rule.get("text") or "").strip()
+    if not text:
+        return
+    entry = {
+        "rule_id": rule.get("rule_id") or f"rule_{int(time.time() * 1000)}",
+        "scope": (rule.get("scope") or "generic_ui").lower(),
+        "text": text,
+        "source": rule.get("source") or "reflection",
+        "confidence": float(rule.get("confidence", 0.5)),
+        "created_at": rule.get("created_at") or time.time(),
+        "usage_count": int(rule.get("usage_count", 0)),
+        "retired": bool(rule.get("retired", False)),
+    }
+    entry["last_used_at"] = rule.get("last_used_at") or entry["created_at"]
+    entry["last_decay"] = rule.get("last_decay") or entry["created_at"]
+
+    existing = next((r for r in rules if r.get("rule_id") == entry["rule_id"]), None)
+    if existing:
+        rules[rules.index(existing)] = entry
+    else:
+        for idx, current in enumerate(rules):
+            if current.get("text") == entry["text"] and current.get("scope") == entry["scope"]:
+                rules[idx] = entry
+                break
+        else:
+            rules.append(entry)
+    apply_rule_decay(time.time())
+    rules.sort(key=lambda r: (-float(r.get("confidence", 0.0)), -float(r.get("created_at", 0.0))))
+    while len(rules) > MAX_RULES:
+        rules.pop()
+    _save_json(rules_path, rules)
+
+def mark_rule_used(rule_id: str, timestamp: Optional[float] = None) -> None:
+    if not rule_id:
+        return
+    ts = timestamp or time.time()
+    for entry in rules:
+        if entry.get("rule_id") == rule_id:
+            entry["usage_count"] = int(entry.get("usage_count", 0)) + 1
+            entry["last_used_at"] = ts
+            entry["retired"] = False
+            entry["confidence"] = min(1.0, entry.get("confidence", 0.5) + RULE_DECAY_PENALTY)
+            _save_json(rules_path, rules)
+            break
+
+def insert_recent_critical(value: dict) -> None:
+    if not value or not value.get("episode_id"):
+        return
+    for existing in list(recent_critical):
+        if existing.get("episode_id") == value.get("episode_id"):
+            recent_critical.remove(existing)
+            break
+    recent_critical.append(value)
+
+def insert_calibration_event(value: dict) -> None:
+    if not value:
+        return
+    calibration_events.append(value)
+    _save_json(calibration_path, list(calibration_events))
+
+def query(payload: dict) -> dict:
+    mode = (payload or {}).get("mode", "kv")
+    if mode == "rules":
+        apply_rule_decay()
+        limit = int(payload.get("limit", 5))
+        scope = (payload.get("scope") or "").lower()
+        include_retired = payload.get("include_retired") in {True, "true", "1"}
+        value = [
+            r
+            for r in rules
+            if (not scope or r.get("scope") == scope) and (include_retired or not r.get("retired"))
+        ][:limit]
+    elif mode == "recent_critical":
+        limit = int(payload.get("limit", 10))
+        scope = payload.get("scope")
+        tag = payload.get("tag")
+        subset = list(recent_critical)
+        subset.reverse()
+        value = [e for e in subset if (not scope or e.get("scope") == scope) and (not tag or tag in (e.get("tags") or []))][
+            :limit
+        ]
+    elif mode == "calibration_events":
+        limit = int(payload.get("limit", 10))
+        scope = payload.get("scope")
+        profile = (payload.get("profile") or "").strip().lower()
+        subset = list(calibration_events)
+        subset.reverse()
+        value = [
+            e
+            for e in subset
+            if (not scope or e.get("scope") == scope)
+            and (not profile or (e.get("profile") or "") == profile)
+        ][:limit]
+    else:
+        value = None
+    return {"ok": True, "event": "mem_result", "value": value, "mode": mode}
 
 class MemAgent:
     def __init__(self):

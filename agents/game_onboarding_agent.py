@@ -19,6 +19,7 @@ import paho.mqtt.client as mqtt
 from control_profile import load_profile, safe_profile, upsert_profile
 from llm_client import fetch_control_profile, fetch_visual_prompts, guess_game_id
 from prompt_profile import fallback_prompt_profile, load_prompt_profile, upsert_prompt_profile
+from utils.control_profile_v2 import apply_profile_v2
 from utils.frame_transport import get_frame_bytes
 
 logging.basicConfig(level=os.getenv("ONBOARD_LOG_LEVEL", "INFO"), format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s")
@@ -377,6 +378,7 @@ class GameOnboardingAgent:
     # Schema synthesis --------------------------------------------------------
     def _profile_to_controls(self, profile: Dict[str, object]) -> Dict[str, Dict[str, object]]:
         """Convert a control profile into schema-style control entries."""
+        profile = apply_profile_v2(profile)
         controls: Dict[str, Dict[str, object]] = {}
         if profile.get("allow_mouse_move"):
             controls["mouse_move"] = {"input": "mouse_move", "confidence": 0.8, "diff_score": 0.0}
@@ -384,7 +386,8 @@ class GameOnboardingAgent:
             controls["basic_attack"] = {"input": "click_primary", "confidence": 0.8, "diff_score": 0.0}
         if profile.get("allow_secondary"):
             controls["alt_attack"] = {"input": "click_secondary", "confidence": 0.7, "diff_score": 0.0}
-        for key in profile.get("allowed_keys", []):
+        allowed_keys = profile.get("allowed_keys_gameplay") or profile.get("allowed_keys") or []
+        for key in allowed_keys:
             label = f"key_{key.lower()}"
             controls[label] = {"input": f"key_{key.lower()}", "confidence": 0.6, "diff_score": 0.0}
         return controls
@@ -500,22 +503,27 @@ class GameOnboardingAgent:
                         if FORCE_MOUSE_MOVE and not llm_profile.get("allow_mouse_move", True):
                             llm_profile["allow_mouse_move"] = True
                             llm_profile.setdefault("notes", []).append("allow_mouse_move forced")
-                        safe_keys = _normalize_keys(llm_profile.get("allowed_keys_safe") or llm_profile.get("allowed_keys") or [])
-                        extended_keys = _normalize_keys(llm_profile.get("allowed_keys_extended") or [])
-                        safe_keys = [k for k in safe_keys if k not in SAFE_KEY_BLACKLIST]
-                        extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
-                        mouse_mode = str(llm_profile.get("mouse_mode") or "").lower()
-                        if mouse_mode == "click_to_move":
-                            if safe_keys and all(k in {"w", "a", "s", "d"} for k in safe_keys):
-                                extended_keys = _dedupe_keys(extended_keys + safe_keys)
-                                safe_keys = []
-                            if not safe_keys and extended_keys:
-                                promote = [k for k in extended_keys if k in ARPG_DEFAULT_KEYS]
-                                if promote:
-                                    safe_keys = promote
-                                    extended_keys = [k for k in extended_keys if k not in promote]
-                        llm_profile["allowed_keys"] = _dedupe_keys(safe_keys)
-                        llm_profile["allowed_keys_extended"] = _dedupe_keys(extended_keys)
+                        bindings = llm_profile.get("bindings") or []
+                        if bindings:
+                            llm_profile = apply_profile_v2(llm_profile)
+                        else:
+                            safe_keys = _normalize_keys(llm_profile.get("allowed_keys_safe") or llm_profile.get("allowed_keys") or [])
+                            extended_keys = _normalize_keys(llm_profile.get("allowed_keys_extended") or [])
+                            safe_keys = [k for k in safe_keys if k not in SAFE_KEY_BLACKLIST]
+                            extended_keys = [k for k in extended_keys if k not in SAFE_KEY_BLACKLIST]
+                            mouse_mode = str(llm_profile.get("mouse_mode") or "").lower()
+                            if mouse_mode == "click_to_move":
+                                if safe_keys and all(k in {"w", "a", "s", "d"} for k in safe_keys):
+                                    extended_keys = _dedupe_keys(extended_keys + safe_keys)
+                                    safe_keys = []
+                                if not safe_keys and extended_keys:
+                                    promote = [k for k in extended_keys if k in ARPG_DEFAULT_KEYS]
+                                    if promote:
+                                        safe_keys = promote
+                                        extended_keys = [k for k in extended_keys if k not in promote]
+                            llm_profile["allowed_keys"] = _dedupe_keys(safe_keys)
+                            llm_profile["allowed_keys_extended"] = _dedupe_keys(extended_keys)
+                            llm_profile = apply_profile_v2(llm_profile)
                         self.profile = llm_profile
                         self.profile_status = "llm_generated"
                         logger.info(
@@ -538,6 +546,7 @@ class GameOnboardingAgent:
                         self.profile_status = "safe_fallback"
 
             # Normalize profile keys
+            self.profile = apply_profile_v2(self.profile)
             safe_keys = _normalize_keys(self.profile.get("allowed_keys") or [])
             extended_keys = _normalize_keys(self.profile.get("allowed_keys_extended") or [])
             safe_keys = [k for k in safe_keys if k not in SAFE_KEY_BLACKLIST]

@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 
 from models.backbone import Backbone
+from utils.combat_targeting import pick_enemy_target
 from utils.embedding_projector import EmbeddingProjector
 from utils.latency import emit_control_metric, emit_latency, get_float_env, get_sla_ms
 try:
@@ -1343,6 +1344,8 @@ class PolicyAgent:
             mean_val = self._normalize_mean(state.get("mean", state.get("mean_brightness")))
             if mean_val is None:
                 return False, "no_game_keywords"
+            if mean_val >= POLICY_SCENE_BRIGHT_THRESHOLD:
+                return False, "bright_scene_no_keywords"
             return True, None
         if self.desktop_keywords and self._text_list_matches(texts, self.desktop_keywords):
             self.forbidden_until = now + max(DESKTOP_PAUSE_SEC, POLICY_FORBIDDEN_COOLDOWN)
@@ -1725,39 +1728,13 @@ class PolicyAgent:
         return best_center, best_label
 
     def _pick_enemy_target(self, enemies: List[dict]) -> Optional[List[float]]:
-        if not enemies:
-            return None
-        px, py = self.player_center if self.player_center else (0.5, 0.5)
-        centers = []
-        for obj in enemies:
-            center = obj.get("center") or self._center_from_bbox(obj.get("bbox") or obj.get("box"))
-            if not center:
-                continue
-            try:
-                cx, cy = float(center[0]), float(center[1])
-            except (TypeError, ValueError, IndexError):
-                continue
-            cx = max(0.0, min(1.0, cx))
-            cy = max(0.0, min(1.0, cy))
-            if POLICY_USE_UI_LAYOUT and self._center_in_hud((cx, cy)):
-                continue
-            if POLICY_USE_UI_LAYOUT and self.play_area and not self._center_in_box((cx, cy), self.play_area):
-                continue
-            centers.append((cx, cy))
-        if not centers:
-            return None
-        if len(centers) >= max(2, POLICY_ENEMY_CLUSTER_MIN):
-            avg_x = sum(c[0] for c in centers) / len(centers)
-            avg_y = sum(c[1] for c in centers) / len(centers)
-            return [avg_x, avg_y]
-        best_center = None
-        best_dist = 1e9
-        for cx, cy in centers:
-            dist = (cx - px) ** 2 + (cy - py) ** 2
-            if dist < best_dist:
-                best_dist = dist
-                best_center = [cx, cy]
-        return best_center
+        return pick_enemy_target(
+            enemies,
+            player_center=self.player_center or (0.5, 0.5),
+            cluster_min=POLICY_ENEMY_CLUSTER_MIN,
+            hud_boxes=self.hud_boxes if POLICY_USE_UI_LAYOUT else None,
+            play_area=self.play_area if POLICY_USE_UI_LAYOUT else None,
+        )
 
     def _enemy_bar_score(self, state: dict) -> Optional[float]:
         bars = state.get("enemy_bars")
@@ -2163,10 +2140,10 @@ class PolicyAgent:
             if label.startswith("click") and self._scene_is_forbidden():
                 self.forbidden_until = max(self.forbidden_until, time.time() + max(0.0, POLICY_FORBIDDEN_COOLDOWN))
                 logger.warning(
-                    "Policy suppressed %s due to forbidden UI; substituting wait",
+                    "Policy suppressed %s due to forbidden UI; substituting move",
                     label,
                 )
-                return {"label": "wait"}
+                return self._fallback_move()
 
             if POLICY_COMBAT_AIM and self._enemies_present() and not self._scene_dialog_present():
                 enemies = (self.latest_state or {}).get("enemies") or []

@@ -12,6 +12,7 @@ docker compose run --rm onboarding
 Notes:
 - Onboarding publishes game/schema and stores a control profile.
 - The profile is later used by policy_agent and act_agent.
+- Gameplay keys are allowed by default; UI/social keys are blocked unless explicitly needed.
 
 ## Check main topics
 ```bash
@@ -25,6 +26,12 @@ mosquitto_sub -t act/cmd -C 5
 mosquitto_sub -t ocr_easy/text -C 1
 mosquitto_sub -t ocr/regions -C 1
 mosquitto_sub -t simple_ocr/text -C 1
+```
+
+## Skill profiler (tooltip -> type)
+```bash
+mosquitto_pub -t skill_profiler/cmd -m '{\"slot\":\"q\",\"text\":\"Deals damage in an area around you\"}'
+mosquitto_sub -t skill_profiler/result -C 1
 ```
 
 ## Check enemy bars
