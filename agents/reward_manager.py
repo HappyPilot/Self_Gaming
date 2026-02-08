@@ -263,6 +263,16 @@ class RewardManager:
         elif msg.topic == PRED_ERROR_TOPIC:
             try:
                 data = json.loads(msg.payload.decode("utf-8"))
+                if isinstance(data, dict):
+                    value = data.get("pred_error", data.get("error"))
+                    if isinstance(value, (int, float)):
+                        self.last_pred_error = float(value)
+                        self.last_pred_ts = time.time()
+                        return
+                    if isinstance(value, str):
+                        self.last_pred_error = float(value)
+                        self.last_pred_ts = time.time()
+                        return
                 if isinstance(data, dict) and "error" in data:
                     self.last_pred_error = float(data["error"])
                     self.last_pred_ts = time.time()

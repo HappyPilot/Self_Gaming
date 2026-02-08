@@ -33,6 +33,7 @@ INFER_INTERVAL = float(os.getenv("ZSD_INTERVAL", "2.0"))
 FRAME_TIMEOUT = float(os.getenv("ZSD_FRAME_TIMEOUT", "5.0"))
 MAX_SIZE = int(os.getenv("ZSD_MAX_SIZE", "640"))
 TORCH_THREADS = int(os.getenv("ZSD_THREADS", "2"))
+POST_THRESHOLD = float(os.getenv("ZSD_POST_THRESHOLD", "0.0"))
 
 torch.set_num_threads(max(1, TORCH_THREADS))
 
@@ -76,6 +77,44 @@ def publish_objects(client: mqtt.Client, objects: List[dict]):
     client.publish(OBJECT_TOPIC, json.dumps(payload), qos=0)
 
 
+def _post_process(processor: OwlViTProcessor, outputs, target_sizes):
+    return processor.post_process_object_detection(
+        outputs=outputs,
+        target_sizes=target_sizes,
+        threshold=POST_THRESHOLD,
+    )
+
+
+def _format_object(label: str, score: float, box: list, size: tuple):
+    if not box or len(box) != 4:
+        return None
+    width, height = size
+    if not width or not height:
+        return None
+    try:
+        x1, y1, x2, y2 = [float(v) for v in box]
+    except (TypeError, ValueError):
+        return None
+    x1 = max(0.0, min(x1, width))
+    x2 = max(0.0, min(x2, width))
+    y1 = max(0.0, min(y1, height))
+    y2 = max(0.0, min(y2, height))
+    nx1 = max(0.0, min(1.0, x1 / float(width)))
+    nx2 = max(0.0, min(1.0, x2 / float(width)))
+    ny1 = max(0.0, min(1.0, y1 / float(height)))
+    ny2 = max(0.0, min(1.0, y2 / float(height)))
+    cx = (nx1 + nx2) / 2.0
+    cy = (ny1 + ny2) / 2.0
+    return {
+        "class": label,
+        "confidence": round(float(score), 4),
+        "box": [round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)],
+        "bbox": [round(nx1, 4), round(ny1, 4), round(nx2, 4), round(ny2, 4)],
+        "center": [round(cx, 4), round(cy, 4)],
+        "backend": "zeroshot_owlvit",
+    }
+
+
 def run():
     client = mqtt.Client(client_id="zeroshot_detector", protocol=mqtt.MQTTv311)
     client.on_connect = on_connect
@@ -112,7 +151,7 @@ def run():
             with torch.no_grad():
                 outputs = model(**inputs)
             target_sizes = torch.tensor([img.size[::-1]], device=DEVICE)
-            results = processor.post_process_object_detection(outputs=outputs, target_sizes=target_sizes)[0]
+            results = _post_process(processor, outputs, target_sizes)[0]
 
             if len(results["scores"]) > 0:
                 max_score = float(results["scores"].max().item())
@@ -128,13 +167,9 @@ def run():
                 label = PROMPTS[int(labels.item())]
                 x1, y1, x2, y2 = boxes.tolist()
                 w, h = img.size
-                objects.append({
-                    "class": label,
-                    "confidence": round(score, 4),
-                    "box": [round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)],
-                    "box_norm": [round(x1 / w, 4), round(y1 / h, 4), round(x2 / w, 4), round(y2 / h, 4)],
-                    "backend": "zeroshot_owlvit",
-                })
+                formatted = _format_object(label, score, [x1, y1, x2, y2], img.size)
+                if formatted:
+                    objects.append(formatted)
             limited = []
             per_label = {}
             for obj in sorted(objects, key=lambda o: o["confidence"], reverse=True):

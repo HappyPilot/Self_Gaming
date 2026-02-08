@@ -229,7 +229,8 @@ class TrainManagerAgent:
                     logits, values = policy_head(final_state), value_head(final_state).squeeze(-1)
                     
                     ce_loss = F.cross_entropy(logits, labels, reduction="none")
-                    sample_weights = torch.ones_like(ce_loss) + (-reward_weight) * reward.clamp(-1.0, 1.0) if reward_weight != 0 else torch.ones_like(ce_loss)
+                    # Fixed reward weighting: prioritize learning from positive reward actions
+                    sample_weights = torch.ones_like(ce_loss) + reward_weight * reward.clamp(-1.0, 1.0) if reward_weight != 0 else torch.ones_like(ce_loss)
                     loss = (ce_loss * sample_weights).mean() + VALUE_LOSS_WEIGHT * F.mse_loss(values, reward)
                     
                     teacher_alpha = current_alpha(global_step)
@@ -411,22 +412,53 @@ class TrainManagerAgent:
         mean = float(scene.get("mean", trend_vals[-1] if trend_vals else 0.0))
         objects = scene.get("objects") or []
         text_entries = scene.get("text") or []
-
-        numeric[0] = mean
-        numeric[1] = float(len(objects))
-        numeric[2] = float(sum(1 for obj in objects if "enemy" in str(obj.get("class", "")).lower()))
-        numeric[3] = float(sum(1 for obj in objects if "loot" in str(obj.get("class", "")).lower()))
-        numeric[4] = float(len(text_entries))
         stats = scene.get("stats") or {}
-        numeric[5] = float(stats.get("hp_pct", 0.0))
-        numeric[6] = float(stats.get("mana_pct", 0.0))
-        numeric[7] = float(stats.get("xp_pct", 0.0))
+
+        # 0: Mean brightness
+        numeric[0] = mean
+        # 1: Total object count
+        numeric[1] = float(len(objects))
+        # 2: Enemy count (from stats or manual count)
+        enemy_count = stats.get("enemy_count")
+        if enemy_count is None:
+            enemy_count = sum(1 for obj in objects if "enemy" in str(obj.get("class", "")).lower())
+        numeric[2] = float(enemy_count)
+        # 3: Loot count (from stats or manual count)
+        loot_count = stats.get("loot_count")
+        if loot_count is None:
+            loot_count = sum(1 for obj in objects if "loot" in str(obj.get("class", "")).lower())
+        numeric[3] = float(loot_count)
+        # 4: Text entries count
+        numeric[4] = float(len(text_entries))
+        
+        def normalize_stat(info):
+            if not isinstance(info, dict):
+                return 0.0
+            cur = float(info.get("current", 0))
+            if not info.get("is_plain_value") and info.get("max", 0) > 0:
+                return cur / float(info["max"])
+            if cur <= 100:
+                return cur / 100.0
+            else:
+                return min(1.0, math.log1p(cur) / math.log1p(1000))
+
+        # 5, 6, 7: Generic Stats from resources
+        resources = scene.get("resources") or {}
+        stat_values = []
+        for key in ["life", "hp", "mana", "xp"]:
+            if key in resources:
+                stat_values.append(normalize_stat(resources[key]))
+        
+        for key, info in resources.items():
+            if key not in ["life", "hp", "mana", "xp"] and len(stat_values) < 3:
+                stat_values.append(normalize_stat(info))
+        
+        for i, val in enumerate(stat_values[:3]):
+            numeric[5 + i] = val
+        
         vector[:NUMERIC_DIM] = numeric
 
         hist = np.zeros(OBJECT_HIST_DIM, dtype=np.float32)
-        # OBJECT_CLASS_BUCKETS logic inline to avoid external dependency if needed, 
-        # or use a consistent mapping. Here we use a simple hash or predefined buckets.
-        # Re-using the logic from previous version for consistency:
         buckets = {
             "enemy_melee": 0, "enemy_ranged": 1, "boss": 2, "projectile": 3,
             "loot_currency": 4, "loot_rare": 5, "portal": 6, "npc": 7, "chest": 8, "hazard": 9

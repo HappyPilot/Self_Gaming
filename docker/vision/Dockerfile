@@ -11,6 +11,7 @@ RUN set -eux; \
         gstreamer1.0-tools \
         gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good \
+        libnvvpi3 \
         libegl1 \
         libv4l-0; \
     rm -rf /var/lib/apt/lists/*

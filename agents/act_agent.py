@@ -224,6 +224,8 @@ class ActAgent:
         kind = action.get("action")
         if kind == "dump_recent":
             return True, "dump"
+        if kind == "wait":
+            return True, "ok"
         if kind == "mouse_move":
             if not self.profile.get("allow_mouse_move", True):
                 return False, "blocked_mouse_move"

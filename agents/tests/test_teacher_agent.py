@@ -91,6 +91,17 @@ class TeacherAgentTest(unittest.TestCase):
         self.assertEqual(payload["rules_used"], 1)
         self.assertEqual(payload["recent_critical_used"], 1)
 
+    def test_playbook_is_included_in_scene_summary(self):
+        mem = DummyMem({})
+        agent = TeacherAgent(mqtt_client=DummyMQTT(), llm_client=DummyLLM(), mem_client=mem)
+        agent.scene = {"ok": True, "text": ["Start", "Menu"]}
+        agent.snapshot = "abcdef" * 10
+
+        agent._generate_action(agent.client)
+
+        scene_summary = agent.llm.summary_args[0]
+        self.assertIn("Playbook:", scene_summary)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import paho.mqtt.client as mqtt
 
@@ -91,6 +91,22 @@ ALLOW_GENERIC_PLAYER = os.getenv("SCENE_GENERIC_PLAYER", "1") != "0"
 ALLOW_GENERIC_ENEMIES = os.getenv("SCENE_GENERIC_ENEMIES", "1") != "0"
 GENERIC_ENEMY_LABELS = {label.strip().lower() for label in os.getenv("SCENE_GENERIC_ENEMY_LABELS", "person,character,npc").split(",") if label.strip()}
 GENERIC_ENEMY_EXCLUDE_RADIUS = float(os.getenv("SCENE_GENERIC_ENEMY_EXCLUDE_RADIUS", "0.08"))
+ROLE_HOSTILE_KEYWORDS = {
+    label.strip().lower()
+    for label in os.getenv("SCENE_ROLE_HOSTILE_KEYWORDS", "enemy,boss,monster,hostile,bandit").split(",")
+    if label.strip()
+}
+ROLE_INTERACT_KEYWORDS = {
+    label.strip().lower()
+    for label in os.getenv(
+        "SCENE_ROLE_INTERACT_KEYWORDS",
+        "loot,chest,item,pickup,door,gate,portal,exit,npc,vendor,shop,button,lever",
+    ).split(",")
+    if label.strip()
+}
+ROLE_UI_EDGE_MARGIN = float(os.getenv("SCENE_ROLE_UI_EDGE_MARGIN", "0.08"))
+ROLE_UI_MIN_OVERLAP = float(os.getenv("SCENE_ROLE_UI_MIN_OVERLAP", "0.3"))
+ROLE_MAX_PER_GROUP = max(1, int(os.getenv("SCENE_ROLE_MAX_PER_GROUP", "8")))
 SLA_STAGE_FUSE_MS = get_sla_ms("SLA_STAGE_FUSE_MS")
 
 stop_event = threading.Event()
@@ -308,6 +324,35 @@ def _extract_frame_dims(payload: dict) -> tuple[Optional[float], Optional[float]
     else:
         frame_h = None
     return frame_w, frame_h
+
+
+def _parse_ui_boxes(raw: str) -> List[List[float]]:
+    boxes: List[List[float]] = []
+    if not raw:
+        return boxes
+    for token in raw.split(";"):
+        piece = token.strip()
+        if not piece:
+            continue
+        parts = [segment.strip() for segment in piece.split(",")]
+        if len(parts) != 4:
+            continue
+        try:
+            box = [max(0.0, min(1.0, float(value))) for value in parts]
+        except (TypeError, ValueError):
+            continue
+        if box[2] <= box[0] or box[3] <= box[1]:
+            continue
+        boxes.append(box)
+    return boxes
+
+
+ROLE_UI_BOXES = _parse_ui_boxes(
+    os.getenv(
+        "SCENE_ROLE_UI_BOXES",
+        "0.00,0.70,0.34,1.00;0.66,0.70,1.00,1.00;0.72,0.00,1.00,0.36",
+    )
+)
 
 
 def _convert_detections_to_objects(payload: dict) -> List[Dict[str, object]]:
@@ -695,6 +740,47 @@ class SceneAgent:
         if not bbox or len(bbox) != 4: return None
         return [round(float(c), 4) for c in bbox]
 
+    def _center_from_bbox(self, bbox: Optional[List[float]]) -> Optional[Tuple[float, float]]:
+        if not bbox or len(bbox) != 4:
+            return None
+        try:
+            return ((float(bbox[0]) + float(bbox[2])) / 2.0, (float(bbox[1]) + float(bbox[3])) / 2.0)
+        except (TypeError, ValueError):
+            return None
+
+    def _bbox_intersection_ratio(self, bbox: Optional[List[float]], region: Optional[List[float]]) -> float:
+        if not bbox or not region or len(bbox) != 4 or len(region) != 4:
+            return 0.0
+        try:
+            x1 = max(float(bbox[0]), float(region[0]))
+            y1 = max(float(bbox[1]), float(region[1]))
+            x2 = min(float(bbox[2]), float(region[2]))
+            y2 = min(float(bbox[3]), float(region[3]))
+            if x2 <= x1 or y2 <= y1:
+                return 0.0
+            inter = (x2 - x1) * (y2 - y1)
+            area = max(1e-6, (float(bbox[2]) - float(bbox[0])) * (float(bbox[3]) - float(bbox[1])))
+            return inter / area
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _bbox_is_ui(self, bbox: Optional[List[float]]) -> bool:
+        if not bbox or len(bbox) != 4:
+            return False
+        center = self._center_from_bbox(bbox)
+        if center:
+            cx, cy = center
+            if cy >= (1.0 - ROLE_UI_EDGE_MARGIN) and (
+                cx <= (ROLE_UI_EDGE_MARGIN * 3.0) or cx >= (1.0 - ROLE_UI_EDGE_MARGIN * 3.0)
+            ):
+                return True
+            if cy <= ROLE_UI_EDGE_MARGIN and cx >= (1.0 - ROLE_UI_EDGE_MARGIN * 3.0):
+                return True
+        for region in ROLE_UI_BOXES:
+            if self._bbox_intersection_ratio(bbox, region) >= ROLE_UI_MIN_OVERLAP:
+                return True
+        return False
+
     def _extract_player(self, objects):
         best, fallback = None, None
         best_score, fallback_score = float("inf"), float("inf")
@@ -724,40 +810,210 @@ class SceneAgent:
         for obj in objects:
             bbox = obj.get("bbox") or obj.get("box")
             if not bbox: continue
-            label = str(obj.get("label") or "").lower()
-            if not enemy_keywords or any(keyword in label for keyword in enemy_keywords):
-                matches.append({"label": obj.get("label"), "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)})
+            norm_bbox = self._normalize_bbox(bbox)
+            if not norm_bbox:
+                continue
+            if self._bbox_is_ui(norm_bbox):
+                continue
+            raw_label = obj.get("label") or obj.get("class") or obj.get("name")
+            label = str(raw_label or "").lower()
+            if not ENEMY_KEYWORDS or any(keyword in label for keyword in ENEMY_KEYWORDS):
+                matches.append({"label": raw_label, "confidence": obj.get("confidence"), "bbox": norm_bbox})
                 continue
             if ALLOW_GENERIC_ENEMIES and label in GENERIC_ENEMY_LABELS:
                 if player_center:
                     try:
-                        cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+                        cx, cy = (norm_bbox[0] + norm_bbox[2]) / 2.0, (norm_bbox[1] + norm_bbox[3]) / 2.0
                         dist = (cx - player_center[0]) ** 2 + (cy - player_center[1]) ** 2
                         if dist <= (GENERIC_ENEMY_EXCLUDE_RADIUS ** 2):
                             continue
                     except Exception:
                         pass
-                matches.append({"label": obj.get("label") or "enemy", "confidence": obj.get("confidence"), "bbox": self._normalize_bbox(bbox)})
+                matches.append({"label": raw_label or "enemy", "confidence": obj.get("confidence"), "bbox": norm_bbox})
         return matches[:5]
+
+    def _extract_roles(
+        self,
+        objects: List[Dict[str, object]],
+        player_entry: Optional[Dict[str, object]],
+        enemies: List[Dict[str, object]],
+        resources: Dict[str, Dict[str, object]],
+    ) -> Dict[str, object]:
+        roles: Dict[str, object] = {
+            "avatar": None,
+            "hostiles": [],
+            "interactables": [],
+            "ui_elements": [],
+            "world_objects": [],
+            "resource_signals": [],
+            "stats": {},
+        }
+        player_bbox = self._normalize_bbox((player_entry or {}).get("bbox")) if isinstance(player_entry, dict) else None
+        enemy_keys = set()
+        for enemy in enemies or []:
+            bbox = self._normalize_bbox((enemy or {}).get("bbox"))
+            if bbox:
+                enemy_keys.add(tuple(round(v, 3) for v in bbox))
+        for obj in objects or []:
+            bbox = self._normalize_bbox(obj.get("bbox") or obj.get("box"))
+            if not bbox:
+                continue
+            center = self._center_from_bbox(bbox)
+            if not center:
+                continue
+            raw_label = obj.get("label") or obj.get("class") or obj.get("name") or "object"
+            label = str(raw_label).lower()
+            entry = {
+                "label": raw_label,
+                "confidence": obj.get("confidence"),
+                "bbox": bbox,
+                "center": [round(center[0], 4), round(center[1], 4)],
+            }
+            bbox_key = tuple(round(v, 3) for v in bbox)
+            is_avatar = bool(player_bbox and self._bbox_intersection_ratio(bbox, player_bbox) >= 0.5)
+            is_ui = self._bbox_is_ui(bbox)
+            is_hostile = bbox_key in enemy_keys or any(keyword in label for keyword in ROLE_HOSTILE_KEYWORDS)
+            is_interactable = any(keyword in label for keyword in ROLE_INTERACT_KEYWORDS)
+            if is_avatar and roles["avatar"] is None:
+                avatar_entry = dict(entry)
+                avatar_entry["role"] = "avatar"
+                roles["avatar"] = avatar_entry
+            if is_ui:
+                if len(roles["ui_elements"]) < ROLE_MAX_PER_GROUP:
+                    ui_entry = dict(entry)
+                    ui_entry["role"] = "ui_element"
+                    roles["ui_elements"].append(ui_entry)
+                continue
+            if is_hostile and not is_avatar:
+                if len(roles["hostiles"]) < ROLE_MAX_PER_GROUP:
+                    hostile_entry = dict(entry)
+                    hostile_entry["role"] = "hostile"
+                    roles["hostiles"].append(hostile_entry)
+                continue
+            if is_interactable:
+                if len(roles["interactables"]) < ROLE_MAX_PER_GROUP:
+                    interact_entry = dict(entry)
+                    interact_entry["role"] = "interactable"
+                    roles["interactables"].append(interact_entry)
+                continue
+            if len(roles["world_objects"]) < ROLE_MAX_PER_GROUP:
+                world_entry = dict(entry)
+                world_entry["role"] = "world_object"
+                roles["world_objects"].append(world_entry)
+        for enemy in enemies or []:
+            bbox = self._normalize_bbox((enemy or {}).get("bbox"))
+            center = self._center_from_bbox(bbox)
+            if not bbox or not center or self._bbox_is_ui(bbox):
+                continue
+            bbox_key = tuple(round(v, 3) for v in bbox)
+            if any(tuple(round(v, 3) for v in h.get("bbox", [])) == bbox_key for h in roles["hostiles"]):
+                continue
+            if len(roles["hostiles"]) >= ROLE_MAX_PER_GROUP:
+                break
+            roles["hostiles"].append(
+                {
+                    "label": enemy.get("label") or "hostile",
+                    "confidence": enemy.get("confidence"),
+                    "bbox": bbox,
+                    "center": [round(center[0], 4), round(center[1], 4)],
+                    "role": "hostile",
+                }
+            )
+        for name, info in (resources or {}).items():
+            if not isinstance(info, dict):
+                continue
+            if len(roles["resource_signals"]) >= ROLE_MAX_PER_GROUP:
+                break
+            roles["resource_signals"].append(
+                {
+                    "name": str(name),
+                    "current": info.get("current"),
+                    "max": info.get("max"),
+                    "zone": info.get("zone"),
+                    "is_plain_value": bool(info.get("is_plain_value")),
+                }
+            )
+        roles["stats"] = {
+            "hostile_count": len(roles["hostiles"]),
+            "interactable_count": len(roles["interactables"]),
+            "ui_count": len(roles["ui_elements"]),
+            "world_count": len(roles["world_objects"]),
+            "resource_count": len(roles["resource_signals"]),
+            "object_count": len(objects or []),
+        }
+        return roles
 
     def _extract_resources(self, text_zones: Dict[str, Dict[str, object]]):
         import re
         resources = {}
+        idx = 0
+        # Common non-game words found in UI/system text
+        blacklist = {
+            "january", "february", "march", "april", "may", "june", 
+            "july", "august", "september", "october", "november", "december",
+            "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+            "today", "yesterday", "now", "time", "version", "system"
+        }
+        
         for zone_name, zone in (text_zones or {}).items():
-            text, lowered = str(zone.get("text") or ""), str(zone.get("text") or "").lower()
-            for resource, keywords in RESOURCE_KEYWORDS.items():
-                if resource in resources or not any(keyword in lowered for keyword in keywords): continue
-                match = re.search(r"(\d+)\s*/\s*(\d+)", text)
-                if match:
-                    resources[resource] = {"current": int(match.group(1)), "max": int(match.group(2)), "zone": zone_name}
-                else:
-                    numbers = re.findall(r"\d+", text)
-                    if len(numbers) >= 2:
-                        resources[resource] = {"current": int(numbers[0]), "max": int(numbers[1]), "zone": zone_name}
-                    elif len(numbers) == 1 and len(numbers[0]) >= 2 and len(numbers[0]) % 2 == 0:
-                        half = len(numbers[0]) // 2
-                        resources[resource] = {"current": int(numbers[0][:half]), "max": int(numbers[0][half:]), "zone": zone_name}
+            text = str(zone.get("text") or "").strip()
+            if not text:
+                continue
+            
+            # 1. Pattern X / Y (e.g. 100/100)
+            match_slash = re.search(r"(\d+)\s*/\s*(\d+)", text)
+            if match_slash:
+                name = self._guess_stat_name(text, f"stat_{idx}")
+                if name.lower() not in blacklist:
+                    resources[name] = {"current": int(match_slash.group(1)), "max": int(match_slash.group(2)), "zone": zone_name}
+                    idx += 1
+                continue
+
+            # 2. Pattern X% (e.g. 80%)
+            match_pct = re.search(r"(\d+)\s*%", text)
+            if match_pct:
+                val = int(match_pct.group(1))
+                name = self._guess_stat_name(text, f"pct_{idx}")
+                if name.lower() not in blacklist:
+                    resources[name] = {"current": val, "max": 100, "zone": zone_name}
+                    idx += 1
+                continue
+
+            # 3. Pattern Label: Value or Value Label (e.g. Score: 123, 30 Ammo)
+            match_num = re.search(r"(?::\s*|\s+|^)(\d+)(?:\s+|$)", text)
+            if match_num:
+                val = int(match_num.group(1))
+                # Skip numbers that look like years (1900-2100)
+                if 1900 <= val <= 2100:
+                    continue
+                    
+                name = self._guess_stat_name(text, f"val_{idx}")
+                if name.lower() not in blacklist:
+                    # For plain numbers, we treat them as current values with an unknown or inferred max
+                    resources[name] = {"current": val, "max": val if val > 0 else 1, "zone": zone_name, "is_plain_value": True}
+                    idx += 1
+                continue
+        
         return resources
+
+    def _guess_stat_name(self, text: str, default: str) -> str:
+        lowered = text.lower()
+        for res_type, keywords in RESOURCE_KEYWORDS.items():
+            if any(kw in lowered for kw in keywords):
+                return res_type
+        # Extract the first word if it looks like a label (3+ characters)
+        words = re.findall(r"([a-zA-Z]{3,})", lowered)
+        if words:
+            # Avoid generic and system words
+            noise = {
+                "the", "and", "you", "have", "with", "from", "for", "not", "this", "that",
+                "been", "were", "are", "was", "will", "would", "could", "should", "selected",
+                "event", "event_selected", "menu", "options", "settings", "click", "press"
+            }
+            for word in words:
+                if word not in noise:
+                    return word
+        return default
 
     def _sanitize_player(self, candidate):
         if not isinstance(candidate, dict): return None
@@ -790,7 +1046,9 @@ class SceneAgent:
         entries = [self.state["easy_text"]] if self.state["easy_text"] else [self.state["simple_text"]] if self.state["simple_text"] else []
         text_payload = [self._normalize_text(entry) for entry in entries] if entries and NORMALIZE_TEXT else entries
         prompt_tokens, prompt_scores = self._prompt_tokens(now)
-        if prompt_tokens:
+        flags = dict(self.state.get("flags") or {})
+        include_prompt_tokens = flags.get("in_game") is True
+        if prompt_tokens and include_prompt_tokens:
             text_payload = list(text_payload) if text_payload else []
             for token in prompt_tokens:
                 if token not in text_payload:
@@ -833,12 +1091,25 @@ class SceneAgent:
             for bar in enemy_bars:
                 enemies.append(bar)
         resources = self._extract_resources(text_zones) or self._extract_resources({"aggregate": {"text": "\n".join(text_payload)}})
-        flags = dict(self.state.get("flags") or {})
+        roles = self._extract_roles(objects, player_entry, enemies, resources)
+        role_stats = roles.get("stats") if isinstance(roles, dict) else {}
+        stats = {}
+        obs_stats = obs.get("stats")
+        if isinstance(obs_stats, dict):
+            stats.update(obs_stats)
+        if isinstance(role_stats, dict):
+            stats.setdefault("enemy_count", role_stats.get("hostile_count", len(enemies)))
+            stats.setdefault("loot_count", role_stats.get("interactable_count", 0))
+            stats.setdefault("ui_count", role_stats.get("ui_count", 0))
+            stats.setdefault("world_count", role_stats.get("world_count", 0))
+        stats.setdefault("object_count", len(objects))
+        stats.setdefault("text_count", len(text_payload))
         payload = {"ok": True, "event": "scene_update", "mean": self.state["mean"][-1], "trend": list(self.state["mean"]),
                    "text": text_payload, "objects": objects, "objects_ts": self.state.get("objects_ts", 0.0),
                    "objects_source": self.state.get("objects_source", ""),
                    "text_zones": text_zones, "player": player_entry, "enemies": enemies, "resources": resources, "timestamp": now,
-                   "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0)}
+                   "embeddings": self.state.get("embeddings", []), "embeddings_ts": self.state.get("embeddings_ts", 0.0),
+                   "roles": roles, "stats": stats}
         if enemy_bars:
             payload["enemy_bars"] = enemy_bars
         if text_zones is not raw_text_zones:

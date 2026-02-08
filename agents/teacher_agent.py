@@ -72,12 +72,20 @@ TEACHER_REQUIRE_IN_GAME_STRICT = os.getenv("TEACHER_REQUIRE_IN_GAME_STRICT", "0"
 TEACHER_ALLOW_OCR_GAME_ID = os.getenv("TEACHER_ALLOW_OCR_GAME_ID", "0") != "0"
 TEACHER_ACTION_JSON = os.getenv("TEACHER_ACTION_JSON", "1") != "0"
 TEACHER_DIALOG_SCORE_MIN = float(os.getenv("TEACHER_DIALOG_SCORE_MIN", "0.01"))
-TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "path of exile,poe,life,mana,inventory,quest,map").split(",") if item.strip()}
+TEACHER_GAME_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_GAME_KEYWORDS", "health,hp,mana,xp,score,level,ammo,inventory,quest,map,target,enemy,boss").split(",") if item.strip()}
 TEACHER_RESPAWN_KEYWORDS = {item.strip().lower() for item in os.getenv("TEACHER_RESPAWN_KEYWORDS", "resurrect,resurrect at checkpoint,respawn,revive").split(",") if item.strip()}
 TEACHER_RESPAWN_FUZZY_THRESHOLD = float(os.getenv("TEACHER_RESPAWN_FUZZY_THRESHOLD", "0.65"))
 TEACHER_RESPAWN_SKELETON_THRESHOLD = float(os.getenv("TEACHER_RESPAWN_SKELETON_THRESHOLD", "0.72"))
 TEACHER_RESPAWN_SKELETON_MIN_LEN = int(os.getenv("TEACHER_RESPAWN_SKELETON_MIN_LEN", "6"))
 TEACHER_DEATH_SCOPES = {item.strip().lower() for item in os.getenv("TEACHER_DEATH_SCOPES", "death_dialog,critical_dialog:death").split(",") if item.strip()}
+DEFAULT_TEACHER_PLAYBOOK = (
+    "Use only allowed controls listed under Controls; avoid forbidden keys. "
+    "Prefer small, reversible actions and wait for feedback after each action. "
+    "If unsure, move the mouse to inspect instead of clicking. "
+    "Target UI elements explicitly and avoid HUD/menus/shop or destructive dialogs. "
+    "If enemies are present and skill keys exist, use key_press rather than random clicks."
+)
+TEACHER_PLAYBOOK = os.getenv("TEACHER_PLAYBOOK", DEFAULT_TEACHER_PLAYBOOK).strip()
 TEACHER_WATCHDOG_KEY, TEACHER_WATCHDOG_COOLDOWN = os.getenv("TEACHER_WATCHDOG_KEY", "teacher_watchdog"), float(os.getenv("TEACHER_WATCHDOG_COOLDOWN_SEC", "90"))
 TEACHER_WATCH_RESPAWN_TERMS = {item.strip().lower() for item in os.getenv("TEACHER_WATCH_RESPAWN_TERMS", "resurrect at checkpoint,resurrect,respawn").split(",") if item.strip()}
 TEACHER_WATCH_FORBID_TERMS = {item.strip().lower() for item in os.getenv("TEACHER_WATCH_FORBID_TERMS", "microtransaction shop,shop button").split(",") if item.strip()}
@@ -498,11 +506,10 @@ class TeacherAgent:
         return self.llm
 
     def _handle_scene_update(self, scene: dict):
-        if not TEACHER_ALLOW_OCR_GAME_ID:
-            return
         if not self.game_id and scene.get("text"):
             text_content = " ".join(scene["text"])
             if len(text_content) > 20:
+                # Trigger identification thread if game_id is unknown
                 thread = threading.Thread(target=self._identify_game, args=(text_content,), daemon=True)
                 thread.start()
 
@@ -641,6 +648,8 @@ class TeacherAgent:
             controls_note = self._format_control_summary(scene)
             if controls_note:
                 parts.append(f"Controls: {controls_note}")
+        if TEACHER_PLAYBOOK:
+            parts.append(f"Playbook: {TEACHER_PLAYBOOK}")
         return "\n".join(parts)
 
     def _format_control_summary(self, scene: dict) -> str:
